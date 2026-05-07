@@ -154,6 +154,95 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             return jsonify({"error": "not found"}), 404
         return jsonify({"ok": True})
 
+    @app.route("/api/flight_plans/export")
+    def api_flight_plan_export():
+        """导出飞行计划为 Excel (.xlsx)"""
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from io import BytesIO
+
+        callsign = _req_str("callsign")
+        adep = _req_str("adep")
+        adest = _req_str("adest")
+        dof = _req_date("dof")
+        ssr = _req_str("ssr")
+        aircraft_type = _req_str("aircraft_type")
+        source_message_type = _req_str("source_message_type")
+
+        records = db.query_flight_plans(
+            callsign=callsign,
+            adep=adep,
+            adest=adest,
+            dof=dof,
+            ssr=ssr,
+            aircraft_type=aircraft_type,
+            source_message_type=source_message_type,
+            limit=10000,
+            offset=0,
+        )
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "飞行计划"
+
+        headers = ["ID", "航班号", "应答机", "机型", "执飞日",
+                   "起飞地", "ETD", "ATD", "目的地", "ETA", "ATA", "航路", "报文类型", "报文时间"]
+        hdr_font = Font(bold=True, color="FFFFFF", size=11)
+        hdr_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
+        thin_border = Border(
+            left=Side(style="thin", color="D1D5DB"),
+            right=Side(style="thin", color="D1D5DB"),
+            top=Side(style="thin", color="D1D5DB"),
+            bottom=Side(style="thin", color="D1D5DB"),
+        )
+
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.font = hdr_font
+            cell.fill = hdr_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = thin_border
+
+        for row_idx, rec in enumerate(records, 2):
+            ws.cell(row=row_idx, column=1, value=rec.get("id", ""))
+            ws.cell(row=row_idx, column=2, value=rec.get("callsign", ""))
+            ws.cell(row=row_idx, column=3, value=rec.get("ssr", ""))
+            ws.cell(row=row_idx, column=4, value=rec.get("aircraft_type", ""))
+            ws.cell(row=row_idx, column=5, value=_safe_date(rec.get("dof")))
+            ws.cell(row=row_idx, column=6, value=rec.get("adep", ""))
+            ws.cell(row=row_idx, column=7, value=_safe_dt(rec.get("etd")))
+            ws.cell(row=row_idx, column=8, value=_safe_dt(rec.get("atd")))
+            ws.cell(row=row_idx, column=9, value=rec.get("adest", ""))
+            ws.cell(row=row_idx, column=10, value=_safe_dt(rec.get("eta")))
+            ws.cell(row=row_idx, column=11, value=_safe_dt(rec.get("ata")))
+            ws.cell(row=row_idx, column=12, value=rec.get("route", ""))
+            ws.cell(row=row_idx, column=13, value=rec.get("source_message_type", ""))
+            ws.cell(row=row_idx, column=14, value=_safe_dt(rec.get("last_message_time")))
+            for col in range(1, 15):
+                ws.cell(row=row_idx, column=col).border = thin_border
+                ws.cell(row=row_idx, column=col).alignment = Alignment(vertical="center")
+
+        col_widths = [6, 14, 10, 10, 12, 10, 16, 16, 10, 16, 16, 50, 10, 16]
+        for i, w in enumerate(col_widths, 1):
+            ws.column_dimensions[chr(64 + i)].width = w
+
+        out = BytesIO()
+        wb.save(out)
+        out.seek(0)
+        return out.getvalue(), 200, {
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "Content-Disposition": f"attachment; filename=flight_plans_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        }
+
+
+    # ── 辅助 ──
+
+    def _safe_date(v: Any) -> str:
+        return str(v)[:10] if v else ""
+
+    def _safe_dt(v: Any) -> str:
+        return str(v)[:16] if v else ""
+
     # ── 辅助 ──────────────────────────────────────────────────
 
     def _req_str(key: str) -> Optional[str]:

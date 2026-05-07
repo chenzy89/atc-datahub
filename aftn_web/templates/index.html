@@ -5,695 +5,504 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ATC AFTN WebHub</title>
 <style>
+/* ══════════════════════════════════════════════
+   Dark Professional Theme
+   ══════════════════════════════════════════════ */
+:root {
+  --bg-page: #0d1117;
+  --bg-card: #161b22;
+  --bg-hover: #1c2333;
+  --bg-input: #0d1117;
+  --border: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --accent: #58a6ff;
+  --accent-green: #3fb950;
+  --accent-orange: #d29922;
+  --accent-red: #f85149;
+  --accent-purple: #bc8cff;
+}
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #333; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Roboto, sans-serif; background: var(--bg-page); color: var(--text-primary); font-size: 14px; }
 
-.header { background: #1a1a2e; color: #fff; padding: 16px 24px; display: flex; align-items: center; gap: 16px; }
-.header h1 { font-size: 20px; font-weight: 600; }
-.header .badge { font-size: 12px; background: #e94560; color: #fff; padding: 2px 10px; border-radius: 10px; }
+/* ── header ── */
+.header { background: linear-gradient(135deg, #161b22 0%, #1c2333 100%); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; gap: 16px; }
+.header h1 { font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
+.header .badge { font-size: 11px; background: var(--accent); color: #fff; padding: 2px 10px; border-radius: 10px; font-weight: 500; }
 
-.container { max-width: 1600px; margin: 0 auto; padding: 16px; }
+/* ── tabs ── */
+.tabs { display: flex; gap: 0; background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 0 16px; }
+.tab-btn { padding: 12px 24px; border: none; background: none; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-secondary); border-bottom: 2px solid transparent; transition: .15s; }
+.tab-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); background: transparent; }
 
-/* tabs */
-.tabs { display: flex; gap: 4px; background: #fff; border-radius: 10px 10px 0 0; padding: 14px 16px 0; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-.tab-btn { padding: 10px 24px; border: none; background: none; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 15px; font-weight: 500; color: #666; transition: .2s; }
-.tab-btn.active { background: #1a2a4a; color: #fff; }
-.tab-btn:hover:not(.active) { background: #e8e8ee; }
-
-/* panels */
-.panel { background: #fff; border-radius: 0 0 10px 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08); overflow: hidden; display: none; }
+/* ── panels ── */
+.panel { display: none; }
 .panel.active { display: block; }
 
-/* stats row */
-.stats { display: flex; gap: 12px; padding: 16px; background: #fafbfc; border-bottom: 1px solid #eee; flex-wrap: wrap; }
-.stat-card { background: #fff; border-radius: 8px; padding: 12px 20px; box-shadow: 0 1px 2px rgba(0,0,0,.06); text-align: center; min-width: 100px; }
-.stat-card .num { font-size: 22px; font-weight: 700; color: #1a1a2e; }
-.stat-card .label { font-size: 11px; color: #888; margin-top: 2px; }
+/* ── stats ── */
+.stats { display: flex; gap: 8px; padding: 12px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.stat-card { background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 10px 18px; text-align: center; min-width: 80px; }
+.stat-card .num { font-size: 20px; font-weight: 700; color: var(--text-primary); }
+.stat-card .label { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
 
-/* search bar */
-.search-bar { padding: 16px; border-bottom: 1px solid #f0f0f0; }
+/* ── search ── */
+.search-bar { padding: 14px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border); }
 .search-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
 .search-row label { display: flex; flex-direction: column; gap: 3px; }
-.search-row label span { font-size: 12px; color: #666; }
-.search-row input, .search-row select { padding: 8px 10px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 14px; min-width: 120px; }
-.search-row input:focus, .search-row select:focus { border-color: #1a1a2e; outline: none; box-shadow: 0 0 0 2px rgba(26,26,46,.1); }
-.search-actions { display: flex; gap: 8px; align-items: center; }
-.btn { padding: 8px 18px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: .2s; }
-.btn-primary { background: #1a1a2e; color: #fff; }
-.btn-primary:hover { background: #16213e; }
-.btn-secondary { background: #e8e8e8; color: #333; }
-.btn-secondary:hover { background: #d0d0d0; }
-.btn-danger { background: #e94560; color: #fff; }
-.btn-danger:hover { background: #c73a55; }
-.btn-sm { padding: 5px 12px; font-size: 12px; }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
+.search-row label span { font-size: 11px; color: var(--text-muted); font-weight: 500; }
+.search-row input, .search-row select {
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px;
+  background: var(--bg-input); color: var(--text-primary); min-width: 110px; outline: none;
+}
+.search-row input::placeholder { color: var(--text-muted); }
+.search-row input:focus, .search-row select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(88,166,255,.15); }
+.search-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-/* table */
-.table-wrap { overflow-x: auto; max-height: 65vh; overflow-y: auto; }
+/* ── buttons ── */
+.btn { padding: 7px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 500; transition: .15s; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: #4c96e8; }
+.btn-secondary { background: #21262d; color: var(--text-primary); border: 1px solid var(--border); }
+.btn-secondary:hover { background: #30363d; }
+.btn-green { background: var(--accent-green); color: #fff; }
+.btn-green:hover { background: #36a44a; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── table ── */
+.table-wrap { overflow-x: auto; background: var(--bg-card); max-height: 60vh; overflow-y: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-thead th { background: #f8f9fc; padding: 10px 12px; text-align: left; font-weight: 600; color: #555; border-bottom: 2px solid #eee; white-space: nowrap; position: sticky; top: 0; z-index: 1; }
-tbody td { padding: 8px 12px; border-bottom: 1px solid #f5f5f5; white-space: nowrap; }
-tbody tr:hover { background: #f8f9ff; }
-.tag { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-.tag-fpl { background: #e3f2fd; color: #1565c0; }
-.tag-dep { background: #e8f5e9; color: #2e7d32; }
-.tag-arr { background: #fff3e0; color: #e65100; }
-.tag-dla { background: #fce4ec; color: #c62828; }
-.tag-unknown { background: #f5f5f5; color: #888; }
-.tag-manual { background: #f3e5f5; color: #7b1fa2; }
-.text-muted { color: #999; font-size: 12px; }
+thead th {
+  background: #1c2333; padding: 9px 12px; text-align: left; font-weight: 600;
+  color: var(--text-secondary); border-bottom: 2px solid var(--border); white-space: nowrap;
+  position: sticky; top: 0; z-index: 1; font-size: 12px; text-transform: uppercase; letter-spacing: .3px;
+}
+tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+tbody tr:hover { background: var(--bg-hover); }
+.tag { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.tag-FPL { background: rgba(88,166,255,.15); color: var(--accent); }
+.tag-DEP { background: rgba(63,185,80,.15); color: var(--accent-green); }
+.tag-ARR { background: rgba(210,153,34,.15); color: var(--accent-orange); }
+.tag-DLA { background: rgba(248,81,73,.15); color: var(--accent-red); }
+.tag-MANUAL { background: rgba(188,140,255,.15); color: var(--accent-purple); }
+.tag-EST { background: rgba(139,148,158,.2); color: var(--text-secondary); }
+.tag-CPL { background: rgba(139,148,158,.2); color: var(--text-secondary); }
+.tag- { background: rgba(139,148,158,.15); color: var(--text-muted); }
+.text-muted { color: var(--text-muted); font-size: 12px; }
 .text-center { text-align: center; }
+.callsign { font-weight: 600; color: var(--accent); }
+.airport { color: var(--accent-orange); font-family: monospace; }
 
-/* pagination */
-.pagination { padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #f0f0f0; }
-.pagination-info { font-size: 13px; color: #888; }
+/* ── pagination ── */
+.pagination { padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; background: var(--bg-card); border-top: 1px solid var(--border); }
+.pagination-info { font-size: 12px; color: var(--text-muted); }
 .pagination-btns { display: flex; gap: 6px; }
 
-/* modal */
-.modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.45); z-index: 1000; align-items: center; justify-content: center; }
-.modal-overlay.active { display: flex; }
-.modal { background: #fff; border-radius: 14px; max-width: 860px; width: 92%; max-height: 88vh; overflow-y: auto; padding: 28px; box-shadow: 0 20px 60px rgba(0,0,0,.2); }
-.modal h2 { font-size: 18px; margin-bottom: 20px; color: #1a1a2e; }
-.modal-close { float: right; background: none; border: none; font-size: 22px; cursor: pointer; color: #aaa; line-height: 1; }
-.modal-close:hover { color: #333; }
+/* ── result info ── */
+.result-info { font-size: 12px; color: var(--text-muted); padding: 6px 16px; background: var(--bg-card); border-bottom: 1px solid var(--border); }
 
-/* form */
-.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.form-grid .full { grid-column: 1 / -1; }
-.form-field { display: flex; flex-direction: column; gap: 4px; }
-.form-field label { font-size: 12px; color: #666; font-weight: 500; }
-.form-field input, .form-field select { padding: 9px 12px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 14px; }
-.form-field input:focus, .form-field select:focus { border-color: #1a1a2e; outline: none; box-shadow: 0 0 0 2px rgba(26,26,46,.1); }
-.form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
-.form-error { color: #e94560; font-size: 13px; margin-top: 6px; }
+/* ── loading / error ── */
+.loading { text-align: center; padding: 40px; color: var(--text-muted); font-size: 14px; }
+.error-msg { color: var(--accent-red); padding: 20px; text-align: center; font-size: 14px; }
 
-/* raw message display */
-.raw-msg { background: #f5f5f5; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
+/* ── no select ── */
+select option { background: var(--bg-card); color: var(--text-primary); }
 
-/* result info */
-.result-info { font-size: 13px; color: #888; padding: 8px 16px; background: #fafbfc; border-bottom: 1px solid #eee; }
-
-/* loading */
-.loading { text-align: center; padding: 40px; color: #999; font-size: 14px; }
-.error-msg { color: #e94560; padding: 20px; text-align: center; font-size: 14px; }
-
-/* action buttons in table */
-.action-btn { background: none; border: 1px solid #d0d0d0; border-radius: 4px; padding: 3px 10px; font-size: 12px; cursor: pointer; margin: 0 2px; }
-.action-btn:hover { background: #f0f0f0; }
-.action-btn.edit { color: #1565c0; border-color: #1565c0; }
-.action-btn.delete { color: #c62828; border-color: #c62828; }
-.action-btn.view { color: #555; }
+/* ── responsive ── */
+@media (max-width: 768px) {
+  .search-row label { width: 100%; }
+  .search-row input, .search-row select { width: 100%; }
+  .stats { gap: 4px; }
+  .stat-card { min-width: 60px; padding: 6px 10px; }
+  .stat-card .num { font-size: 16px; }
+}
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>🛩️ ATC AFTN WebHub</h1>
-  <span class="badge">双模块</span>
+  <h1>🛩 ATC AFTN WebHub</h1>
+  <span class="badge">v0.1</span>
 </div>
 
-<div class="container">
-
-  <!-- Tabs -->
-  <div class="tabs">
-    <button class="tab-btn active" onclick="switchTab('msgs')">📨 AFTN 报文</button>
-    <button class="tab-btn" onclick="switchTab('plans')">✈️ 飞行计划</button>
-  </div>
-
-  <!-- ═══════════════════════════════════════════
-       Tab 1: AFTN 报文
-       ═══════════════════════════════════════════ -->
-  <div class="panel active" id="panel-msgs">
-
-    <!-- 统计 -->
-    <div class="stats" id="stats-aftn"></div>
-
-    <!-- 搜索 -->
-    <div class="search-bar">
-      <div class="search-row">
-        <label><span>报文类型</span>
-          <select id="q-msg-type">
-            <option value="">全部</option>
-            <option value="FPL">FPL</option>
-            <option value="DEP">DEP</option>
-            <option value="ARR">ARR</option>
-            <option value="DLA">DLA</option>
-            <option value="EST">EST</option>
-            <option value="CPL">CPL</option>
-            <option value="OTHER">其他/未知</option>
-          </select>
-        </label>
-        <label><span>关键词</span>
-          <input id="q-msg-keyword" placeholder="报文内容关键字">
-        </label>
-        <label><span>开始日期</span>
-          <input id="q-msg-from" type="date">
-        </label>
-        <label><span>结束日期</span>
-          <input id="q-msg-to" type="date">
-        </label>
-      </div>
-      <div class="search-actions">
-        <button class="btn btn-primary" onclick="searchMsgs()">🔍 查询</button>
-        <button class="btn btn-secondary" onclick="resetMsgs()">重置</button>
-        <span id="msg-result-info" class="text-muted" style="margin-left:8px;"></span>
-      </div>
-    </div>
-
-    <div class="result-info" id="msg-result-info2"></div>
-
-    <!-- 表格 -->
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>报文类型</th>
-            <th>接收时间</th>
-            <th>UTC 时间</th>
-            <th>原始报文</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody id="tbl-msgs"><tr><td colspan="6" class="loading">点击"查询"获取数据</td></tr></tbody>
-      </table>
-    </div>
-
-    <div class="pagination" id="pagination-msgs" style="display:none">
-      <div class="pagination-info" id="page-info-msg"></div>
-      <div class="pagination-btns">
-        <button class="btn btn-secondary btn-sm" onclick="goMsgPage(-1)" id="btn-msg-prev">← 上一页</button>
-        <button class="btn btn-secondary btn-sm" onclick="goMsgPage(1)" id="btn-msg-next">下一页 →</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══════════════════════════════════════════
-       Tab 2: 飞行计划
-       ═══════════════════════════════════════════ -->
-  <div class="panel" id="panel-plans">
-
-    <!-- 统计 -->
-    <div class="stats" id="stats-fpl"></div>
-
-    <!-- 搜索 -->
-    <div class="search-bar">
-      <div class="search-row">
-        <label><span>航班号</span><input id="q-fpl-callsign" placeholder="如 CSN101"></label>
-        <label><span>起飞地</span><input id="q-fpl-adep" placeholder="如 ZGOW" maxlength="4"></label>
-        <label><span>目的地</span><input id="q-fpl-adest" placeholder="如 ZGGG" maxlength="4"></label>
-        <label><span>执飞日期</span><input id="q-fpl-dof" type="date"></label>
-        <label><span>应答机</span><input id="q-fpl-ssr" placeholder="如 A2431"></label>
-        <label><span>机型</span><input id="q-fpl-acft" placeholder="如 B738"></label>
-        <label><span>报文类型</span>
-          <select id="q-fpl-type">
-            <option value="">全部</option>
-            <option value="FPL">FPL</option>
-            <option value="DEP">DEP</option>
-            <option value="ARR">ARR</option>
-            <option value="DLA">DLA</option>
-            <option value="MANUAL">手工</option>
-          </select>
-        </label>
-      </div>
-      <div class="search-actions">
-        <button class="btn btn-primary" onclick="searchPlans()">🔍 查询</button>
-        <button class="btn btn-secondary" onclick="resetPlans()">重置</button>
-        <button class="btn" style="background:#4caf50;color:#fff" onclick="openPlanModal()">➕ 新增计划</button>
-        <span id="fpl-result-info" class="text-muted" style="margin-left:8px;"></span>
-      </div>
-    </div>
-
-    <div class="result-info" id="fpl-result-info2"></div>
-
-    <!-- 表格 -->
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>航班号</th>
-            <th>应答机</th>
-            <th>机型</th>
-            <th>执飞日</th>
-            <th>起飞地</th>
-            <th>ETD</th>
-            <th>ATD</th>
-            <th>目的地</th>
-            <th>ETA</th>
-            <th>ATA</th>
-            <th>航路</th>
-            <th>报文</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody id="tbl-fpl"><tr><td colspan="14" class="loading">点击"查询"获取数据</td></tr></tbody>
-      </table>
-    </div>
-
-    <div class="pagination" id="pagination-fpl" style="display:none">
-      <div class="pagination-info" id="page-info-fpl"></div>
-      <div class="pagination-btns">
-        <button class="btn btn-secondary btn-sm" onclick="goFplPage(-1)" id="btn-fpl-prev">← 上一页</button>
-        <button class="btn btn-secondary btn-sm" onclick="goFplPage(1)" id="btn-fpl-next">下一页 →</button>
-      </div>
-    </div>
-  </div>
-
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('msgs')">📨 AFTN 报文</button>
+  <button class="tab-btn" onclick="switchTab('plans')">✈️ 飞行计划</button>
 </div>
 
-<!-- ── 报文详情弹窗 ── -->
-<div class="modal-overlay" id="modal-msg">
-  <div class="modal">
-    <button class="modal-close" onclick="closeMsgModal()">×</button>
-    <h2>AFTN 原始报文</h2>
-    <div id="msg-detail-body"></div>
+<!-- ════════════════════════════════════════════════════════
+     Tab 1: AFTN 报文
+     ════════════════════════════════════════════════════════ -->
+<div class="panel active" id="panel-msgs">
+  <div class="stats" id="stats-aftn"></div>
+
+  <div class="search-bar">
+    <div class="search-row">
+      <label><span>报文类型</span>
+        <select id="qmt">
+          <option value="">全部</option>
+          <option value="FPL">FPL</option>
+          <option value="DEP">DEP</option>
+          <option value="ARR">ARR</option>
+          <option value="DLA">DLA</option>
+          <option value="EST">EST</option>
+          <option value="CPL">CPL</option>
+          <option value="">其他</option>
+        </select>
+      </label>
+      <label><span>关键词</span><input id="qmk" placeholder="报文内容"></label>
+      <label><span>起始日期</span><input id="qmf" type="date"></label>
+      <label><span>截止日期</span><input id="qmt2" type="date"></label>
+    </div>
+    <div class="search-actions">
+      <button class="btn btn-primary" onclick="searchMsgs()">🔍 查询</button>
+      <button class="btn btn-secondary" onclick="resetMsgs()">重置</button>
+      <span id="msg-info" class="text-muted" style="margin-left:8px;"></span>
+    </div>
+  </div>
+
+  <div class="result-info" id="msg-info2"></div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>#</th><th>类型</th><th>接收时间</th><th>UTC 时间</th><th>报文内容</th><th>操作</th>
+      </tr></thead>
+      <tbody id="tbl-msgs"><tr><td colspan="6" class="loading">输入条件后按查询</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="pagination" id="pg-msgs" style="display:none">
+    <div class="pagination-info" id="pi-msg"></div>
+    <div class="pagination-btns">
+      <button class="btn btn-secondary btn-sm" onclick="goMsgPage(-1)" id="bmp">← 上一页</button>
+      <button class="btn btn-secondary btn-sm" onclick="goMsgPage(1)" id="bmn">下一页 →</button>
+    </div>
   </div>
 </div>
 
-<!-- ── 飞行计划新增/编辑弹窗 ── -->
-<div class="modal-overlay" id="modal-plan">
-  <div class="modal">
-    <button class="modal-close" onclick="closePlanModal()">×</button>
-    <h2 id="plan-modal-title">新增飞行计划</h2>
-    <form id="plan-form" onsubmit="submitPlan(event)">
-      <input type="hidden" id="plan-id">
+<!-- ════════════════════════════════════════════════════════
+     Tab 2: 飞行计划
+     ════════════════════════════════════════════════════════ -->
+<div class="panel" id="panel-plans">
+  <div class="stats" id="stats-fpl"></div>
 
-      <div class="form-grid">
-        <div class="form-field full">
-          <label>航班号 *</label>
-          <input id="plan-callsign" required maxlength="8" placeholder="如 CES101" style="text-transform:uppercase;">
-        </div>
+  <div class="search-bar">
+    <div class="search-row">
+      <label><span>航班号</span><input id="qfc" placeholder="CSN101"></label>
+      <label><span>起飞地</span><input id="qfa" placeholder="ZGOW" maxlength="4"></label>
+      <label><span>目的地</span><input id="qfd" placeholder="ZGGG" maxlength="4"></label>
+      <label><span>执飞日</span><input id="qfd2" type="date"></label>
+      <label><span>应答机</span><input id="qfs" placeholder="A2431"></label>
+      <label><span>机型</span><input id="qfac" placeholder="B738"></label>
+      <label><span>报文类型</span>
+        <select id="qft">
+          <option value="">全部</option>
+          <option value="FPL">FPL</option>
+          <option value="DEP">DEP</option>
+          <option value="ARR">ARR</option>
+          <option value="DLA">DLA</option>
+        </select>
+      </label>
+    </div>
+    <div class="search-actions">
+      <button class="btn btn-primary" onclick="searchPlans()">🔍 查询</button>
+      <button class="btn btn-secondary" onclick="resetPlans()">重置</button>
+      <button class="btn btn-green" onclick="exportExcel()">📥 导出 Excel</button>
+      <span id="fpl-info" class="text-muted" style="margin-left:6px;"></span>
+    </div>
+  </div>
 
-        <div class="form-field">
-          <label>应答机</label>
-          <input id="plan-ssr" maxlength="5" placeholder="如 A2431" style="text-transform:uppercase;">
-        </div>
-        <div class="form-field">
-          <label>机型</label>
-          <input id="plan-aircraft_type" maxlength="8" placeholder="如 B738" style="text-transform:uppercase;">
-        </div>
+  <div class="result-info" id="fpl-info2"></div>
 
-        <div class="form-field">
-          <label>执飞日期 *</label>
-          <input id="plan-dof" type="date" required>
-        </div>
-        <div class="form-field">
-          <label>报文类型</label>
-          <select id="plan-source_type">
-            <option value="MANUAL">手工录入</option>
-            <option value="FPL">FPL</option>
-            <option value="DEP">DEP</option>
-            <option value="ARR">ARR</option>
-            <option value="DLA">DLA</option>
-          </select>
-        </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>航班号</th><th>应答机</th><th>机型</th><th>执飞日</th>
+        <th>起飞地</th><th>ETD</th><th>ATD</th>
+        <th>目的地</th><th>ETA</th><th>ATA</th>
+        <th>航路</th><th>报文</th>
+      </tr></thead>
+      <tbody id="tbl-fpl"><tr><td colspan="12" class="loading">输入条件后按查询</td></tr></tbody>
+    </table>
+  </div>
 
-        <div class="form-field">
-          <label>起飞地 *</label>
-          <input id="plan-adep" required maxlength="4" placeholder="如 ZGOW" style="text-transform:uppercase;">
-        </div>
-        <div class="form-field">
-          <label>ETD（预计起飞）</label>
-          <input id="plan-etd" type="datetime-local">
-        </div>
+  <div class="pagination" id="pg-fpl" style="display:none">
+    <div class="pagination-info" id="pi-fpl"></div>
+    <div class="pagination-btns">
+      <button class="btn btn-secondary btn-sm" onclick="goFplPage(-1)" id="bfp">← 上一页</button>
+      <button class="btn btn-secondary btn-sm" onclick="goFplPage(1)" id="bfn">下一页 →</button>
+    </div>
+  </div>
+</div>
 
-        <div class="form-field">
-          <label>ATD（实际起飞）</label>
-          <input id="plan-atd" type="datetime-local">
-        </div>
-        <div class="form-field">
-          <label>目的地 *</label>
-          <input id="plan-adest" required maxlength="4" placeholder="如 ZGGG" style="text-transform:uppercase;">
-        </div>
-
-        <div class="form-field">
-          <label>ETA（预计落地）</label>
-          <input id="plan-eta" type="datetime-local">
-        </div>
-        <div class="form-field">
-          <label>ATA（实际落地）</label>
-          <input id="plan-ata" type="datetime-local">
-        </div>
-
-        <div class="form-field full">
-          <label>航路</label>
-          <input id="plan-route" placeholder="如 A461 W22 GLN" style="text-transform:uppercase;">
-        </div>
-      </div>
-
-      <div class="form-error" id="plan-error"></div>
-      <div class="form-actions">
-        <button type="button" class="btn btn-secondary" onclick="closePlanModal()">取消</button>
-        <button type="submit" class="btn btn-primary" id="plan-submit-btn">保存</button>
-      </div>
-    </form>
+<!-- ── AFTN 报文详情弹窗 ── -->
+<div id="modal-msg" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center;" onclick="if(event.target===this)closeMsg()">
+  <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;max-width:720px;width:90%;max-height:80vh;overflow-y:auto;padding:24px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <h2 style="font-size:16px;font-weight:600;">AFTN 原始报文</h2>
+      <button onclick="closeMsg()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;">&times;</button>
+    </div>
+    <div id="msg-body"></div>
   </div>
 </div>
 
 <script>
-// ═══════════════════════════════════════════════════
-// 全局状态
-// ═══════════════════════════════════════════════════
-let msgOffset = 0, msgTotal = 0, fplOffset = 0, fplTotal = 0;
-const PAGE = 100;
+// ═══════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════
+var msgOff = 0, msgTot = 0, fplOff = 0, fplTot = 0;
+var PS = 100;
 
-// ═══════════════════════════════════════════════════
-// 标签页切换
-// ═══════════════════════════════════════════════════
-function switchTab(name) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  if (name === 'msgs') {
-    document.querySelector('.tab-btn:nth-child(1)').classList.add('active');
+// ═══════════════════════════════════════════════════════
+// Tabs
+// ═══════════════════════════════════════════════════════
+function switchTab(n) {
+  document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+  if (n === 'msgs') {
+    document.querySelector('.tabs .tab-btn:first-child').classList.add('active');
     document.getElementById('panel-msgs').classList.add('active');
   } else {
-    document.querySelector('.tab-btn:nth-child(2)').classList.add('active');
+    document.querySelector('.tabs .tab-btn:last-child').classList.add('active');
     document.getElementById('panel-plans').classList.add('active');
   }
 }
 
-// ═══════════════════════════════════════════════════
-// 页面加载时获取统计
-// ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+// Load Stats
+// ═══════════════════════════════════════════════════════
 loadStats();
+
 function loadStats() {
-  fetch('/api/stats').then(r => r.json()).then(s => {
-    const f = s.flight_plans_by_type || {};
-    const m = s.aftn_messages_by_type || {};
-    document.getElementById('stats-fpl').innerHTML = `
-      <div class="stat-card"><div class="num">${s.total_flight_plans||0}</div><div class="label">飞行计划总数</div></div>
-      <div class="stat-card"><div class="num">${f.FPL||0}</div><div class="label">FPL</div></div>
-      <div class="stat-card"><div class="num">${f.DEP||0}</div><div class="label">DEP</div></div>
-      <div class="stat-card"><div class="num">${f.ARR||0}</div><div class="label">ARR</div></div>
-      <div class="stat-card"><div class="num">${f.DLA||0}</div><div class="label">DLA</div></div>
-      <div class="stat-card"><div class="num">${f.MANUAL||0}</div><div class="label">手工</div></div>
-    `;
-    document.getElementById('stats-aftn').innerHTML = `
-      <div class="stat-card"><div class="num">${s.total_aftn_messages||0}</div><div class="label">AFTN 报文总数</div></div>
-      <div class="stat-card"><div class="num">${m.FPL||0}</div><div class="label">FPL</div></div>
-      <div class="stat-card"><div class="num">${m.DEP||0}</div><div class="label">DEP</div></div>
-      <div class="stat-card"><div class="num">${m.ARR||0}</div><div class="label">ARR</div></div>
-      <div class="stat-card"><div class="num">${m.DLA||0}</div><div class="label">DLA</div></div>
-      <div class="stat-card"><div class="num">${(m.EST||0)+(m.CPL||0)+(m.OTHER||0)||0}</div><div class="label">其他</div></div>
-    `;
-  }).catch(() => {});
+  fetch('/api/stats').then(function(r) { return r.json(); }).then(function(s) {
+    var f = s.flight_plans_by_type || {};
+    var m = s.aftn_messages_by_type || {};
+    document.getElementById('stats-fpl').innerHTML =
+      '<div class="stat-card"><div class="num">' + (s.total_flight_plans||0) + '</div><div class="label">飞行计划</div></div>' +
+      '<div class="stat-card"><div class="num">' + (f.FPL||0) + '</div><div class="label">FPL</div></div>' +
+      '<div class="stat-card"><div class="num">' + (f.DEP||0) + '</div><div class="label">DEP</div></div>' +
+      '<div class="stat-card"><div class="num">' + (f.ARR||0) + '</div><div class="label">ARR</div></div>' +
+      '<div class="stat-card"><div class="num">' + (f.DLA||0) + '</div><div class="label">DLA</div></div>';
+    document.getElementById('stats-aftn').innerHTML =
+      '<div class="stat-card"><div class="num">' + (s.total_aftn_messages||0) + '</div><div class="label">AFTN 报文</div></div>' +
+      '<div class="stat-card"><div class="num">' + (m.FPL||0) + '</div><div class="label">FPL</div></div>' +
+      '<div class="stat-card"><div class="num">' + (m.DEP||0) + '</div><div class="label">DEP</div></div>' +
+      '<div class="stat-card"><div class="num">' + (m.ARR||0) + '</div><div class="label">ARR</div></div>' +
+      '<div class="stat-card"><div class="num">' + (m.DLA||0) + '</div><div class="label">DLA</div></div>';
+  }).catch(function() {});
 }
 
-// ═══════════════════════════════════════════════════
-// AFTN 报文模块
-// ═══════════════════════════════════════════════════
-function searchMsgs(resetOffset = true) {
-  if (resetOffset) msgOffset = 0;
-  const params = new URLSearchParams({ limit: PAGE, offset: msgOffset });
-  const t = document.getElementById('q-msg-type').value;
-  const kw = document.getElementById('q-msg-keyword').value.trim();
-  const df = document.getElementById('q-msg-from').value;
-  const dt = document.getElementById('q-msg-to').value;
-  if (t) params.set('message_type', t);
-  if (kw) params.set('keyword', kw);
-  if (df) params.set('date_from', df);
-  if (dt) params.set('date_to', dt);
+// ═══════════════════════════════════════════════════════
+// AFTN Messages
+// ═══════════════════════════════════════════════════════
+function searchMsgs(r) {
+  if (r !== false) { msgOff = 0; }
+  var p = new URLSearchParams({limit: PS, offset: msgOff});
+  var t = document.getElementById('qmt').value;
+  var k = document.getElementById('qmk').value.trim();
+  var f = document.getElementById('qmf').value;
+  var t2 = document.getElementById('qmt2').value;
+  if (t) { p.set('message_type', t); }
+  if (k) { p.set('keyword', k); }
+  if (f) { p.set('date_from', f); }
+  if (t2) { p.set('date_to', t2); }
 
   document.getElementById('tbl-msgs').innerHTML = '<tr><td colspan="6" class="loading">查询中...</td></tr>';
-  fetch('/api/aftn_messages?' + params.toString())
-    .then(r => r.json())
-    .then(d => {
-      msgTotal = d.total;
-      renderMsgs(d.records);
-      renderMsgPagination();
-      document.getElementById('msg-result-info').textContent = `共 ${d.total} 条`;
-    })
-    .catch(e => { document.getElementById('tbl-msgs').innerHTML = `<tr><td colspan="6" class="error-msg">查询失败: ${e}</td></tr>`; });
+  fetch('/api/aftn_messages?' + p.toString()).then(function(r) { return r.json(); }).then(function(d) {
+    msgTot = d.total;
+    renderMsgs(d.records);
+    var pi = document.getElementById('msg-info');
+    if (pi) { pi.textContent = '共 ' + d.total + ' 条'; }
+    pgMsg();
+  }).catch(function(e) {
+    document.getElementById('tbl-msgs').innerHTML = '<tr><td colspan="6" class="error-msg">查询失败: ' + e.message + '</td></tr>';
+  });
 }
 
-function renderMsgs(records) {
-  const tbody = document.getElementById('tbl-msgs');
-  if (!records || records.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center" style="padding:30px">没有找到匹配的报文</td></tr>';
+function renderMsgs(rs) {
+  var tb = document.getElementById('tbl-msgs');
+  if (!rs || rs.length === 0) {
+    tb.innerHTML = '<tr><td colspan="6" class="text-muted text-center" style="padding:30px">没有匹配的报文</td></tr>';
     return;
   }
-  tbody.innerHTML = records.map(r => {
-    const tagClass = 'tag-' + (r.message_type || 'unknown').toLowerCase();
-    const recvTime = r.received_at ? r.received_at.slice(5, 16) : '-';
-    const utcTime = r.utc_time ? r.utc_time.slice(5, 16) : '-';
-    const preview = r.message_text ? (r.message_text.length > 60 ? r.message_text.slice(0, 60) + '...' : r.message_text) : r.raw_text.slice(0, 60);
-    return `<tr>
-      <td>${r.id}</td>
-      <td><span class="tag ${tagClass}">${r.message_type || '?'}</span></td>
-      <td>${recvTime}</td>
-      <td>${utcTime}</td>
-      <td style="max-width:500px;overflow:hidden;text-overflow:ellipsis;font-family:monospace;font-size:12px" title="${escHtml(r.raw_text)}">${escHtml(preview)}</td>
-      <td><button class="action-btn view" onclick="showMsgDetail(${r.id})">查看</button></td>
-    </tr>`;
-  }).join('');
+  var h = '';
+  for (var i = 0; i < rs.length; i++) {
+    var r = rs[i];
+    var tc = 'tag-' + (r.message_type || ' ');
+    var rt = r.received_at ? r.received_at.slice(5, 16) : '-';
+    var ut = r.utc_time ? r.utc_time.slice(5, 16) : '-';
+    var preview = (r.message_text || r.raw_text || '').slice(0, 80);
+    h += '<tr>' +
+      '<td>' + r.id + '</td>' +
+      '<td><span class="tag ' + tc + '">' + (r.message_type || '?') + '</span></td>' +
+      '<td>' + rt + '</td>' +
+      '<td>' + ut + '</td>' +
+      '<td style="max-width:450px;overflow:hidden;text-overflow:ellipsis;font-family:monospace;font-size:12px;color:var(--text-secondary)" title="' + esc(preview) + '">' + esc(preview) + '</td>' +
+      '<td><button class="btn btn-secondary btn-sm" onclick="showMsg(' + r.id + ')">查看</button></td>' +
+      '</tr>';
+  }
+  tb.innerHTML = h;
 }
 
-function renderMsgPagination() {
-  const el = document.getElementById('pagination-msgs');
-  const info = document.getElementById('page-info-msg');
-  const prev = document.getElementById('btn-msg-prev');
-  const next = document.getElementById('btn-msg-next');
-  if (msgTotal <= PAGE) { el.style.display = 'none'; return; }
+function pgMsg() {
+  var el = document.getElementById('pg-msgs');
+  var info = document.getElementById('pi-msg');
+  if (msgTot <= PS) { el.style.display = 'none'; return; }
   el.style.display = 'flex';
-  const page = Math.floor(msgOffset / PAGE) + 1;
-  const totalPages = Math.ceil(msgTotal / PAGE);
-  info.textContent = `第 ${page} / ${totalPages} 页（共 ${msgTotal} 条）`;
-  prev.disabled = msgOffset <= 0;
-  next.disabled = msgOffset + PAGE >= msgTotal;
+  var pg = Math.floor(msgOff / PS) + 1;
+  info.textContent = '第 ' + pg + '/' + Math.ceil(msgTot / PS) + ' 页（共 ' + msgTot + ' 条）';
+  document.getElementById('bmp').disabled = msgOff <= 0;
+  document.getElementById('bmn').disabled = msgOff + PS >= msgTot;
 }
 
-function goMsgPage(delta) {
-  const newOff = msgOffset + delta * PAGE;
-  if (newOff < 0 || newOff >= msgTotal) return;
-  msgOffset = newOff;
+function goMsgPage(d) {
+  var n = msgOff + d * PS;
+  if (n < 0 || n >= msgTot) { return; }
+  msgOff = n;
   searchMsgs(false);
 }
 
 function resetMsgs() {
-  document.querySelectorAll('#panel-msgs .search-bar input, #panel-msgs .search-bar select').forEach(e => e.value = '');
-  msgOffset = 0; msgTotal = 0;
-  document.getElementById('tbl-msgs').innerHTML = '<tr><td colspan="6" class="loading">点击"查询"获取数据</td></tr>';
-  document.getElementById('pagination-msgs').style.display = 'none';
-  document.getElementById('msg-result-info').textContent = '';
+  document.querySelectorAll('#panel-msgs input, #panel-msgs select').forEach(function(e) { e.value = ''; });
+  msgOff = 0; msgTot = 0;
+  document.getElementById('tbl-msgs').innerHTML = '<tr><td colspan="6" class="loading">输入条件后按查询</td></tr>';
+  document.getElementById('pg-msgs').style.display = 'none';
+  document.getElementById('msg-info').textContent = '';
 }
 
-function showMsgDetail(id) {
-  fetch('/api/aftn_messages?' + new URLSearchParams({ limit: 500 }))
-    .then(r => r.json())
-    .then(d => {
-      const rec = (d.records || []).find(x => x.id == id);
-      if (!rec) return;
-      document.getElementById('msg-detail-body').innerHTML = `
-        <div class="form-grid">
-          <div class="form-field"><label>ID</label><div style="padding:8px 0">${rec.id}</div></div>
-          <div class="form-field"><label>报文类型</label><div style="padding:8px 0"><span class="tag tag-${(rec.message_type||'unknown').toLowerCase()}">${rec.message_type||'?'}</span></div></div>
-          <div class="form-field"><label>接收时间</label><div style="padding:8px 0">${rec.received_at||'-'}</div></div>
-          <div class="form-field"><label>UTC 时间</label><div style="padding:8px 0">${rec.utc_time||'-'}</div></div>
-        </div>
-        <div class="form-field" style="margin-top:12px"><label>原始报文</label></div>
-        <div class="raw-msg">${escHtml(rec.raw_text || '(无)')}</div>
-      `;
-      document.getElementById('modal-msg').classList.add('active');
-    });
+function showMsg(id) {
+  fetch('/api/aftn_messages?limit=500').then(function(r) { return r.json(); }).then(function(d) {
+    var rec = null;
+    for (var i = 0; i < (d.records||[]).length; i++) { if (d.records[i].id == id) { rec = d.records[i]; break; } }
+    if (!rec) { return; }
+    document.getElementById('msg-body').innerHTML =
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">' +
+        '<div><div style="font-size:11px;color:var(--text-muted)">ID</div><div style="padding:4px 0">' + rec.id + '</div></div>' +
+        '<div><div style="font-size:11px;color:var(--text-muted)">报文类型</div><div style="padding:4px 0"><span class="tag tag-' + (rec.message_type||' ') + '">' + (rec.message_type||'?') + '</span></div></div>' +
+        '<div><div style="font-size:11px;color:var(--text-muted)">接收时间</div><div style="padding:4px 0">' + (rec.received_at||'-') + '</div></div>' +
+        '<div><div style="font-size:11px;color:var(--text-muted)">UTC 时间</div><div style="padding:4px 0">' + (rec.utc_time||'-') + '</div></div>' +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">原始报文</div>' +
+      '<pre style="background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:12px;font-size:12px;overflow-x:auto;max-height:200px;white-space:pre-wrap;word-break:break-all;color:var(--text-secondary);">' + esc(rec.raw_text||'(无)') + '</pre>';
+    document.getElementById('modal-msg').style.display = 'flex';
+  });
 }
 
-function closeMsgModal() { document.getElementById('modal-msg').classList.remove('active'); }
-
-// ═══════════════════════════════════════════════════
-// 飞行计划模块
-// ═══════════════════════════════════════════════════
-function searchPlans(resetOffset = true) {
-  if (resetOffset) fplOffset = 0;
-  const params = new URLSearchParams({ limit: PAGE, offset: fplOffset });
-  const f = id => document.getElementById(id).value.trim();
-  if (f('q-fpl-callsign')) params.set('callsign', f('q-fpl-callsign'));
-  if (f('q-fpl-adep')) params.set('adep', f('q-fpl-adep'));
-  if (f('q-fpl-adest')) params.set('adest', f('q-fpl-adest'));
-  if (f('q-fpl-dof')) params.set('dof', f('q-fpl-dof'));
-  if (f('q-fpl-ssr')) params.set('ssr', f('q-fpl-ssr'));
-  if (f('q-fpl-acft')) params.set('aircraft_type', f('q-fpl-acft'));
-  if (f('q-fpl-type')) params.set('source_message_type', f('q-fpl-type'));
-
-  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="14" class="loading">查询中...</td></tr>';
-  fetch('/api/flight_plans?' + params.toString())
-    .then(r => r.json())
-    .then(d => {
-      fplTotal = d.total;
-      renderPlans(d.records);
-      renderFplPagination();
-      document.getElementById('fpl-result-info').textContent = `共 ${d.total} 条`;
-    })
-    .catch(e => { document.getElementById('tbl-fpl').innerHTML = `<tr><td colspan="14" class="error-msg">查询失败: ${e}</td></tr>`; });
+function closeMsg() {
+  document.getElementById('modal-msg').style.display = 'none';
 }
 
-function renderPlans(records) {
-  const tbody = document.getElementById('tbl-fpl');
-  if (!records || records.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="14" class="text-muted text-center" style="padding:30px">没有找到匹配的飞行计划</td></tr>';
+// ═══════════════════════════════════════════════════════
+// Flight Plans
+// ═══════════════════════════════════════════════════════
+function searchPlans(r) {
+  if (r !== false) { fplOff = 0; }
+  var p = new URLSearchParams({limit: PS, offset: fplOff});
+  var v = function(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  var c = v('qfc'); var a = v('qfa'); var d = v('qfd'); var s = v('qfs'); var ac = v('qfac'); var t = v('qft');
+  if (c) { p.set('callsign', c); }
+  if (a) { p.set('adep', a); }
+  if (v('qfd')) { p.set('dof', v('qfd')); }
+  if (v('qfd2')) { p.set('dof', v('qfd2')); }
+  if (s) { p.set('ssr', s); }
+  if (ac) { p.set('aircraft_type', ac); }
+  if (t) { p.set('source_message_type', t); }
+
+  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="12" class="loading">查询中...</td></tr>';
+  fetch('/api/flight_plans?' + p.toString()).then(function(r) { return r.json(); }).then(function(d) {
+    fplTot = d.total;
+    renderPlans(d.records);
+    var pi = document.getElementById('fpl-info');
+    if (pi) { pi.textContent = '共 ' + d.total + ' 条'; }
+    pgFpl();
+  }).catch(function(e) {
+    document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="12" class="error-msg">查询失败: ' + e.message + '</td></tr>';
+  });
+}
+
+function renderPlans(rs) {
+  var tb = document.getElementById('tbl-fpl');
+  if (!rs || rs.length === 0) {
+    tb.innerHTML = '<tr><td colspan="12" class="text-muted text-center" style="padding:30px">没有匹配的飞行计划</td></tr>';
     return;
   }
-  tbody.innerHTML = records.map(r => {
-    const tagClass = r.source_message_type ? 'tag-' + r.source_message_type.toLowerCase() : 'tag-unknown';
-    const dof = r.dof ? r.dof.slice(0, 10) : '-';
-    const fmt = t => t ? t.slice(5, 16) : '-';
-    const route = r.route ? (r.route.length > 35 ? r.route.slice(0, 35) + '...' : r.route) : '-';
-    const canDel = r.source_message_type !== 'MANUAL' ? '<button class="action-btn delete" onclick="deletePlan(' + r.id + ')" disabled title="报文产生的计划不可删除">删除</button>' : '<button class="action-btn delete" onclick="deletePlan(' + r.id + ')">删除</button>';
-    return `<tr>
-      <td>${r.id}</td>
-      <td><strong>${r.callsign||'-'}</strong></td>
-      <td>${r.ssr||'-'}</td>
-      <td>${r.aircraft_type||'-'}</td>
-      <td>${dof}</td>
-      <td>${r.adep||'-'}</td>
-      <td>${fmt(r.etd)}</td>
-      <td>${fmt(r.atd)}</td>
-      <td>${r.adest||'-'}</td>
-      <td>${fmt(r.eta)}</td>
-      <td>${fmt(r.ata)}</td>
-      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(r.route||'')}">${route}</td>
-      <td><span class="tag ${tagClass}">${r.source_message_type||'?'}</span></td>
-      <td>
-        <button class="action-btn edit" onclick="openPlanModal(${r.id})">编辑</button>
-        ${canDel}
-      </td>
-    </tr>`;
-  }).join('');
+  var h = '';
+  for (var i = 0; i < rs.length; i++) {
+    var r = rs[i];
+    var tc = r.source_message_type ? 'tag-' + r.source_message_type : 'tag-';
+    var fd = r.dof ? r.dof.slice(0,10) : '-';
+    var ft = function(v) { return v ? v.slice(5,16) : '-'; };
+    var rt = r.route ? (r.route.length > 30 ? r.route.slice(0,30) + '...' : r.route) : '-';
+    h += '<tr>' +
+      '<td class="callsign">' + (r.callsign||'-') + '</td>' +
+      '<td>' + (r.ssr||'-') + '</td>' +
+      '<td>' + (r.aircraft_type||'-') + '</td>' +
+      '<td>' + fd + '</td>' +
+      '<td class="airport">' + (r.adep||'-') + '</td>' +
+      '<td>' + ft(r.etd) + '</td>' +
+      '<td>' + ft(r.atd) + '</td>' +
+      '<td class="airport">' + (r.adest||'-') + '</td>' +
+      '<td>' + ft(r.eta) + '</td>' +
+      '<td>' + ft(r.ata) + '</td>' +
+      '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary)" title="' + esc(r.route||'') + '">' + rt + '</td>' +
+      '<td><span class="tag ' + tc + '">' + (r.source_message_type||'?') + '</span></td>' +
+      '</tr>';
+  }
+  tb.innerHTML = h;
 }
 
-function renderFplPagination() {
-  const el = document.getElementById('pagination-fpl');
-  const info = document.getElementById('page-info-fpl');
-  const prev = document.getElementById('btn-fpl-prev');
-  const next = document.getElementById('btn-fpl-next');
-  if (fplTotal <= PAGE) { el.style.display = 'none'; return; }
+function pgFpl() {
+  var el = document.getElementById('pg-fpl');
+  var info = document.getElementById('pi-fpl');
+  if (fplTot <= PS) { el.style.display = 'none'; return; }
   el.style.display = 'flex';
-  const page = Math.floor(fplOffset / PAGE) + 1;
-  const totalPages = Math.ceil(fplTotal / PAGE);
-  info.textContent = `第 ${page} / ${totalPages} 页（共 ${fplTotal} 条）`;
-  prev.disabled = fplOffset <= 0;
-  next.disabled = fplOffset + PAGE >= fplTotal;
+  var pg = Math.floor(fplOff / PS) + 1;
+  info.textContent = '第 ' + pg + '/' + Math.ceil(fplTot / PS) + ' 页（共 ' + fplTot + ' 条）';
+  document.getElementById('bfp').disabled = fplOff <= 0;
+  document.getElementById('bfn').disabled = fplOff + PS >= fplTot;
 }
 
-function goFplPage(delta) {
-  const newOff = fplOffset + delta * PAGE;
-  if (newOff < 0 || newOff >= fplTotal) return;
-  fplOffset = newOff;
+function goFplPage(d) {
+  var n = fplOff + d * PS;
+  if (n < 0 || n >= fplTot) { return; }
+  fplOff = n;
   searchPlans(false);
 }
 
 function resetPlans() {
-  document.querySelectorAll('#panel-plans .search-bar input, #panel-plans .search-bar select').forEach(e => e.value = '');
-  fplOffset = 0; fplTotal = 0  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="14" class="loading">点击"查询"获取数据</td></tr>';
-  document.getElementById('pagination-fpl').style.display = 'none';
-  document.getElementById('fpl-result-info').textContent = '';
+  document.querySelectorAll('#panel-plans input, #panel-plans select').forEach(function(e) { e.value = ''; });
+  fplOff = 0; fplTot = 0;
+  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="12" class="loading">输入条件后按查询</td></tr>';
+  document.getElementById('pg-fpl').style.display = 'none';
+  document.getElementById('fpl-info').textContent = '';
 }
 
-// ── 新增 / 编辑 弹窗 ──
-let editingPlanId = null;
-
-function openPlanModal(id) {
-  editingPlanId = id || null;
-  document.getElementById('plan-error').textContent = '';
-  document.getElementById('plan-form').reset();
-
-  if (id) {
-    document.getElementById('plan-modal-title').textContent = '编辑飞行计划 #' + id;
-    document.getElementById('plan-submit-btn').textContent = '更新';
-    fetch('/api/flight_plans/' + id)
-      .then(r => r.json())
-      .then(r => {
-        if (r.error) { alert('未找到该记录'); return; }
-        document.getElementById('plan-id').value = r.id;
-        document.getElementById('plan-callsign').value = r.callsign || '';
-        document.getElementById('plan-ssr').value = r.ssr || '';
-        document.getElementById('plan-aircraft_type').value = r.aircraft_type || '';
-        document.getElementById('plan-dof').value = r.dof || '';
-        document.getElementById('plan-adep').value = r.adep || '';
-        document.getElementById('plan-adest').value = r.adest || '';
-        document.getElementById('plan-source_type').value = r.source_message_type || 'MANUAL';
-        // datetime-local inputs need YYYY-MM-DDTHH:MM
-        const toLocal = v => v ? v.slice(0, 16) : '';
-        document.getElementById('plan-etd').value = toLocal(r.etd);
-        document.getElementById('plan-atd').value = toLocal(r.atd);
-        document.getElementById('plan-eta').value = toLocal(r.eta);
-        document.getElementById('plan-ata').value = toLocal(r.ata);
-        document.getElementById('plan-route').value = r.route || '';
-      });
-  } else {
-    document.getElementById('plan-modal-title').textContent = '新增飞行计划';
-    document.getElementById('plan-submit-btn').textContent = '保存';
-    // 默认执飞日为今天
-    document.getElementById('plan-dof').value = new Date().toISOString().slice(0, 10);
-  }
-  document.getElementById('modal-plan').classList.add('active');
+// ═══════════════════════════════════════════════════════
+// Export Excel
+// ═══════════════════════════════════════════════════════
+function exportExcel() {
+  var params = new URLSearchParams({limit: 10000, offset: 0});
+  var v = function(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  var c = v('qfc'); var a = v('qfa'); var s = v('qfs'); var ac = v('qfac'); var t = v('qft');
+  if (c) { params.set('callsign', c); }
+  if (a) { params.set('adep', a); }
+  if (v('qfd')) { params.set('dof', v('qfd')); }
+  if (v('qfd2')) { params.set('dof', v('qfd2')); }
+  if (s) { params.set('ssr', s); }
+  if (ac) { params.set('aircraft_type', ac); }
+  if (t) { params.set('source_message_type', t); }
+  window.location.href = '/api/flight_plans/export?' + params.toString();
 }
 
-function closePlanModal() {
-  document.getElementById('modal-plan').classList.remove('active');
-  editingPlanId = null;
-}
-
-function submitPlan(e) {
-  e.preventDefault();
-  const errEl = document.getElementById('plan-error');
-  errEl.textContent = '';
-
-  const payload = {
-    callsign: document.getElementById('plan-callsign').value.trim().toUpperCase(),
-    ssr: document.getElementById('plan-ssr').value.trim().toUpperCase(),
-    aircraft_type: document.getElementById('plan-aircraft_type').value.trim().toUpperCase(),
-    dof: document.getElementById('plan-dof').value || null,
-    adep: document.getElementById('plan-adep').value.trim().toUpperCase(),
-    adest: document.getElementById('plan-adest').value.trim().toUpperCase(),
-    source_message_type: document.getElementById('plan-source_type').value,
-    etd: document.getElementById('plan-etd').value || null,
-    atd: document.getElementById('plan-atd').value || null,
-    eta: document.getElementById('plan-eta').value || null,
-    ata: document.getElementById('plan-ata').value || null,
-    route: document.getElementById('plan-route').value.trim().toUpperCase(),
-  };
-
-  if (!payload.callsign || !payload.dof || !payload.adep || !payload.adest) {
-    errEl.textContent = '航班号、执飞日、起飞地、目的地为必填项';
-    return;
-  }
-
-  const method = editingPlanId ? 'PUT' : 'POST';
-  const url = editingPlanId ? '/api/flight_plans/' + editingPlanId : '/api/flight_plans';
-
-  fetch(url, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  }).then(r => r.json()).then(d => {
-    if (d.error) { errEl.textContent = d.error; return; }
-    closePlanModal();
-    searchPlans();
-    loadStats();
-  }).catch(ex => { errEl.textContent = '提交失败: ' + ex.message; });
-}
-
-function deletePlan(id) {
-  if (!confirm('确定要删除飞行计划 #' + id + ' 吗？')) return;
-  fetch('/api/flight_plans/' + id, { method: 'DELETE' })
-    .then(r => r.json())
-    .then(d => {
-      if (d.error) { alert('删除失败: ' + d.error); return; }
-      searchPlans();
-      loadStats();
-    });
-}
-
-// ── 工具 ──
-function escHtml(s) {
-  if (!s) return '';
+// ── utility ──
+function esc(s) {
+  if (!s) { return ''; }
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// 点击弹窗背景关闭
-document.addEventListener('click', function(e) {
-  if (e.target.classList.contains('modal-overlay')) {
-    e.target.classList.remove('active');
-  }
-});
+</script>
+</body>
+</html>
