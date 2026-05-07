@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATC AFTN 报文查询系统</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #333; }
+.header { background: #1a1a2e; color: #fff; padding: 18px 24px; display: flex; align-items: center; gap: 12px; }
+.header h1 { font-size: 20px; font-weight: 600; }
+.header .badge { font-size: 12px; background: #e94560; color: #fff; padding: 2px 10px; border-radius: 10px; }
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+/* search */
+.search-box { background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 20px; }
+.search-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.search-grid label { display: block; font-size: 12px; color: #666; margin-bottom: 3px; }
+.search-grid input, .search-grid select { width: 100%; padding: 8px 10px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 14px; }
+.search-grid input:focus, .search-grid select:focus { border-color: #1a1a2e; outline: none; box-shadow: 0 0 0 2px rgba(26,26,46,.15); }
+.search-actions { display: flex; gap: 10px; align-items: center; }
+.btn { padding: 8px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: .2s; }
+.btn-primary { background: #1a1a2e; color: #fff; }
+.btn-primary:hover { background: #16213e; }
+.btn-secondary { background: #e8e8e8; color: #333; }
+.btn-secondary:hover { background: #d0d0d0; }
+.btn-sm { padding: 4px 12px; font-size: 12px; }
+.btn-link { background: none; color: #1a1a2e; cursor: pointer; border: none; font-size: 13px; text-decoration: underline; padding: 4px; }
+
+/* stats */
+.stats-row { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+.stat-card { background: #fff; border-radius: 8px; padding: 14px 20px; box-shadow: 0 1px 3px rgba(0,0,0,.06); min-width: 120px; text-align: center; }
+.stat-card .num { font-size: 24px; font-weight: 700; color: #1a1a2e; }
+.stat-card .label { font-size: 12px; color: #888; margin-top: 2px; }
+
+/* table */
+.table-wrap { background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08); overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th { background: #fafafa; padding: 10px 12px; text-align: left; font-weight: 600; color: #555; border-bottom: 2px solid #eee; white-space: nowrap; position: sticky; top: 0; }
+tbody td { padding: 9px 12px; border-bottom: 1px solid #f0f0f0; white-space: nowrap; }
+tbody tr:hover { background: #f8f9ff; }
+.text-muted { color: #999; font-size: 12px; }
+.tag { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.tag-fpl { background: #e3f2fd; color: #1565c0; }
+.tag-dep { background: #e8f5e9; color: #2e7d32; }
+.tag-arr { background: #fff3e0; color: #e65100; }
+.tag-dla { background: #fce4ec; color: #c62828; }
+.pagination { padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; }
+.pagination-info { font-size: 13px; color: #888; }
+.pagination-btns { display: flex; gap: 6px; }
+
+/* modal */
+.modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.4); z-index: 1000; align-items: center; justify-content: center; }
+.modal-overlay.active { display: flex; }
+.modal { background: #fff; border-radius: 12px; max-width: 800px; width: 90%; max-height: 80vh; overflow-y: auto; padding: 24px; box-shadow: 0 8px 30px rgba(0,0,0,.15); }
+.modal h2 { font-size: 18px; margin-bottom: 16px; }
+.modal .field { margin-bottom: 10px; }
+.modal .field-label { font-size: 12px; color: #888; }
+.modal .field-value { font-size: 14px; word-break: break-all; }
+.modal pre { background: #f5f5f5; padding: 12px; border-radius: 6px; font-size: 12px; overflow-x: auto; max-height: 200px; white-space: pre-wrap; }
+.modal-close { float: right; background: none; border: none; font-size: 20px; cursor: pointer; color: #999; }
+.modal-close:hover { color: #333; }
+
+/* responsive */
+@media (max-width: 768px) {
+  .search-grid { grid-template-columns: 1fr 1fr; }
+  .container { padding: 12px; }
+}
+
+.loading { text-align: center; padding: 40px; color: #999; }
+.error { color: #e94560; padding: 20px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🛩️ AFTN 报文查询系统</h1>
+  <span class="badge">实时接收中</span>
+</div>
+
+<div class="container">
+  <!-- Stats -->
+  <div class="stats-row" id="stats"></div>
+
+  <!-- Search -->
+  <div class="search-box">
+    <div class="search-grid">
+      <div>
+        <label>航班号</label>
+        <input id="s-callsign" placeholder="CSN101" onkeydown="if(event.key==='Enter') search()">
+      </div>
+      <div>
+        <label>起飞地</label>
+        <input id="s-adep" placeholder="ZGOW" onkeydown="if(event.key==='Enter') search()">
+      </div>
+      <div>
+        <label>目的地</label>
+        <input id="s-adest" placeholder="ZGGG" onkeydown="if(event.key==='Enter') search()">
+      </div>
+      <div>
+        <label>执飞日期</label>
+        <input id="s-dof" type="date">
+      </div>
+      <div>
+        <label>应答机码</label>
+        <input id="s-ssr" placeholder="A1234" onkeydown="if(event.key==='Enter') search()">
+      </div>
+      <div>
+        <label>机型</label>
+        <input id="s-acft" placeholder="B738" onkeydown="if(event.key==='Enter') search()">
+      </div>
+      <div>
+        <label>报文类型</label>
+        <select id="s-type">
+          <option value="">全部</option>
+          <option value="FPL">FPL 飞行计划</option>
+          <option value="DEP">DEP 起飞报</option>
+          <option value="ARR">ARR 落地报</option>
+          <option value="DLA">DLA 延误报</option>
+        </select>
+      </div>
+      <div>
+        <label>关键词</label>
+        <input id="s-keyword" placeholder="呼号/机场/航路" onkeydown="if(event.key==='Enter') search()">
+      </div>
+    </div>
+    <div class="search-actions">
+      <button class="btn btn-primary" onclick="search()">🔍 查询</button>
+      <button class="btn btn-secondary" onclick="resetSearch()">重置</button>
+      <span id="result-info" class="text-muted"></span>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>报文类型</th>
+          <th>航班号</th>
+          <th>起飞</th>
+          <th>目的地</th>
+          <th>应答机</th>
+          <th>机型</th>
+          <th>执飞日</th>
+          <th>ETD</th>
+          <th>ATD</th>
+          <th>ETA</th>
+          <th>ATA</th>
+          <th>航路</th>
+          <th>更新时间</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="results"><tr><td colspan="15" class="text-muted" style="text-align:center;padding:30px;">输入条件后点击查询 🔍</td></tr></tbody>
+    </table>
+    <div class="pagination" id="pagination" style="display:none">
+      <div class="pagination-info" id="page-info"></div>
+      <div class="pagination-btns">
+        <button class="btn btn-secondary btn-sm" onclick="goPage(-1)" id="prev-btn">← 上一页</button>
+        <button class="btn btn-secondary btn-sm" onclick="goPage(1)" id="next-btn">下一页 →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Detail Modal -->
+<div class="modal-overlay" id="detail-modal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeDetail()">&times;</button>
+    <h2 id="detail-title">详情</h2>
+    <div id="detail-body"></div>
+  </div>
+</div>
+
+<script>
+let currentOffset = 0;
+let currentTotal = 0;
+const PAGE_SIZE = 100;
+
+function getParams() {
+  const p = {};
+  const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const callsign = v('s-callsign');
+  const adep = v('s-adep');
+  const adest = v('s-adest');
+  const dof = v('s-dof');
+  const ssr = v('s-ssr');
+  const acft = v('s-acft');
+  const type = v('s-type');
+  const keyword = v('s-keyword');
+  if (callsign) p.callsign = callsign;
+  if (adep) p.adep = adep;
+  if (adest) p.adest = adest;
+  if (dof) p.dof = dof;
+  if (ssr) p.ssr = ssr;
+  if (acft) p.aircraft_type = acft;
+  if (type) p.source_message_type = type;
+  if (keyword) p.keyword = keyword;
+  return p;
+}
+
+async function search(resetOffset = true) {
+  if (resetOffset) currentOffset = 0;
+  const params = getParams();
+  params.limit = PAGE_SIZE;
+  params.offset = currentOffset;
+  
+  const qs = Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  document.getElementById('results').innerHTML = '<tr><td colspan="15" class="loading">查询中...</td></tr>';
+  
+  try {
+    const resp = await fetch(`/api/flight_plans?${qs}`);
+    const data = await resp.json();
+    currentTotal = data.total;
+    renderTable(data.records);
+    renderPagination();
+    document.getElementById('result-info').textContent = `共 ${data.total} 条结果`;
+  } catch (e) {
+    document.getElementById('results').innerHTML = `<tr><td colspan="15" class="error">查询失败: ${e.message}</td></tr>`;
+  }
+}
+
+function renderTable(records) {
+  const tbody = document.getElementById('results');
+  if (!records || records.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="15" class="text-muted" style="text-align:center;padding:30px;">没有找到匹配的记录</td></tr>';
+    return;
+  }
+  tbody.innerHTML = records.map(r => {
+    const typeTag = `<span class="tag tag-${r.source_message_type?.toLowerCase() || 'fpl'}">${r.source_message_type || '-'}</span>`;
+    const dofStr = r.dof ? r.dof.slice(0,10) : '-';
+    const etdStr = r.etd ? r.etd.slice(5,16) : '-';
+    const atdStr = r.atd ? r.atd.slice(5,16) : '-';
+    const etaStr = r.eta ? r.eta.slice(5,16) : '-';
+    const ataStr = r.ata ? r.ata.slice(5,16) : '-';
+    const updated = r.updated_at ? r.updated_at.slice(5,19) : '-';
+    const route = r.route ? (r.route.length > 40 ? r.route.slice(0,40) + '...' : r.route) : '-';
+    return `<tr>
+      <td>${r.id}</td>
+      <td>${typeTag}</td>
+      <td><strong>${r.callsign || '-'}</strong></td>
+      <td>${r.adep || '-'}</td>
+      <td>${r.adest || '-'}</td>
+      <td>${r.ssr || '-'}</td>
+      <td>${r.aircraft_type || '-'}</td>
+      <td>${dofStr}</td>
+      <td>${etdStr}</td>
+      <td>${atdStr}</td>
+      <td>${etaStr}</td>
+      <td>${ataStr}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="${r.route || ''}">${route}</td>
+      <td>${updated}</td>
+      <td><button class="btn-link" onclick="showDetail(${r.id})">详情</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderPagination() {
+  const el = document.getElementById('pagination');
+  const info = document.getElementById('page-info');
+  const prev = document.getElementById('prev-btn');
+  const next = document.getElementById('next-btn');
+  if (currentTotal <= PAGE_SIZE) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  const page = Math.floor(currentOffset / PAGE_SIZE) + 1;
+  const totalPages = Math.ceil(currentTotal / PAGE_SIZE);
+  info.textContent = `第 ${page} / ${totalPages} 页 (共 ${currentTotal} 条)`;
+  prev.disabled = currentOffset <= 0;
+  next.disabled = currentOffset + PAGE_SIZE >= currentTotal;
+}
+
+function goPage(delta) {
+  const newOffset = currentOffset + delta * PAGE_SIZE;
+  if (newOffset < 0 || newOffset >= currentTotal) return;
+  currentOffset = newOffset;
+  search(false);
+}
+
+function resetSearch() {
+  document.querySelectorAll('.search-box input, .search-box select').forEach(el => el.value = '');
+  currentOffset = 0;
+  currentTotal = 0;
+  document.getElementById('results').innerHTML = '<tr><td colspan="15" class="text-muted" style="text-align:center;padding:30px;">输入条件后点击查询 🔍</td></tr>';
+  document.getElementById('pagination').style.display = 'none';
+  document.getElementById('result-info').textContent = '';
+}
+
+async function showDetail(id) {
+  const modal = document.getElementById('detail-modal');
+  const body = document.getElementById('detail-body');
+  const title = document.getElementById('detail-title');
+  modal.classList.add('active');
+  body.innerHTML = '<div class="loading">加载中...</div>';
+  title.textContent = `详情 #${id}`;
+  
+  try {
+    const resp = await fetch(`/api/flight_plans/${id}`);
+    const r = await resp.json();
+    if (r.error) { body.innerHTML = `<div class="error">${r.error}</div>`; return; }
+    
+    body.innerHTML = `
+      <div class="field"><div class="field-label">ID</div><div class="field-value">${r.id}</div></div>
+      <div class="field"><div class="field-label">报文类型</div><div class="field-value">${r.source_message_type || '-'}</div></div>
+      <div class="field"><div class="field-label">航班号</div><div class="field-value"><strong>${r.callsign || '-'}</strong></div></div>
+      <div class="field"><div class="field-label">起飞地 → 目的地</div><div class="field-value">${r.adep || '-'} → ${r.adest || '-'}</div></div>
+      <div class="field"><div class="field-label">应答机码</div><div class="field-value">${r.ssr || '-'}</div></div>
+      <div class="field"><div class="field-label">机型</div><div class="field-value">${r.aircraft_type || '-'}</div></div>
+      <div class="field"><div class="field-label">飞行规则</div><div class="field-value">${r.flight_rules || '-'}</div></div>
+      <div class="field"><div class="field-label">航路</div><div class="field-value">${r.route || '-'}</div></div>
+      <div class="field"><div class="field-label">执飞日 (DOF)</div><div class="field-value">${r.dof || '-'}</div></div>
+      <div class="field"><div class="field-label">预计起飞 (ETD)</div><div class="field-value">${r.etd || '-'}</div></div>
+      <div class="field"><div class="field-label">实际起飞 (ATD)</div><div class="field-value">${r.atd || '-'}</div></div>
+      <div class="field"><div class="field-label">预计到达 (ETA)</div><div class="field-value">${r.eta || '-'}</div></div>
+      <div class="field"><div class="field-label">实际到达 (ATA)</div><div class="field-value">${r.ata || '-'}</div></div>
+      <div class="field"><div class="field-label">预计飞行时间</div><div class="field-value">${r.eet_minutes || 0} 分钟</div></div>
+      <div class="field"><div class="field-label">创建时间</div><div class="field-value">${r.created_at || '-'}</div></div>
+      <div class="field"><div class="field-label">更新时间</div><div class="field-value">${r.updated_at || '-'}</div></div>
+      <hr style="margin:14px 0;border:none;border-top:1px solid #eee;">
+      <div class="field"><div class="field-label">原始报文</div></div>
+      <pre>${escapeHtml(r.raw_message_text || '(无)')}</pre>
+    `;
+  } catch (e) {
+    body.innerHTML = `<div class="error">加载失败: ${e.message}</div>`;
+  }
+}
+
+function closeDetail() {
+  document.getElementById('detail-modal').classList.remove('active');
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Load stats on page load
+async function loadStats() {
+  try {
+    const resp = await fetch('/api/stats');
+    const s = await resp.json();
+    const types = s.by_type || {};
+    document.getElementById('stats').innerHTML = `
+      <div class="stat-card"><div class="num">${s.total_flight_plans}</div><div class="label">飞行计划总数</div></div>
+      <div class="stat-card"><div class="num">${types.FPL || 0}</div><div class="label">FPL</div></div>
+      <div class="stat-card"><div class="num">${types.DEP || 0}</div><div class="label">DEP</div></div>
+      <div class="stat-card"><div class="num">${types.ARR || 0}</div><div class="label">ARR</div></div>
+      <div class="stat-card"><div class="num">${types.DLA || 0}</div><div class="label">DLA</div></div>
+    `;
+  } catch(e) { /* ignore */ }
+}
+
+loadStats();
+</script>
+</body>
+</html>
