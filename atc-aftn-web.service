@@ -1,0 +1,14 @@
+[Unit]
+Description=ATC AFTN WebHub
+After=network.target
+
+[Service]
+Type=simple
+User=Chenzhiyong
+WorkingDirectory=/home/share/atc_aftn_web
+ExecStart=/home/Chenzhiyong/.pyenv/shims/python3 -m aftn_web -c /home/share/atc_aftn_web/config.json --log-dir /home/share/atc_aftn_web/logs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

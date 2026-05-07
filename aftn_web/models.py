@@ -31,22 +31,20 @@ class AftnMessage:
 
 @dataclass
 class FlightPlan:
-    """解析后的飞行计划（由 AFTN 报文更新/合并）"""
+    """飞行计划"""
 
     id: int = 0
     callsign: str = ""
-    adep: str = ""
-    adest: str = ""
     ssr: str = ""
     aircraft_type: str = ""
-    flight_rules: str = ""
-    route: str = ""
     dof: date | None = None
+    adep: str = ""
     etd: datetime | None = None
-    eet_minutes: int = 0
     atd: datetime | None = None
+    adest: str = ""
     eta: datetime | None = None
     ata: datetime | None = None
+    route: str = ""
     source_message_type: str = ""
     last_message_time: datetime | None = None
     raw_message_text: str = ""
@@ -57,18 +55,16 @@ class FlightPlan:
         return {
             "id": self.id,
             "callsign": self.callsign,
-            "adep": self.adep,
-            "adest": self.adest,
             "ssr": self.ssr,
             "aircraft_type": self.aircraft_type,
-            "flight_rules": self.flight_rules,
-            "route": self.route,
             "dof": self.dof.isoformat() if self.dof else None,
+            "adep": self.adep,
             "etd": self.etd.isoformat() if self.etd else None,
-            "eet_minutes": self.eet_minutes,
             "atd": self.atd.isoformat() if self.atd else None,
+            "adest": self.adest,
             "eta": self.eta.isoformat() if self.eta else None,
             "ata": self.ata.isoformat() if self.ata else None,
+            "route": self.route,
             "source_message_type": self.source_message_type,
             "last_message_time": self.last_message_time.isoformat() if self.last_message_time else None,
             "raw_message_text": self.raw_message_text,

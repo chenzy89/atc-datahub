@@ -188,11 +188,9 @@ class AftnParser:
             adest=arrival[:4],
             ssr=ssr,
             aircraft_type=fields[3].strip().upper(),
-            flight_rules=fields[2].strip().upper(),
             route=route,
             dof=dof,
             etd=etd_utc,
-            eet_minutes=eet_minutes,
             eta=etd_utc + timedelta(minutes=eet_minutes) if etd_utc else None,
         )
         return plan
