@@ -79,21 +79,41 @@ def main(argv: list[str] | None = None) -> int:
         # 保存原始报文
         db.save_aftn_message(result.message)
 
-        if result.accepted and result.flight_plan:
-            db.upsert_flight_plan(result.flight_plan)
+        if not result.accepted:
+            if result.errors:
+                logger.debug("AFTN ignored: %s", "; ".join(result.errors))
+            return
+
+        plan = result.flight_plan
+        action = result.action
+
+        if action == "CNL":
+            # CNL：查找并删除关联的飞行计划
+            deleted = db.delete_by_key(plan.callsign, plan.adep, plan.adest)
+            total_parsed[0] += 1
+            if deleted:
+                logger.info(
+                    "[CNL] %s %s->%s 已取消删除 (total: recv=%d, parsed=%d)",
+                    plan.callsign, plan.adep, plan.adest,
+                    total_received[0], total_parsed[0],
+                )
+            else:
+                logger.info(
+                    "[CNL] %s %s->%s 无关联计划 (total: recv=%d, parsed=%d)",
+                    plan.callsign, plan.adep, plan.adest,
+                    total_received[0], total_parsed[0],
+                )
+        else:
+            # FPL / DEP / ARR / DLA：upsert（找不到则新建，找到了则更新对应字段）
+            # source_message_type 由 upsert 统一更新为最新收到的报文类型
+            db.upsert_flight_plan(plan)
             total_parsed[0] += 1
             if total_parsed[0] <= 5 or total_parsed[0] % 10 == 0:
                 logger.info(
                     "[%s] %s %s->%s (total: recv=%d, parsed=%d)",
-                    result.action,
-                    result.flight_plan.callsign,
-                    result.flight_plan.adep,
-                    result.flight_plan.adest,
-                    total_received[0],
-                    total_parsed[0],
+                    action, plan.callsign, plan.adep, plan.adest,
+                    total_received[0], total_parsed[0],
                 )
-        elif result.errors:
-            logger.debug("AFTN ignored: %s", "; ".join(result.errors))
 
         # 每 10 条打印一次统计
         if total_received[0] % 10 == 0:

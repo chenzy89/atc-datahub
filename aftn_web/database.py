@@ -227,6 +227,19 @@ class Database:
             conn.commit()
             return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
+    def delete_by_key(self, callsign: str, adep: str, adest: str) -> bool:
+        """按 callsign+adep+adest 删除飞行计划（用于 CNL 取消报）"""
+        conn = self._get_conn()
+        cur = conn.execute(
+            "SELECT id FROM flight_plans WHERE callsign=? AND adep=? AND adest=?",
+            (callsign.strip().upper(), adep.strip().upper()[:4], adest.strip().upper()[:4]),
+        ).fetchone()
+        if not cur:
+            return False
+        conn.execute("DELETE FROM flight_plans WHERE id=?", (cur["id"],))
+        conn.commit()
+        return True
+
     def query_flight_plans(
         self,
         callsign: str | None = None,

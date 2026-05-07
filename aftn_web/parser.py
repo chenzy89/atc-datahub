@@ -9,7 +9,7 @@ from typing import Any, Optional
 from .models import AftnMessage, FlightPlan
 
 _UTC_PLUS_8 = timezone(timedelta(hours=8))
-SUPPORTED_TYPES = {"FPL", "DEP", "ARR", "DLA"}
+SUPPORTED_TYPES = {"FPL", "DEP", "ARR", "DLA", "CNL"}
 
 
 def _utc_to_beijing(utc_dt: datetime) -> datetime:
@@ -87,6 +87,8 @@ class AftnParser:
                 plan = self._parse_dla(core_text, message_time)
             elif detected_type == "ARR":
                 plan = self._parse_arr(core_text, message_time)
+            elif detected_type == "CNL":
+                plan = self._parse_cnl(core_text, message_time)
             else:
                 result.errors.append(f"不支持的报文类型: {detected_type}")
                 return result
@@ -294,6 +296,25 @@ class AftnParser:
             ata=ata_utc,
         )
         return plan
+
+    def _parse_cnl(self, core_text: str, message_time: datetime) -> FlightPlan:
+        """CNL 取消报：提取航班号、起降机场（无 SSR 字段），数据库层按 key 删除。"""
+        fields = self._split_fields(core_text)
+        if len(fields) < 4:
+            raise AftnParseError(f"CNL 报文段数不足: {len(fields)}")
+        callsign_raw = fields[1].strip().upper()
+        if not callsign_raw:
+            raise AftnParseError("CNL 缺少呼号")
+        # 去掉 /A 后缀（如有）
+        callsign = callsign_raw.split("/A")[0].strip()
+        departure = fields[2].strip().upper()
+        arrival = fields[3].strip().upper()
+        return FlightPlan(
+            callsign=callsign,
+            ssr="",
+            adep=departure[:4] if len(departure) >= 4 else departure,
+            adest=arrival[:4] if len(arrival) >= 4 else arrival,
+        )
 
     def _split_fields(self, core_text: str) -> list[str]:
         if not core_text:
