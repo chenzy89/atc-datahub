@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
                     total_received[0], total_parsed[0],
                 )
         else:
-            # FPL / DEP / ARR / DLA：upsert（找不到则新建，找到了则更新对应字段）
+            # FPL / DEP / ARR / DLA / EST：upsert（找不到则新建，找到了则更新对应字段）（找不到则新建，找到了则更新对应字段）
             # source_message_type 由 upsert 统一更新为最新收到的报文类型
             db.upsert_flight_plan(plan)
             total_parsed[0] += 1

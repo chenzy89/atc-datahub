@@ -9,7 +9,7 @@ from typing import Any, Optional
 from .models import AftnMessage, FlightPlan
 
 _UTC_PLUS_8 = timezone(timedelta(hours=8))
-SUPPORTED_TYPES = {"FPL", "DEP", "ARR", "DLA", "CNL"}
+SUPPORTED_TYPES = {"FPL", "DEP", "ARR", "DLA", "CNL", "EST"}
 
 
 def _utc_to_beijing(utc_dt: datetime) -> datetime:
@@ -89,6 +89,8 @@ class AftnParser:
                 plan = self._parse_arr(core_text, message_time)
             elif detected_type == "CNL":
                 plan = self._parse_cnl(core_text, message_time)
+            elif detected_type == "EST":
+                plan = self._parse_est(core_text, message_time)
             else:
                 result.errors.append(f"不支持的报文类型: {detected_type}")
                 return result
@@ -316,6 +318,44 @@ class AftnParser:
             adest=arrival[:4] if len(arrival) >= 4 else arrival,
         )
 
+
+    def _parse_est(self, core_text: str, message_time: datetime) -> FlightPlan:
+        """EST 延误报：出港 EST 更新 ETD（进港暂不处理）。
+        格式：(EST-callsign-adepHHMM-adest)
+        - adepHHMM：起飞地+预计起飞时间
+        """
+        fields = self._split_fields(core_text)
+        if len(fields) < 4:
+            raise AftnParseError(f"EST 报文段数不足: {len(fields)}")
+        callsign_raw = fields[1].strip().upper()
+        if not callsign_raw:
+            raise AftnParseError("EST 缺少呼号")
+        callsign = callsign_raw.split("/A")[0].strip()
+        # fields[2]=ZGOW0930，拆出机场+时间
+        f2 = fields[2].strip().upper()
+        adep = f2[:4]
+        hhmm = f2[4:8] if len(f2) >= 8 else "0000"
+        if not hhmm.isdigit():
+            raise AftnParseError(f"EST 时间字段非法: {hhmm!r}")
+        adest = fields[3].strip().upper()[:4]
+        base_day = _beijing_date_from_utc(message_time)
+        etd_utc = self._combine_day_hhmm(base_day, hhmm)
+        return FlightPlan(
+            callsign=callsign,
+            ssr="",
+            aircraft_type="",
+            dof=base_day,
+            adep=adep,
+            etd=etd_utc,
+            atd=None,
+            adest=adest,
+            eta=None,
+            ata=None,
+            route="",
+            source_message_type="EST",
+            last_message_time=message_time,
+            raw_message_text=core_text,
+        )
     def _split_fields(self, core_text: str) -> list[str]:
         if not core_text:
             raise AftnParseError("AFTN 报文为空")
