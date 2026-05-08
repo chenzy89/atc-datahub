@@ -60,6 +60,9 @@ class Database:
                 updated_at TEXT NOT NULL
             );
 
+            DROP INDEX IF EXISTS idx_fpl_key;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_fpl_key
+                ON flight_plans(callsign, adep, adest, dof);
             CREATE INDEX IF NOT EXISTS idx_fpl_dof
                 ON flight_plans(dof);
             CREATE INDEX IF NOT EXISTS idx_fpl_adep
@@ -154,6 +157,13 @@ class Database:
         row = conn.execute(f"SELECT COUNT(*) FROM aftn_messages {where}", params).fetchone()
         return row[0]
 
+    def get_aftn_message(self, msg_id: int) -> dict[str, Any] | None:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM aftn_messages WHERE id=?", (msg_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
     def count_aftn_by_type(self) -> dict[str, int]:
         conn = self._get_conn()
         rows = conn.execute(
@@ -164,13 +174,13 @@ class Database:
     # ── 飞行计划 ──────────────────────────────────────────────
 
     def upsert_flight_plan(self, plan: FlightPlan) -> int:
-        """由报文自动调用：插入或按 callsign+adep+adest 更新已有记录"""
+        """由报文自动调用：按 callsign+adep+adest+dof 插入或更新已有记录"""
         now = _fmt_dt(datetime.utcnow())
         conn = self._get_conn()
 
         existing = conn.execute(
-            "SELECT id, dof, atd, ata FROM flight_plans WHERE callsign=? AND adep=? AND adest=?",
-            (plan.callsign, plan.adep, plan.adest),
+            "SELECT id, dof, atd, ata FROM flight_plans WHERE callsign=? AND adep=? AND adest=? AND dof=?",
+            (plan.callsign, plan.adep, plan.adest, _fmt_date(plan.dof)),
         ).fetchone()
 
         if existing:
@@ -183,7 +193,6 @@ class Database:
                 "raw_message_text": plan.raw_message_text or "",
                 "updated_at": now,
             }
-            # DEP/ARR 不轻易覆盖已有 dof；其他报文允许更新
             if plan.source_message_type not in ("DEP", "ARR") or not existing["dof"]:
                 if plan.dof:
                     updates["dof"] = _fmt_date(plan.dof)
@@ -227,6 +236,41 @@ class Database:
             conn.commit()
             return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
+    def find_flight_plan(self, callsign: str, adep: str, adest: str, dof: date | None = None) -> dict[str, Any] | None:
+        """按 callsign+adep+adest+可选 DOF 查找飞行计划"""
+        conn = self._get_conn()
+        if dof:
+            row = conn.execute(
+                "SELECT * FROM flight_plans WHERE callsign=? AND adep=? AND adest=? AND dof=?",
+                (callsign, adep, adest, _fmt_date(dof)),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM flight_plans WHERE callsign=? AND adep=? AND adest=?",
+                (callsign, adep, adest),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_flight_plan_atd(self, fpl_id: int, atd: datetime) -> bool:
+        """更新指定飞行计划的 ATD"""
+        conn = self._get_conn()
+        cur = conn.execute(
+            "UPDATE flight_plans SET atd=?, updated_at=? WHERE id=?",
+            (_fmt_dt(atd), _fmt_dt(datetime.utcnow()), fpl_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+    def update_flight_plan_ata(self, fpl_id: int, ata: datetime) -> bool:
+        """更新指定飞行计划的 ATA"""
+        conn = self._get_conn()
+        cur = conn.execute(
+            "UPDATE flight_plans SET ata=?, updated_at=? WHERE id=?",
+            (_fmt_dt(ata), _fmt_dt(datetime.utcnow()), fpl_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
     def delete_by_key(self, callsign: str, adep: str, adest: str) -> bool:
         """按 callsign+adep+adest 删除飞行计划（用于 CNL 取消报）"""
         conn = self._get_conn()
@@ -246,8 +290,8 @@ class Database:
         adep: str | None = None,
         adest: str | None = None,
         dof: date | None = None,
-        ssr: str | None = None,
-        aircraft_type: str | None = None,
+        airport: str | None = None,  # 关注机场：adep OR adest 匹配
+        route: str | None = None,  # 航路关键词
         source_message_type: str | None = None,
         limit: int = 100,
         offset: int = 0,
@@ -268,12 +312,13 @@ class Database:
         if dof:
             conditions.append("dof = ?")
             params.append(_fmt_date(dof))
-        if ssr:
-            conditions.append("ssr LIKE ?")
-            params.append(f"%{ssr.upper()}%")
-        if aircraft_type:
-            conditions.append("aircraft_type LIKE ?")
-            params.append(f"%{aircraft_type.upper()}%")
+        if airport:
+            conditions.append("(adep LIKE ? OR adest LIKE ?)")
+            params.append(f"%{airport.upper()}%")
+            params.append(f"%{airport.upper()}%")
+        if route:
+            conditions.append("route LIKE ?")
+            params.append(f"%{route.upper()}%")
         if source_message_type:
             conditions.append("source_message_type = ?")
             params.append(source_message_type.upper())
@@ -296,8 +341,8 @@ class Database:
         adep: str | None = None,
         adest: str | None = None,
         dof: date | None = None,
-        ssr: str | None = None,
-        aircraft_type: str | None = None,
+        airport: str | None = None,
+        route: str | None = None,
         source_message_type: str | None = None,
     ) -> int:
         conn = self._get_conn()
@@ -315,12 +360,13 @@ class Database:
         if dof:
             conditions.append("dof = ?")
             params.append(_fmt_date(dof))
-        if ssr:
-            conditions.append("ssr LIKE ?")
-            params.append(f"%{ssr.upper()}%")
-        if aircraft_type:
-            conditions.append("aircraft_type LIKE ?")
-            params.append(f"%{aircraft_type.upper()}%")
+        if airport:
+            conditions.append("(adep LIKE ? OR adest LIKE ?)")
+            params.append(f"%{airport.upper()}%")
+            params.append(f"%{airport.upper()}%")
+        if route:
+            conditions.append("route LIKE ?")
+            params.append(f"%{route.upper()}%")
         if source_message_type:
             conditions.append("source_message_type = ?")
             params.append(source_message_type.upper())

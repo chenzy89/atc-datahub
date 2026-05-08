@@ -9,7 +9,10 @@ from typing import Any, Optional
 from .models import AftnMessage, FlightPlan
 
 _UTC_PLUS_8 = timezone(timedelta(hours=8))
-SUPPORTED_TYPES = {"FPL", "DEP", "ARR", "DLA", "CNL", "EST"}
+PARSED_TYPES = {"FPL", "DEP", "ARR", "DLA", "CNL"}
+LABEL_ONLY_TYPES = {"AOC", "ACP", "TOC", "CHG", "EST", "HQ", "METAR"}
+SKIP_TYPES = {"LAM"}
+RECOGNIZED_TYPES = PARSED_TYPES | LABEL_ONLY_TYPES | SKIP_TYPES
 
 
 def _utc_to_beijing(utc_dt: datetime) -> datetime:
@@ -20,6 +23,19 @@ def _utc_to_beijing(utc_dt: datetime) -> datetime:
 
 def _beijing_date_from_utc(utc_dt: datetime) -> date:
     return _utc_to_beijing(utc_dt).date()
+
+
+def _extract_sender(raw_text: str) -> str:
+    """从 AFTN 报文中提取发报地址"""
+    if not raw_text:
+        return ""
+    parts = raw_text.split()
+    for i, p in enumerate(parts):
+        if p in ("FF", "GG") and i + 3 < len(parts):
+            cand = parts[i + 3].upper()
+            if len(cand) in (7, 8) and cand.isalpha():
+                return cand
+    return ""
 
 
 class AftnParseError(ValueError):
@@ -60,6 +76,14 @@ class AftnParser:
         core_text = self._extract_core_message(raw_text)
         detected_type = self._detect_message_type(core_text) or raw_type
 
+        # 特殊类型判断依据：发报地址
+        if detected_type not in ("HQ", "METAR"):
+            sender = _extract_sender(raw_text)
+            if sender == "ZBBBZGZX":
+                detected_type = "HQ"
+            elif sender in ("ZGSDYMYX", "ZGSZYMYX"):
+                detected_type = "METAR"
+
         message = AftnMessage(
             raw_text=raw_text,
             message_type=detected_type,
@@ -74,8 +98,16 @@ class AftnParser:
             action=detected_type,
         )
 
-        if detected_type not in SUPPORTED_TYPES:
+        if detected_type not in RECOGNIZED_TYPES:
             result.errors.append(f"不支持的报文类型: {detected_type}")
+            return result
+
+        if detected_type in LABEL_ONLY_TYPES:
+            # 只标注类型，不解析飞行计划
+            return result
+
+        if detected_type in SKIP_TYPES:
+            # 标注类型但不记录（__main__ 层跳过 DB 保存）
             return result
 
         try:
@@ -89,8 +121,6 @@ class AftnParser:
                 plan = self._parse_arr(core_text, message_time)
             elif detected_type == "CNL":
                 plan = self._parse_cnl(core_text, message_time)
-            elif detected_type == "EST":
-                plan = self._parse_est(core_text, message_time)
             else:
                 result.errors.append(f"不支持的报文类型: {detected_type}")
                 return result
@@ -108,7 +138,7 @@ class AftnParser:
     def _coerce_wrapper(self, payload: bytes | str | dict[str, Any]) -> dict[str, str]:
         if isinstance(payload, dict):
             return {
-                "raw_text": str(payload.get("MessageText", payload.get("message_text", ""))),
+                "raw_text": str(payload.get("MessageText", payload.get("message_text", payload.get("raw_text", "")))),
                 "message_type": str(payload.get("MessageType", payload.get("message_type", ""))),
                 "utc_time": str(payload.get("UtcTime", payload.get("utc_time", ""))),
             }
@@ -138,10 +168,14 @@ class AftnParser:
         return flat[start: end + 1].strip()
 
     def _detect_message_type(self, text: str) -> str:
+        """提取括号后的完整类型词，遇到 - / 空格 / ) 截断"""
         if not text or not text.startswith("("):
             return ""
-        prefix = text[1:4].upper()
-        return prefix if prefix in SUPPORTED_TYPES else ""
+        end = 1
+        while end < len(text) and text[end] not in ("-", " ", ")"):
+            end += 1
+        prefix = text[1:end].upper()
+        return prefix if prefix in RECOGNIZED_TYPES else ""
 
     def _parse_fpl(self, core_text: str, message_time: datetime) -> FlightPlan:
         fields = self._split_fields(core_text)
@@ -210,18 +244,37 @@ class AftnParser:
         departure = fields[2].strip().upper()
         hhmm = departure[4:8]
         base_day = _beijing_date_from_utc(message_time)
-        h, m = int(hhmm[:2]), int(hhmm[2:4])
-        if h > 16 or (h == 16 and m > 0):
-            time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
+
+        # 提取 DOF 字段
+        dof_utc_day: Optional[date] = None
+        for field in fields:
+            marker = field.upper().find("DOF/")
+            if marker >= 0:
+                digits = field[marker + 4: marker + 10]
+                if len(digits) == 6 and digits.isdigit():
+                    try:
+                        dof_utc_day = datetime.strptime("20" + digits, "%Y%m%d").date()
+                    except ValueError:
+                        pass
+                break
+
+        if dof_utc_day is not None:
+            time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
+            dof = _beijing_date_from_utc(time_utc)
         else:
-            time_utc = self._combine_day_hhmm(base_day, hhmm)
+            h, m = int(hhmm[:2]), int(hhmm[2:4])
+            if h > 16 or (h == 16 and m > 0):
+                time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
+            else:
+                time_utc = self._combine_day_hhmm(base_day, hhmm)
+            dof = base_day
 
         plan = FlightPlan(
             callsign=callsign,
             adep=departure[:4],
             adest=fields[3].strip().upper()[:4],
             ssr=ssr,
-            dof=base_day,
+            dof=dof,
             atd=time_utc,
         )
         return plan
@@ -237,18 +290,37 @@ class AftnParser:
         departure = fields[2].strip().upper()
         hhmm = departure[4:8]
         base_day = _beijing_date_from_utc(message_time)
-        h, m = int(hhmm[:2]), int(hhmm[2:4])
-        if h > 16 or (h == 16 and m > 0):
-            time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
+
+        # 提取 DOF 字段
+        dof_utc_day: Optional[date] = None
+        for field in fields:
+            marker = field.upper().find("DOF/")
+            if marker >= 0:
+                digits = field[marker + 4: marker + 10]
+                if len(digits) == 6 and digits.isdigit():
+                    try:
+                        dof_utc_day = datetime.strptime("20" + digits, "%Y%m%d").date()
+                    except ValueError:
+                        pass
+                break
+
+        if dof_utc_day is not None:
+            time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
+            dof = _beijing_date_from_utc(time_utc)
         else:
-            time_utc = self._combine_day_hhmm(base_day, hhmm)
+            h, m = int(hhmm[:2]), int(hhmm[2:4])
+            if h > 16 or (h == 16 and m > 0):
+                time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
+            else:
+                time_utc = self._combine_day_hhmm(base_day, hhmm)
+            dof = base_day
 
         plan = FlightPlan(
             callsign=callsign,
             adep=departure[:4],
             adest=fields[3].strip().upper()[:4],
             ssr=ssr,
-            dof=base_day,
+            dof=dof,
             etd=time_utc,
         )
         return plan

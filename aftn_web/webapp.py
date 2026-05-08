@@ -67,6 +67,8 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             limit=min(limit, 500),
             offset=offset,
         )
+        for rec in records:
+            rec["sender_address"] = _extract_sender(rec.get("raw_text", ""))
         total = db.count_aftn_messages(
             message_type=msg_type,
             keyword=keyword,
@@ -79,6 +81,15 @@ def create_app(config: AppConfig, db: Database) -> Flask:
     # 模块二：飞行计划
     # ══════════════════════════════════════════════════════════
 
+    @app.route("/api/aftn_messages/<int:msg_id>")
+    def api_aftn_message_get(msg_id: int):
+        """获取单条 AFTN 报文"""
+        record = db.get_aftn_message(msg_id)
+        if record is None:
+            return jsonify({"error": "not found"}), 404
+        record["sender_address"] = _extract_sender(record.get("raw_text", ""))
+        return jsonify(record)
+
     @app.route("/api/flight_plans")
     def api_flight_plans():
         """查询飞行计划列表（支持过滤+分页）"""
@@ -86,8 +97,8 @@ def create_app(config: AppConfig, db: Database) -> Flask:
         adep = _req_str("adep")
         adest = _req_str("adest")
         dof = _req_date("dof")
-        ssr = _req_str("ssr")
-        aircraft_type = _req_str("aircraft_type")
+        airport = _req_str("airport")  # 关注机场：adep OR adest 匹配
+        route = _req_str("route")  # 航路关键词
         source_message_type = _req_str("source_message_type")
         limit = request.args.get("limit", 100, type=int)
         offset = request.args.get("offset", 0, type=int)
@@ -97,8 +108,8 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             adep=adep,
             adest=adest,
             dof=dof,
-            ssr=ssr,
-            aircraft_type=aircraft_type,
+            airport=airport,
+            route=route,
             source_message_type=source_message_type,
             limit=min(limit, 500),
             offset=offset,
@@ -108,8 +119,8 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             adep=adep,
             adest=adest,
             dof=dof,
-            ssr=ssr,
-            aircraft_type=aircraft_type,
+            airport=airport,
+            route=route,
             source_message_type=source_message_type,
         )
         return jsonify({"total": total, "records": records})
@@ -165,8 +176,8 @@ def create_app(config: AppConfig, db: Database) -> Flask:
         adep = _req_str("adep")
         adest = _req_str("adest")
         dof = _req_date("dof")
-        ssr = _req_str("ssr")
-        aircraft_type = _req_str("aircraft_type")
+        airport = _req_str("airport")
+        route = _req_str("route")
         source_message_type = _req_str("source_message_type")
 
         records = db.query_flight_plans(
@@ -174,8 +185,8 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             adep=adep,
             adest=adest,
             dof=dof,
-            ssr=ssr,
-            aircraft_type=aircraft_type,
+            airport=airport,
+            route=route,
             source_message_type=source_message_type,
             limit=10000,
             offset=0,
@@ -242,6 +253,18 @@ def create_app(config: AppConfig, db: Database) -> Flask:
 
     def _safe_dt(v: Any) -> str:
         return str(v)[:16] if v else ""
+
+    def _extract_sender(raw_text: str) -> str:
+        """从 AFTN 报文中提取发报地址"""
+        if not raw_text:
+            return ""
+        parts = raw_text.split()
+        for i, p in enumerate(parts):
+            if p in ("FF", "GG") and i + 3 < len(parts):
+                cand = parts[i + 3].upper()
+                if len(cand) in (7, 8) and cand.isalpha():
+                    return cand
+        return ""
 
     # ── 辅助 ──────────────────────────────────────────────────
 

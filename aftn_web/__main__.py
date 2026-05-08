@@ -6,13 +6,13 @@ import logging
 import signal
 import sys
 from argparse import ArgumentParser
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import Thread
 
 from .config import load_config
 from .database import Database
-from .parser import AftnParser
+from .parser import AftnParser, _beijing_date_from_utc
 from .receiver import UdpReceiver
 from .webapp import create_app
 
@@ -76,8 +76,22 @@ def main(argv: list[str] | None = None) -> int:
             logger.exception("parse error from %s:%d", addr, port)
             return
 
+        # LAM 报文：不记录、不解析
+        if result.message.message_type == "LAM":
+            logger.debug("AFTN LAM ignored: not recorded")
+            return
+
         # 保存原始报文
         db.save_aftn_message(result.message)
+
+        # EST：只记录报文，不解析、不生成 FlightPlan、不更新飞行计划
+        if result.message.message_type == "EST":
+            total_parsed[0] += 1
+            logger.info(
+                "[EST] recorded only (total: recv=%d, parsed=%d)",
+                total_received[0], total_parsed[0],
+            )
+            return
 
         if not result.accepted:
             if result.errors:
@@ -103,9 +117,134 @@ def main(argv: list[str] | None = None) -> int:
                     plan.callsign, plan.adep, plan.adest,
                     total_received[0], total_parsed[0],
                 )
+        elif action == "FPL":
+            # FPL：同 DOF 已存在则忽略，否则新建
+            existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, plan.dof)
+            if existing:
+                logger.info(
+                    "[FPL] %s %s->%s DOF=%s 已存在，忽略 (total: recv=%d, parsed=%d)",
+                    plan.callsign, plan.adep, plan.adest, plan.dof,
+                    total_received[0], total_parsed[0],
+                )
+            else:
+                db.create_flight_plan(plan)
+                total_parsed[0] += 1
+                logger.info(
+                    "[FPL] %s %s->%s DOF=%s 新建 (total: recv=%d, parsed=%d)",
+                    plan.callsign, plan.adep, plan.adest, plan.dof,
+                    total_received[0], total_parsed[0],
+                )
+        elif action == "DEP":
+            # DEP：检查报文中是否包含 DOF 字段
+            raw_has_dof = "DOF/" in (plan.raw_message_text or "").upper()
+            if not raw_has_dof:
+                today = _beijing_date_from_utc(datetime.utcnow())
+                # 先查当日计划
+                existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, today)
+                if existing:
+                    # 当日有计划 → upsert 更新
+                    db.upsert_flight_plan(plan)
+                    total_parsed[0] += 1
+                    logger.info(
+                        "[DEP] %s %s->%s 当日已有计划，更新 (total: recv=%d, parsed=%d)",
+                        plan.callsign, plan.adep, plan.adest,
+                        total_received[0], total_parsed[0],
+                    )
+                else:
+                    yesterday = today - timedelta(days=1)
+                    existing_yd = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, yesterday)
+                    if existing_yd and not existing_yd.get("atd"):
+                        # 昨日有计划且 ATD 为空 → 跨日延误
+                        db.update_flight_plan_atd(existing_yd["id"], plan.atd)
+                        total_parsed[0] += 1
+                        logger.info(
+                            "[DEP] %s %s->%s 跨日延误，ATD=%s 赋给昨日计划 (id=%d) (total: recv=%d, parsed=%d)",
+                            plan.callsign, plan.adep, plan.adest, plan.atd, existing_yd["id"],
+                            total_received[0], total_parsed[0],
+                        )
+                    else:
+                        # 今日昨日均无计划 → 新建
+                        db.create_flight_plan(plan)
+                        total_parsed[0] += 1
+                        logger.info(
+                            "[DEP] %s %s->%s 无计划，新建 (total: recv=%d, parsed=%d)",
+                            plan.callsign, plan.adep, plan.adest,
+                            total_received[0], total_parsed[0],
+                        )
+            else:
+                # 包含 DOF 字段 → 查同 DOF 计划，有则更新 ATD，无则新建
+                existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, plan.dof)
+                if existing:
+                    db.update_flight_plan_atd(existing["id"], plan.atd)
+                    total_parsed[0] += 1
+                    logger.info(
+                        "[DEP] %s %s->%s DOF=%s 已有计划，更新 ATD (total: recv=%d, parsed=%d)",
+                        plan.callsign, plan.adep, plan.adest, plan.dof,
+                        total_received[0], total_parsed[0],
+                    )
+                else:
+                    db.create_flight_plan(plan)
+                    total_parsed[0] += 1
+                    logger.info(
+                        "[DEP] %s %s->%s DOF=%s 新建 (total: recv=%d, parsed=%d)",
+                        plan.callsign, plan.adep, plan.adest, plan.dof,
+                        total_received[0], total_parsed[0],
+                    )
+        elif action == "ARR":
+            # ARR：先查当日/昨日计划，处理跨日期落地
+            raw_has_dof = "DOF/" in (plan.raw_message_text or "").upper()
+            if not raw_has_dof:
+                today = _beijing_date_from_utc(datetime.utcnow())
+                existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, today)
+                if existing:
+                    db.upsert_flight_plan(plan)
+                    total_parsed[0] += 1
+                    logger.info(
+                        "[ARR] %s %s->%s 当日已有计划，更新 (total: recv=%d, parsed=%d)",
+                        plan.callsign, plan.adep, plan.adest,
+                        total_received[0], total_parsed[0],
+                    )
+                else:
+                    yesterday = today - timedelta(days=1)
+                    existing_yd = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, yesterday)
+                    if existing_yd and not existing_yd.get("ata"):
+                        # 跨日期落地
+                        db.update_flight_plan_ata(existing_yd["id"], plan.ata)
+                        total_parsed[0] += 1
+                        logger.info(
+                            "[ARR] %s %s->%s 跨日期落地，ATA=%s 赋给昨日计划 (id=%d) (total: recv=%d, parsed=%d)",
+                            plan.callsign, plan.adep, plan.adest, plan.ata, existing_yd["id"],
+                            total_received[0], total_parsed[0],
+                        )
+                    else:
+                        db.create_flight_plan(plan)
+                        total_parsed[0] += 1
+                        logger.info(
+                            "[ARR] %s %s->%s 无计划，新建 (total: recv=%d, parsed=%d)",
+                            plan.callsign, plan.adep, plan.adest,
+                            total_received[0], total_parsed[0],
+                        )
+            else:
+                # 含有 DOF → 查同 DOF 计划，有则更新 ATA，无则新建
+                existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, plan.dof)
+                if existing:
+                    db.update_flight_plan_ata(existing["id"], plan.ata)
+                    total_parsed[0] += 1
+                    logger.info(
+                        "[ARR] %s %s->%s DOF=%s 已有计划，更新 ATA (total: recv=%d, parsed=%d)",
+                        plan.callsign, plan.adep, plan.adest, plan.dof,
+                        total_received[0], total_parsed[0],
+                    )
+                else:
+                    db.create_flight_plan(plan)
+                    total_parsed[0] += 1
+                    logger.info(
+                        "[ARR] %s %s->%s DOF=%s 新建 (total: recv=%d, parsed=%d)",
+                        plan.callsign, plan.adep, plan.adest, plan.dof,
+                        total_received[0], total_parsed[0],
+                    )
         else:
-            # FPL / DEP / ARR / DLA / EST：upsert（找不到则新建，找到了则更新对应字段）（找不到则新建，找到了则更新对应字段）
-            # source_message_type 由 upsert 统一更新为最新收到的报文类型
+            # DLA：upsert
             db.upsert_flight_plan(plan)
             total_parsed[0] += 1
             if total_parsed[0] <= 5 or total_parsed[0] % 10 == 0:

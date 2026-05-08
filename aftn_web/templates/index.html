@@ -123,7 +123,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 <body>
 
 <div class="header">
-  <h1>🛩 ATC AFTN WebHub</h1>
+  <h1>🛩 ATC AFTN WebHub <span style="font-size:13px;font-weight:400;color:var(--text-muted);margin-left:10px;">v26.5.8</span></h1>
   <span class="badge">v0.1</span>
 </div>
 
@@ -149,7 +149,13 @@ select option { background: var(--bg-card); color: var(--text-primary); }
           <option value="DLA">DLA</option>
           <option value="CNL">CNL</option>
           <option value="EST">EST</option>
+          <option value="HQ">HQ</option>
+          <option value="METAR">METAR</option>
           <option value="CPL">CPL</option>
+          <option value="AOC">AOC</option>
+          <option value="ACP">ACP</option>
+          <option value="TOC">TOC</option>
+          <option value="CHG">CHG</option>
           <option value="">其他</option>
         </select>
       </label>
@@ -169,7 +175,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   <div class="table-wrap">
     <table>
       <thead><tr>
-        <th>#</th><th>类型</th><th>接收时间</th><th>UTC 时间</th><th>报文内容</th><th>操作</th>
+        <th>#</th><th>类型</th><th>接收时间</th><th>发报地址</th><th>报文内容</th><th>操作</th>
       </tr></thead>
       <tbody id="tbl-msgs"><tr><td colspan="6" class="loading">输入条件后按查询</td></tr></tbody>
     </table>
@@ -196,8 +202,18 @@ select option { background: var(--bg-card); color: var(--text-primary); }
       <label><span>起飞地</span><input id="qfa" placeholder="ZGOW" maxlength="4"></label>
       <label><span>目的地</span><input id="qfd" placeholder="ZGGG" maxlength="4"></label>
       <label><span>执飞日</span><input id="qfd2" type="date"></label>
-      <label><span>应答机</span><input id="qfs" placeholder="A2431"></label>
-      <label><span>机型</span><input id="qfac" placeholder="B738"></label>
+      <label><span>关注机场</span>
+        <select id="qair">
+          <option value="">全部</option>
+          <option value="ZGSZ">ZGSZ</option>
+          <option value="ZGSD">ZGSD</option>
+          <option value="VMMC">VMMC</option>
+          <option value="ZGNT">ZGNT</option>
+          <option value="ZGHZ">ZGHZ</option>
+          <option value="ZGUH">ZGUH</option>
+        </select>
+      </label>
+      <label><span>航路</span><input id="qfr" placeholder="含关键词"></label>
       <label><span>报文类型</span>
         <select id="qft">
           <option value="">全部</option>
@@ -241,13 +257,35 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 </div>
 
 <!-- ── AFTN 报文详情弹窗 ── -->
-<div id="modal-msg" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center;" onclick="if(event.target===this)closeMsg()">
-  <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;max-width:720px;width:90%;max-height:80vh;overflow-y:auto;padding:24px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+<div id="modal-msg" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:transparent;z-index:1100;align-items:center;justify-content:center;" onclick="if(event.target===this)closeMsg()">
+  <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;max-width:900px;width:92%;max-height:85vh;overflow-y:auto;padding:20px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <h2 style="font-size:16px;font-weight:600;">AFTN 原始报文</h2>
       <button onclick="closeMsg()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;">&times;</button>
     </div>
     <div id="msg-body"></div>
+  </div>
+</div>
+
+<!-- ── 飞行计划关联报文弹窗 ── -->
+<div id="modal-fpl-msg" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:1000;align-items:flex-start;justify-content:center;padding-top:40px;" onclick="if(event.target===this)closeFplMsg()">
+  <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;max-width:900px;width:92%;max-height:85vh;overflow-y:auto;padding:20px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h2 id="fpl-msg-title" style="font-size:15px;font-weight:600;">关联报文</h2>
+      <button onclick="closeFplMsg()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;">&times;</button>
+    </div>
+    <div id="fpl-msg-info" style="font-size:12px;color:var(--text-muted);margin-bottom:10px;"></div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr>
+        <th style="background:#1c2333;padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);position:sticky;top:0;z-index:1;font-size:12px;">类型</th>
+        <th style="background:#1c2333;padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);position:sticky;top:0;z-index:1;font-size:12px;">接收时间</th>
+        <th style="background:#1c2333;padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);position:sticky;top:0;z-index:1;font-size:12px;">发报地址</th>
+        <th style="background:#1c2333;padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);position:sticky;top:0;z-index:1;font-size:12px;">报文内容</th>
+        <th style="background:#1c2333;padding:8px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);position:sticky;top:0;z-index:1;font-size:12px;">操作</th>
+      </tr></thead>
+      <tbody id="tbl-fpl-msg"><tr><td colspan="5" class="loading">查询中...</td></tr></tbody>
+    </table>
+    <div id="fpl-msg-empty" style="display:none;text-align:center;padding:30px;color:var(--text-muted);font-size:14px;">未找到关联报文</div>
   </div>
 </div>
 
@@ -293,7 +331,10 @@ function loadStats() {
       '<div class="stat-card"><div class="num">' + (m.FPL||0) + '</div><div class="label">FPL</div></div>' +
       '<div class="stat-card"><div class="num">' + (m.DEP||0) + '</div><div class="label">DEP</div></div>' +
       '<div class="stat-card"><div class="num">' + (m.ARR||0) + '</div><div class="label">ARR</div></div>' +
-      '<div class="stat-card"><div class="num">' + (m.DLA||0) + '</div><div class="label">DLA</div></div>';
+      '<div class="stat-card"><div class="num">' + (m.DLA||0) + '</div><div class="label">DLA</div></div>' +
+      '<div class="stat-card"><div class="num">' + (m.EST||0) + '</div><div class="label">EST</div></div>' +
+      '<div class="stat-card"><div class="num">' + (m.HQ||0) + '</div><div class="label">HQ</div></div>' +
+      '<div class="stat-card"><div class="num">' + (m.METAR||0) + '</div><div class="label">METAR</div></div>';
   }).catch(function() {});
 }
 
@@ -335,13 +376,13 @@ function renderMsgs(rs) {
     var r = rs[i];
     var tc = 'tag-' + (r.message_type || ' ');
     var rt = r.received_at ? r.received_at.slice(5, 16) : '-';
-    var ut = r.utc_time ? r.utc_time.slice(5, 16) : '-';
+    var sender = r.sender_address || '-';
     var preview = (r.message_text || r.raw_text || '').slice(0, 80);
     h += '<tr>' +
       '<td>' + r.id + '</td>' +
       '<td><span class="tag ' + tc + '">' + (r.message_type || '?') + '</span></td>' +
       '<td>' + rt + '</td>' +
-      '<td>' + ut + '</td>' +
+      '<td style="font-family:monospace;color:var(--accent-purple)">' + sender + '</td>' +
       '<td style="max-width:450px;overflow:hidden;text-overflow:ellipsis;font-family:monospace;font-size:12px;color:var(--text-secondary)" title="' + esc(preview) + '">' + esc(preview) + '</td>' +
       '<td><button class="btn btn-secondary btn-sm" onclick="showMsg(' + r.id + ')">查看</button></td>' +
       '</tr>';
@@ -376,25 +417,85 @@ function resetMsgs() {
 }
 
 function showMsg(id) {
-  fetch('/api/aftn_messages?limit=500').then(function(r) { return r.json(); }).then(function(d) {
-    var rec = null;
-    for (var i = 0; i < (d.records||[]).length; i++) { if (d.records[i].id == id) { rec = d.records[i]; break; } }
-    if (!rec) { return; }
+  fetch('/api/aftn_messages/' + id).then(function(r) {
+    if (!r.ok) { throw new Error('找不到报文 (id=' + id + ')'); }
+    return r.json();
+  }).then(function(rec) {
     document.getElementById('msg-body').innerHTML =
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">' +
         '<div><div style="font-size:11px;color:var(--text-muted)">ID</div><div style="padding:4px 0">' + rec.id + '</div></div>' +
         '<div><div style="font-size:11px;color:var(--text-muted)">报文类型</div><div style="padding:4px 0"><span class="tag tag-' + (rec.message_type||' ') + '">' + (rec.message_type||'?') + '</span></div></div>' +
         '<div><div style="font-size:11px;color:var(--text-muted)">接收时间</div><div style="padding:4px 0">' + (rec.received_at||'-') + '</div></div>' +
-        '<div><div style="font-size:11px;color:var(--text-muted)">UTC 时间</div><div style="padding:4px 0">' + (rec.utc_time||'-') + '</div></div>' +
+        '<div><div style="font-size:11px;color:var(--text-muted)">发报地址</div><div style="padding:4px 0;font-family:monospace;color:var(--accent-purple)">' + (rec.sender_address||'-') + '</div></div>' +
       '</div>' +
       '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">原始报文</div>' +
-      '<pre style="background:var(--bg-input);border:1px solid var(--border);border-radius:4px;padding:12px;font-size:12px;overflow-x:auto;max-height:200px;white-space:pre-wrap;word-break:break-all;color:var(--text-secondary);">' + esc(rec.raw_text||'(无)') + '</pre>';
+      '<pre style="background:var(--bg-card);border:1px solid var(--border);border-radius:4px;padding:12px;font-size:12px;overflow-x:auto;max-height:200px;white-space:pre-wrap;word-break:break-all;color:var(--text-primary);">' + esc(rec.raw_text||'(无)') + '</pre>';
     document.getElementById('modal-msg').style.display = 'flex';
+  }).catch(function(e) {
+    alert('查询失败: ' + e.message);
   });
 }
 
 function closeMsg() {
   document.getElementById('modal-msg').style.display = 'none';
+}
+
+function closeFplMsg() {
+  document.getElementById('modal-fpl-msg').style.display = 'none';
+}
+
+function showFplMsg(callsign, dof) {
+  if (!callsign) { return; }
+  document.getElementById('fpl-msg-title').textContent = callsign + ' 关联报文';
+  document.getElementById('tbl-fpl-msg').innerHTML = '<tr><td colspan="5" class="loading">查询中...</td></tr>';
+  document.getElementById('fpl-msg-empty').style.display = 'none';
+  document.getElementById('fpl-msg-info').textContent = '';
+  document.getElementById('modal-fpl-msg').style.display = 'flex';
+
+  // ±2 天日期范围
+  var from = '', to = '';
+  if (dof) {
+    var d = new Date(dof);
+    if (!isNaN(d.getTime())) {
+      var df = new Date(d);
+      df.setDate(df.getDate() - 2);
+      from = df.toISOString().slice(0, 10);
+      var dt = new Date(d);
+      dt.setDate(dt.getDate() + 2);
+      to = dt.toISOString().slice(0, 10);
+    }
+  }
+  document.getElementById('fpl-msg-info').textContent =
+    '日期范围: ' + (from || '不限') + ' ~ ' + (to || '不限');
+
+  var p = new URLSearchParams({limit: 500, keyword: callsign});
+  if (from) { p.set('date_from', from); }
+  if (to) { p.set('date_to', to); }
+
+  fetch('/api/aftn_messages?' + p.toString()).then(function(r) { return r.json(); }).then(function(d) {
+    var tb = document.getElementById('tbl-fpl-msg');
+    if (!d.records || d.records.length === 0) {
+      tb.innerHTML = '';
+      document.getElementById('fpl-msg-empty').style.display = 'block';
+      return;
+    }
+    var h = '';
+    for (var i = 0; i < d.records.length; i++) {
+      var rec = d.records[i];
+      var tc = rec.message_type ? 'tag-' + rec.message_type : 'tag-';
+      var preview = (rec.message_text || rec.raw_text || '').slice(0, 60);
+      h += '<tr>' +
+        '<td><span class="tag ' + tc + '">' + (rec.message_type || '?') + '</span></td>' +
+        '<td>' + (rec.received_at ? rec.received_at.slice(0, 16) : '-') + '</td>' +
+        '<td style="font-family:monospace;color:var(--accent-purple);font-size:12px;">' + (rec.sender_address||'-') + '</td>' +
+        '<td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary);font-size:12px;" title="' + esc(rec.raw_text || '') + '">' + esc(preview) + '</td>' +
+        '<td><button class="btn btn-secondary btn-sm" onclick="showMsg(' + rec.id + ')">查看</button></td>' +
+        '</tr>';
+    }
+    tb.innerHTML = h;
+  }).catch(function(e) {
+    document.getElementById('tbl-fpl-msg').innerHTML = '<tr><td colspan="5" class="error-msg">查询失败: ' + e.message + '</td></tr>';
+  });
 }
 
 // ═══════════════════════════════════════════════════════
@@ -404,13 +505,13 @@ function searchPlans(r) {
   if (r !== false) { fplOff = 0; }
   var p = new URLSearchParams({limit: PS, offset: fplOff});
   var v = function(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  var c = v('qfc'); var a = v('qfa'); var d = v('qfd'); var s = v('qfs'); var ac = v('qfac'); var t = v('qft');
+  var c = v('qfc'); var a = v('qfa'); var d = v('qfd'); var air = v('qair'); var fr = v('qfr'); var t = v('qft');
   if (c) { p.set('callsign', c); }
   if (a) { p.set('adep', a); }
   if (v('qfd')) { p.set('dof', v('qfd')); }
   if (v('qfd2')) { p.set('dof', v('qfd2')); }
-  if (s) { p.set('ssr', s); }
-  if (ac) { p.set('aircraft_type', ac); }
+  if (air) { p.set('airport', air); }
+  if (fr) { p.set('route', fr); }
   if (t) { p.set('source_message_type', t); }
 
   document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="12" class="loading">查询中...</td></tr>';
@@ -450,7 +551,7 @@ function renderPlans(rs) {
       '<td>' + ft(r.eta) + '</td>' +
       '<td>' + ft(r.ata) + '</td>' +
       '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary)" title="' + esc(r.route||'') + '">' + rt + '</td>' +
-      '<td><span class="tag ' + tc + '">' + (r.source_message_type||'?') + '</span></td>' +
+      '<td><span class="tag ' + tc + '" style="cursor:pointer" onclick="showFplMsg(\'' + esc(r.callsign||'') + '\',\'' + (r.dof||'').slice(0,10) + '\')" title="查看该计划的两天内所有报文">' + (r.source_message_type||'?') + '</span></td>' +
       '</tr>';
   }
   tb.innerHTML = h;
