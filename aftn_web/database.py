@@ -185,14 +185,18 @@ class Database:
 
         if existing:
             updates: dict[str, Any] = {
-                "ssr": plan.ssr,
-                "aircraft_type": plan.aircraft_type,
-                "route": plan.route,
                 "source_message_type": plan.source_message_type,
                 "last_message_time": _fmt_dt(plan.last_message_time),
                 "raw_message_text": plan.raw_message_text or "",
                 "updated_at": now,
             }
+            # 以下字段只在报文中含有有效值时更新，避免被不含这些字段的报文（如 DEP/ARR）覆盖为空
+            if plan.ssr:
+                updates["ssr"] = plan.ssr
+            if plan.aircraft_type:
+                updates["aircraft_type"] = plan.aircraft_type
+            if plan.route:
+                updates["route"] = plan.route
             if plan.source_message_type not in ("DEP", "ARR") or not existing["dof"]:
                 if plan.dof:
                     updates["dof"] = _fmt_date(plan.dof)
@@ -251,13 +255,19 @@ class Database:
             ).fetchone()
         return dict(row) if row else None
 
-    def update_flight_plan_atd(self, fpl_id: int, atd: datetime) -> bool:
-        """更新指定飞行计划的 ATD"""
+    def update_flight_plan_atd(self, fpl_id: int, atd: datetime, ssr: str = "") -> bool:
+        """更新指定飞行计划的 ATD，可选同时更新 SSR（来自 DEP 报文）"""
         conn = self._get_conn()
-        cur = conn.execute(
-            "UPDATE flight_plans SET atd=?, updated_at=? WHERE id=?",
-            (_fmt_dt(atd), _fmt_dt(datetime.utcnow()), fpl_id),
-        )
+        if ssr:
+            cur = conn.execute(
+                "UPDATE flight_plans SET atd=?, ssr=?, updated_at=? WHERE id=?",
+                (_fmt_dt(atd), ssr, _fmt_dt(datetime.utcnow()), fpl_id),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE flight_plans SET atd=?, updated_at=? WHERE id=?",
+                (_fmt_dt(atd), _fmt_dt(datetime.utcnow()), fpl_id),
+            )
         conn.commit()
         return cur.rowcount > 0
 
