@@ -330,4 +330,12 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             raw_message_text=str(data.get("raw_message_text") or ""),
         )
 
+    # ── 禁用浏览器缓存 API 响应 ──────────────────────────
+    @app.after_request
+    def _no_cache(response):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
     return app

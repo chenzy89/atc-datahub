@@ -273,28 +273,38 @@ class Database:
             ).fetchone()
         return dict(row) if row else None
 
-    def update_flight_plan_atd(self, fpl_id: int, atd: datetime, ssr: str = "") -> bool:
+    def update_flight_plan_atd(self, fpl_id: int, atd: datetime, ssr: str = "", source_message_type: str = "") -> bool:
         """更新指定飞行计划的 ATD，可选同时更新 SSR（来自 DEP 报文）"""
         conn = self._get_conn()
+        now = _fmt_dt(datetime.utcnow())
+        existing = conn.execute(
+            "SELECT message_types FROM flight_plans WHERE id=?", (fpl_id,)
+        ).fetchone()
+        msg_types = self._merge_message_type(existing["message_types"] if existing else "", source_message_type) if source_message_type else (existing["message_types"] if existing else "")
         if ssr:
             cur = conn.execute(
-                "UPDATE flight_plans SET atd=?, ssr=?, updated_at=? WHERE id=?",
-                (_fmt_dt(atd), ssr, _fmt_dt(datetime.utcnow()), fpl_id),
+                "UPDATE flight_plans SET atd=?, ssr=?, message_types=?, updated_at=? WHERE id=?",
+                (_fmt_dt(atd), ssr, msg_types, now, fpl_id),
             )
         else:
             cur = conn.execute(
-                "UPDATE flight_plans SET atd=?, updated_at=? WHERE id=?",
-                (_fmt_dt(atd), _fmt_dt(datetime.utcnow()), fpl_id),
+                "UPDATE flight_plans SET atd=?, message_types=?, updated_at=? WHERE id=?",
+                (_fmt_dt(atd), msg_types, now, fpl_id),
             )
         conn.commit()
         return cur.rowcount > 0
 
-    def update_flight_plan_ata(self, fpl_id: int, ata: datetime) -> bool:
+    def update_flight_plan_ata(self, fpl_id: int, ata: datetime, source_message_type: str = "") -> bool:
         """更新指定飞行计划的 ATA"""
         conn = self._get_conn()
+        now = _fmt_dt(datetime.utcnow())
+        existing = conn.execute(
+            "SELECT message_types FROM flight_plans WHERE id=?", (fpl_id,)
+        ).fetchone()
+        msg_types = self._merge_message_type(existing["message_types"] if existing else "", source_message_type) if source_message_type else (existing["message_types"] if existing else "")
         cur = conn.execute(
-            "UPDATE flight_plans SET ata=?, updated_at=? WHERE id=?",
-            (_fmt_dt(ata), _fmt_dt(datetime.utcnow()), fpl_id),
+            "UPDATE flight_plans SET ata=?, message_types=?, updated_at=? WHERE id=?",
+            (_fmt_dt(ata), msg_types, now, fpl_id),
         )
         conn.commit()
         return cur.rowcount > 0
@@ -485,6 +495,16 @@ class Database:
         conn.execute("DELETE FROM flight_plans WHERE id=?", (fpl_id,))
         conn.commit()
         return True
+
+    @staticmethod
+    def _merge_message_type(existing: str, new_type: str) -> str:
+        """向逗号分隔的 message_types 中去重追加新类型"""
+        if not new_type:
+            return existing
+        types = [t.strip() for t in existing.split(",") if t.strip()]
+        if new_type not in types:
+            types.append(new_type)
+        return ",".join(types)
 
 
 def _fmt_dt(dt: datetime | None) -> str | None:

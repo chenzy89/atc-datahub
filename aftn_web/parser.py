@@ -257,8 +257,6 @@ class AftnParser:
             dof = dof_utc_day
         else:
             time_utc = self._combine_day_hhmm(base_day, hhmm)
-            if time_utc < message_time:
-                time_utc = self._combine_day_hhmm(base_day + timedelta(days=1), hhmm)
             dof = base_day
 
         plan = FlightPlan(
@@ -344,8 +342,6 @@ class AftnParser:
             dof = dof_utc_day
         else:
             ata_utc = self._combine_day_hhmm(base_day, ata_hhmm)
-            if ata_utc < message_time:
-                ata_utc = self._combine_day_hhmm(base_day + timedelta(days=1), ata_hhmm)
             dof = base_day
 
         plan = FlightPlan(

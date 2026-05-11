@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
                     existing_yd = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, yesterday)
                     if existing_yd and not existing_yd.get("atd"):
                         # 昨日有计划且 ATD 为空 → 跨日延误
-                        db.update_flight_plan_atd(existing_yd["id"], plan.atd, ssr=plan.ssr)
+                        db.update_flight_plan_atd(existing_yd["id"], plan.atd, ssr=plan.ssr, source_message_type="DEP")
                         total_parsed[0] += 1
                         logger.info(
                             "[DEP] %s %s->%s 跨日延误，ATD=%s 赋给昨日计划 (id=%d) (total: recv=%d, parsed=%d)",
@@ -199,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
                 # 包含 DOF 字段 → 查同 DOF 计划，有则更新 ATD+SSR，无则新建
                 existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, plan.dof)
                 if existing:
-                    db.update_flight_plan_atd(existing["id"], plan.atd, ssr=plan.ssr)
+                    db.update_flight_plan_atd(existing["id"], plan.atd, ssr=plan.ssr, source_message_type="DEP")
                     total_parsed[0] += 1
                     logger.info(
                         "[DEP] %s %s->%s DOF=%s 已有计划，更新 ATD+SSR (total: recv=%d, parsed=%d)",
@@ -230,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
                     # 取最近一版未落地计划（按 DOF 倒序）
                     pending.sort(key=lambda p: p.get("dof", "") or "", reverse=True)
                     target = pending[0]
-                    db.update_flight_plan_ata(target["id"], plan.ata)
+                    db.update_flight_plan_ata(target["id"], plan.ata, source_message_type="ARR")
                     total_parsed[0] += 1
                     logger.info(
                         "[ARR] %s %s->%s 未落地计划 (id=%d, dof=%s)，赋 ATA=%s (total: recv=%d, parsed=%d)",
@@ -254,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
                         yesterday = today - timedelta(days=1)
                         existing_yd = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, yesterday)
                         if existing_yd and not existing_yd.get("ata"):
-                            db.update_flight_plan_ata(existing_yd["id"], plan.ata)
+                            db.update_flight_plan_ata(existing_yd["id"], plan.ata, source_message_type="ARR")
                             total_parsed[0] += 1
                             logger.info(
                                 "[ARR] %s %s->%s 跨日期落地，ATA=%s 赋给昨日计划 (id=%d) (total: recv=%d, parsed=%d)",
@@ -273,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
                 # 含有 DOF → 查同 DOF 计划，有则更新 ATA，无则新建
                 existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, plan.dof)
                 if existing:
-                    db.update_flight_plan_ata(existing["id"], plan.ata)
+                    db.update_flight_plan_ata(existing["id"], plan.ata, source_message_type="ARR")
                     total_parsed[0] += 1
                     logger.info(
                         "[ARR] %s %s->%s DOF=%s 已有计划，更新 ATA (total: recv=%d, parsed=%d)",
