@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.10</title>
+<title>ATC AFTN WebHub v26.5.11</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -124,7 +124,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.10</span>
+  <span class="badge">v26.5.11</span>
 </div>
 
 <div class="tabs">
@@ -201,7 +201,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
       <label><span>航班号</span><input id="qfc" placeholder="CSN101"></label>
       <label><span>起飞地</span><input id="qfa" placeholder="ZGOW" maxlength="4"></label>
       <label><span>目的地</span><input id="qfd" placeholder="ZGGG" maxlength="4"></label>
-      <label><span>执飞日</span><input id="qfd2" type="date"></label>
+      <label><span>DOF</span><input id="qfd2" type="date"></label>
       <label><span>关注机场</span>
         <select id="qair">
           <option value="">全部</option>
@@ -214,21 +214,26 @@ select option { background: var(--bg-card); color: var(--text-primary); }
         </select>
       </label>
       <label><span>航路</span><input id="qfr" placeholder="含关键词"></label>
-      <label><span>报文类型</span>
-        <select id="qft">
+      <label><span>规则与种类</span>
+        <select id="qfr2">
           <option value="">全部</option>
-          <option value="FPL">FPL</option>
-          <option value="DEP">DEP</option>
-          <option value="ARR">ARR</option>
-          <option value="DLA">DLA</option>
-          <option value="CNL">CNL</option>
+          <option value="IS">IS</option>
+          <option value="IN">IN</option>
+          <option value="IG">IG</option>
+          <option value="IM">IM</option>
+          <option value="IX">IX</option>
+          <option value="IB">IB</option>
+          <option value="VS">VS</option>
+          <option value="VN">VN</option>
+          <option value="VG">VG</option>
+          <option value="VX">VX</option>
         </select>
       </label>
     </div>
     <div class="search-actions">
       <button class="btn btn-primary" onclick="searchPlans()">🔍 查询</button>
       <button class="btn btn-secondary" onclick="resetPlans()">重置</button>
-      <button class="btn btn-green" onclick="exportExcel()">📥 导出 Excel</button>
+      <button class="btn btn-secondary" onclick="exportExcel()">导出</button>
       <span id="fpl-info" class="text-muted" style="margin-left:6px;"></span>
     </div>
   </div>
@@ -238,7 +243,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   <div class="table-wrap">
     <table>
       <thead><tr>
-        <th>航班号</th><th>应答机</th><th>机型</th><th>执飞日</th>
+        <th>航班号</th><th>规则与种类</th><th>应答机</th><th>机型</th><th>DOF</th>
         <th>起飞地</th><th>ETD</th><th>ATD</th>
         <th>目的地</th><th>ETA</th><th>ATA</th>
         <th>航路</th><th>报文</th>
@@ -505,16 +510,16 @@ function searchPlans(r) {
   if (r !== false) { fplOff = 0; }
   var p = new URLSearchParams({limit: PS, offset: fplOff});
   var v = function(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  var c = v('qfc'); var a = v('qfa'); var d = v('qfd'); var air = v('qair'); var fr = v('qfr'); var t = v('qft');
+  var c = v('qfc'); var a = v('qfa'); var d = v('qfd'); var air = v('qair'); var fr = v('qfr'); var fr2 = v('qfr2');
   if (c) { p.set('callsign', c); }
   if (a) { p.set('adep', a); }
   if (v('qfd')) { p.set('dof', v('qfd')); }
   if (v('qfd2')) { p.set('dof', v('qfd2')); }
   if (air) { p.set('airport', air); }
   if (fr) { p.set('route', fr); }
-  if (t) { p.set('source_message_type', t); }
+  if (fr2) { p.set('flight_rule', fr2); }
 
-  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="12" class="loading">查询中...</td></tr>';
+  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="13" class="loading">查询中...</td></tr>';
   fetch('/api/flight_plans?' + p.toString()).then(function(r) { return r.json(); }).then(function(d) {
     fplTot = d.total;
     renderPlans(d.records);
@@ -529,18 +534,26 @@ function searchPlans(r) {
 function renderPlans(rs) {
   var tb = document.getElementById('tbl-fpl');
   if (!rs || rs.length === 0) {
-    tb.innerHTML = '<tr><td colspan="12" class="text-muted text-center" style="padding:30px">没有匹配的飞行计划</td></tr>';
+    tb.innerHTML = '<tr><td colspan="13" class="text-muted text-center" style="padding:30px">没有匹配的飞行计划</td></tr>';
     return;
   }
   var h = '';
   for (var i = 0; i < rs.length; i++) {
     var r = rs[i];
-    var tc = r.source_message_type ? 'tag-' + r.source_message_type : 'tag-';
     var fd = r.dof ? r.dof.slice(0,10) : '-';
     var ft = function(v) { return v ? v.slice(5,16) : '-'; };
     var rt = r.route ? (r.route.length > 30 ? r.route.slice(0,30) + '...' : r.route) : '-';
+    var msgTypes = r.message_types ? r.message_types.split(',') : [];
+    var msgTagsHtml = '';
+    for (var j = 0; j < msgTypes.length; j++) {
+      var mt = msgTypes[j].trim();
+      if (!mt) continue;
+      var mtc = 'tag-' + mt;
+      msgTagsHtml += '<span class="tag ' + mtc + '" style="cursor:pointer;margin-right:3px;" onclick="showFplMsg(\'' + esc(r.callsign||'') + '\',\'' + (r.dof||'').slice(0,10) + '\')" title="查看该计划的两天内所有报文">' + mt + '</span>';
+    }
     h += '<tr>' +
       '<td class="callsign">' + (r.callsign||'-') + '</td>' +
+      '<td>' + (r.flight_rule||'-') + '</td>' +
       '<td>' + (r.ssr||'-') + '</td>' +
       '<td>' + (r.aircraft_type||'-') + '</td>' +
       '<td>' + fd + '</td>' +
@@ -551,7 +564,7 @@ function renderPlans(rs) {
       '<td>' + ft(r.eta) + '</td>' +
       '<td>' + ft(r.ata) + '</td>' +
       '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary)" title="' + esc(r.route||'') + '">' + rt + '</td>' +
-      '<td><span class="tag ' + tc + '" style="cursor:pointer" onclick="showFplMsg(\'' + esc(r.callsign||'') + '\',\'' + (r.dof||'').slice(0,10) + '\')" title="查看该计划的两天内所有报文">' + (r.source_message_type||'?') + '</span></td>' +
+      '<td>' + msgTagsHtml + '</td>' +
       '</tr>';
   }
   tb.innerHTML = h;
@@ -578,7 +591,7 @@ function goFplPage(d) {
 function resetPlans() {
   document.querySelectorAll('#panel-plans input, #panel-plans select').forEach(function(e) { e.value = ''; });
   fplOff = 0; fplTot = 0;
-  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="12" class="loading">输入条件后按查询</td></tr>';
+  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="13" class="loading">输入条件后按查询</td></tr>';
   document.getElementById('pg-fpl').style.display = 'none';
   document.getElementById('fpl-info').textContent = '';
 }
@@ -589,14 +602,14 @@ function resetPlans() {
 function exportExcel() {
   var params = new URLSearchParams({limit: 10000, offset: 0});
   var v = function(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  var c = v('qfc'); var a = v('qfa'); var s = v('qfs'); var ac = v('qfac'); var t = v('qft');
+  var c = v('qfc'); var a = v('qfa'); var s = v('qfs'); var ac = v('qfac'); var fr2 = v('qfr2');
   if (c) { params.set('callsign', c); }
   if (a) { params.set('adep', a); }
   if (v('qfd')) { params.set('dof', v('qfd')); }
   if (v('qfd2')) { params.set('dof', v('qfd2')); }
   if (s) { params.set('ssr', s); }
   if (ac) { params.set('aircraft_type', ac); }
-  if (t) { params.set('source_message_type', t); }
+  if (fr2) { params.set('flight_rule', fr2); }
   window.location.href = '/api/flight_plans/export?' + params.toString();
 }
 

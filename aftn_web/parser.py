@@ -3,26 +3,15 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 from .models import AftnMessage, FlightPlan
 
-_UTC_PLUS_8 = timezone(timedelta(hours=8))
 PARSED_TYPES = {"FPL", "DEP", "ARR", "DLA", "CNL"}
 LABEL_ONLY_TYPES = {"AOC", "ACP", "TOC", "CHG", "EST", "HQ", "METAR"}
 SKIP_TYPES = {"LAM"}
 RECOGNIZED_TYPES = PARSED_TYPES | LABEL_ONLY_TYPES | SKIP_TYPES
-
-
-def _utc_to_beijing(utc_dt: datetime) -> datetime:
-    if utc_dt.tzinfo is None:
-        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
-    return utc_dt.astimezone(_UTC_PLUS_8).replace(tzinfo=None)
-
-
-def _beijing_date_from_utc(utc_dt: datetime) -> date:
-    return _utc_to_beijing(utc_dt).date()
 
 
 def _extract_sender(raw_text: str) -> str:
@@ -192,7 +181,7 @@ class AftnParser:
         route = route_field.split(" ", 1)[1].strip() if " " in route_field else route_field
         eet_minutes = self._hhmm_to_minutes(arrival[4:8])
 
-        base_day = _beijing_date_from_utc(message_time)
+        base_day = message_time.date()
         etd_hhmm = departure[4:8]
 
         dof_utc_day: Optional[date] = None
@@ -209,16 +198,20 @@ class AftnParser:
 
         if dof_utc_day is not None:
             etd_utc = self._combine_day_hhmm(dof_utc_day, etd_hhmm)
-            dof = _beijing_date_from_utc(etd_utc)
+            dof = dof_utc_day
         else:
-            etd_hour = int(etd_hhmm[:2])
-            etd_min = int(etd_hhmm[2:4])
-            if etd_hour > 16 or (etd_hour == 16 and etd_min > 0):
-                etd_utc = self._combine_day_hhmm(base_day - timedelta(days=1), etd_hhmm)
-                dof = base_day
-            else:
-                etd_utc = self._combine_day_hhmm(base_day, etd_hhmm)
-                dof = _beijing_date_from_utc(etd_utc)
+            etd_utc = self._combine_day_hhmm(base_day, etd_hhmm)
+            if etd_utc < message_time:
+                etd_utc = self._combine_day_hhmm(base_day + timedelta(days=1), etd_hhmm)
+            dof = base_day
+
+        # 提取规则与种类 — 编组8，位于航班号(callsign)与机型之间，
+        # 如 IS/IN/IG/IM/IX/IB/VS/VN/VG/VX，长度为2
+        flight_rule = ""
+        if len(fields) > 2:
+            f2 = fields[2].strip().upper()
+            if f2 and len(f2) <= 2:
+                flight_rule = f2
 
         plan = FlightPlan(
             callsign=callsign,
@@ -230,6 +223,7 @@ class AftnParser:
             dof=dof,
             etd=etd_utc,
             eta=etd_utc + timedelta(minutes=eet_minutes) if etd_utc else None,
+            flight_rule=flight_rule,
         )
         return plan
 
@@ -243,7 +237,7 @@ class AftnParser:
 
         departure = fields[2].strip().upper()
         hhmm = departure[4:8]
-        base_day = _beijing_date_from_utc(message_time)
+        base_day = message_time.date()
 
         # 提取 DOF 字段
         dof_utc_day: Optional[date] = None
@@ -260,13 +254,11 @@ class AftnParser:
 
         if dof_utc_day is not None:
             time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
-            dof = _beijing_date_from_utc(time_utc)
+            dof = dof_utc_day
         else:
-            h, m = int(hhmm[:2]), int(hhmm[2:4])
-            if h > 16 or (h == 16 and m > 0):
-                time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
-            else:
-                time_utc = self._combine_day_hhmm(base_day, hhmm)
+            time_utc = self._combine_day_hhmm(base_day, hhmm)
+            if time_utc < message_time:
+                time_utc = self._combine_day_hhmm(base_day + timedelta(days=1), hhmm)
             dof = base_day
 
         plan = FlightPlan(
@@ -289,7 +281,7 @@ class AftnParser:
 
         departure = fields[2].strip().upper()
         hhmm = departure[4:8]
-        base_day = _beijing_date_from_utc(message_time)
+        base_day = message_time.date()
 
         # 提取 DOF 字段
         dof_utc_day: Optional[date] = None
@@ -306,13 +298,11 @@ class AftnParser:
 
         if dof_utc_day is not None:
             time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
-            dof = _beijing_date_from_utc(time_utc)
+            dof = dof_utc_day
         else:
-            h, m = int(hhmm[:2]), int(hhmm[2:4])
-            if h > 16 or (h == 16 and m > 0):
-                time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
-            else:
-                time_utc = self._combine_day_hhmm(base_day, hhmm)
+            time_utc = self._combine_day_hhmm(base_day, hhmm)
+            if time_utc < message_time:
+                time_utc = self._combine_day_hhmm(base_day + timedelta(days=1), hhmm)
             dof = base_day
 
         plan = FlightPlan(
@@ -335,7 +325,7 @@ class AftnParser:
 
         arrival = fields[-1].strip().upper()
         ata_hhmm = arrival[4:8]
-        base_day = _beijing_date_from_utc(message_time)
+        base_day = message_time.date()
 
         dof_utc_day: Optional[date] = None
         for field in fields:
@@ -351,16 +341,12 @@ class AftnParser:
 
         if dof_utc_day is not None:
             ata_utc = self._combine_day_hhmm(dof_utc_day, ata_hhmm)
-            dof = _beijing_date_from_utc(ata_utc)
+            dof = dof_utc_day
         else:
-            ata_hour = int(ata_hhmm[:2])
-            ata_min = int(ata_hhmm[2:4])
-            if ata_hour > 16 or (ata_hour == 16 and ata_min > 0):
-                ata_utc = self._combine_day_hhmm(base_day - timedelta(days=1), ata_hhmm)
-                dof = base_day
-            else:
-                ata_utc = self._combine_day_hhmm(base_day, ata_hhmm)
-                dof = _beijing_date_from_utc(ata_utc)
+            ata_utc = self._combine_day_hhmm(base_day, ata_hhmm)
+            if ata_utc < message_time:
+                ata_utc = self._combine_day_hhmm(base_day + timedelta(days=1), ata_hhmm)
+            dof = base_day
 
         plan = FlightPlan(
             callsign=callsign,

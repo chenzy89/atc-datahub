@@ -56,6 +56,8 @@ class Database:
                 source_message_type TEXT NOT NULL DEFAULT '',
                 last_message_time TEXT,
                 raw_message_text TEXT NOT NULL DEFAULT '',
+                flight_rule TEXT NOT NULL DEFAULT '',
+                message_types TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -179,17 +181,29 @@ class Database:
         conn = self._get_conn()
 
         existing = conn.execute(
-            "SELECT id, dof, atd, ata FROM flight_plans WHERE callsign=? AND adep=? AND adest=? AND dof=?",
+            "SELECT id, dof, atd, ata, flight_rule, message_types FROM flight_plans WHERE callsign=? AND adep=? AND adest=? AND dof=?",
             (plan.callsign, plan.adep, plan.adest, _fmt_date(plan.dof)),
         ).fetchone()
 
         if existing:
+            # ── 维护 message_types（逗号分隔，去重） ──────────────
+            msg_types_raw = existing["message_types"] or ""
+            existing_types = [t.strip() for t in msg_types_raw.split(",") if t.strip()]
+            if plan.source_message_type and plan.source_message_type not in existing_types:
+                existing_types.append(plan.source_message_type)
+            merged_types = ",".join(existing_types)
+
             updates: dict[str, Any] = {
                 "source_message_type": plan.source_message_type,
                 "last_message_time": _fmt_dt(plan.last_message_time),
                 "raw_message_text": plan.raw_message_text or "",
                 "updated_at": now,
+                "message_types": merged_types,
             }
+            # 维护 flight_rule（只在 FPL 时更新，避免被 DEP/ARR 覆盖）
+            if plan.flight_rule and plan.source_message_type == "FPL":
+                updates["flight_rule"] = plan.flight_rule
+
             # 以下字段只在报文中含有有效值时更新，避免被不含这些字段的报文（如 DEP/ARR）覆盖为空
             if plan.ssr:
                 updates["ssr"] = plan.ssr
@@ -217,13 +231,15 @@ class Database:
             conn.commit()
             return existing["id"]
         else:
+            # ── 新建记录，初始化 message_types ──────────────
+            init_types = plan.source_message_type if plan.source_message_type else ""
             conn.execute(
                 """INSERT INTO flight_plans
                    (callsign, ssr, aircraft_type, dof, adep, etd, atd,
                     adest, eta, ata, route,
                     source_message_type, last_message_time, raw_message_text,
-                    created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    flight_rule, message_types, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     plan.callsign, plan.ssr, plan.aircraft_type,
                     _fmt_date(plan.dof), plan.adep,
@@ -234,6 +250,8 @@ class Database:
                     plan.source_message_type,
                     _fmt_dt(plan.last_message_time),
                     plan.raw_message_text or "",
+                    plan.flight_rule or "",
+                    init_types,
                     now, now,
                 ),
             )
@@ -303,6 +321,7 @@ class Database:
         airport: str | None = None,  # 关注机场：adep OR adest 匹配
         route: str | None = None,  # 航路关键词
         source_message_type: str | None = None,
+        flight_rule: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -332,6 +351,9 @@ class Database:
         if source_message_type:
             conditions.append("source_message_type = ?")
             params.append(source_message_type.upper())
+        if flight_rule:
+            conditions.append("flight_rule = ?")
+            params.append(flight_rule.upper())
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         sql = f"SELECT * FROM flight_plans {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?"
@@ -354,6 +376,7 @@ class Database:
         airport: str | None = None,
         route: str | None = None,
         source_message_type: str | None = None,
+        flight_rule: str | None = None,
     ) -> int:
         conn = self._get_conn()
         conditions: list[str] = []
@@ -380,6 +403,9 @@ class Database:
         if source_message_type:
             conditions.append("source_message_type = ?")
             params.append(source_message_type.upper())
+        if flight_rule:
+            conditions.append("flight_rule = ?")
+            params.append(flight_rule.upper())
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         row = conn.execute(f"SELECT COUNT(*) FROM flight_plans {where}", params).fetchone()
         return row[0]
@@ -392,8 +418,9 @@ class Database:
             """INSERT INTO flight_plans
                (callsign, ssr, aircraft_type, dof, adep, etd, atd,
                 adest, eta, ata, route, source_message_type,
-                last_message_time, raw_message_text, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                last_message_time, raw_message_text,
+                flight_rule, message_types, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 plan.callsign, plan.ssr, plan.aircraft_type,
                 _fmt_date(plan.dof), plan.adep,
@@ -404,6 +431,8 @@ class Database:
                 plan.source_message_type or "MANUAL",
                 _fmt_dt(plan.last_message_time),
                 plan.raw_message_text or "",
+                plan.flight_rule or "",
+                plan.message_types or plan.source_message_type or "",
                 now, now,
             ),
         )
@@ -424,7 +453,7 @@ class Database:
                callsign=?, ssr=?, aircraft_type=?, dof=?, adep=?,
                etd=?, atd=?, adest=?, eta=?, ata=?, route=?,
                source_message_type=?, last_message_time=?,
-               raw_message_text=?, updated_at=?
+               raw_message_text=?, flight_rule=?, message_types=?, updated_at=?
                WHERE id=?""",
             (
                 plan.callsign, plan.ssr, plan.aircraft_type,
@@ -436,6 +465,8 @@ class Database:
                 plan.source_message_type or "MANUAL",
                 _fmt_dt(plan.last_message_time),
                 plan.raw_message_text or "",
+                plan.flight_rule or "",
+                plan.message_types or plan.source_message_type or "",
                 now,
                 fpl_id,
             ),

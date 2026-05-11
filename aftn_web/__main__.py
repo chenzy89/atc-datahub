@@ -12,7 +12,7 @@ from threading import Thread
 
 from .config import load_config
 from .database import Database
-from .parser import AftnParser, _beijing_date_from_utc
+from .parser import AftnParser
 from .receiver import UdpReceiver
 from .webapp import create_app
 
@@ -60,21 +60,43 @@ def main(argv: list[str] | None = None) -> int:
     db = Database(config.db_path)
     logger.info("database: %s", config.db_path)
 
+    # 迁移：新字段兼容旧库（若不存在则 ALTER）
+    try:
+        conn = db._get_conn()
+        for col, typ in [("flight_rule", "TEXT NOT NULL DEFAULT ''"), ("message_types", "TEXT NOT NULL DEFAULT ''")]:
+            try:
+                conn.execute(f"ALTER TABLE flight_plans ADD COLUMN {col} {typ}")
+                conn.commit()
+                logger.info("migrated: added column %s", col)
+            except Exception:
+                pass  # 列已存在
+    except Exception:
+        pass
+
     # AFTN 解析器
     parser_aftn = AftnParser()
+    _prev_raw_text: str = ""   # 去重：记录上一条原始报文正文
 
     # UDP 接收器
     total_received = [0]
     total_parsed = [0]
 
     def on_aftn_message(payload: bytes, addr: str, port: int, received_at: datetime) -> None:
-        nonlocal total_received, total_parsed
+        nonlocal total_received, total_parsed, _prev_raw_text
         total_received[0] += 1
         try:
             result = parser_aftn.parse(payload, received_at=received_at)
         except Exception:
             logger.exception("parse error from %s:%d", addr, port)
             return
+
+        raw_text = result.message.raw_text or ""
+
+        # ── 去重：与上一条报文正文相同则忽略 ──────────────────
+        if raw_text == _prev_raw_text:
+            logger.debug("duplicate message ignored: %.40s...", raw_text[:40])
+            return
+        _prev_raw_text = raw_text
 
         # LAM 报文：不记录、不解析
         if result.message.message_type == "LAM":
@@ -118,11 +140,13 @@ def main(argv: list[str] | None = None) -> int:
                     total_received[0], total_parsed[0],
                 )
         elif action == "FPL":
-            # FPL：同 DOF 已存在则忽略，否则新建
+            # FPL：同 DOF 已存在则 upsert（更新 flight_rule、message_types），否则新建
             existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, plan.dof)
             if existing:
+                db.upsert_flight_plan(plan)
+                total_parsed[0] += 1
                 logger.info(
-                    "[FPL] %s %s->%s DOF=%s 已存在，忽略 (total: recv=%d, parsed=%d)",
+                    "[FPL] %s %s->%s DOF=%s 已存在，upsert (total: recv=%d, parsed=%d)",
                     plan.callsign, plan.adep, plan.adest, plan.dof,
                     total_received[0], total_parsed[0],
                 )
@@ -138,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             # DEP：检查报文中是否包含 DOF 字段
             raw_has_dof = "DOF/" in (plan.raw_message_text or "").upper()
             if not raw_has_dof:
-                today = _beijing_date_from_utc(datetime.utcnow())
+                today = datetime.utcnow().date()
                 # 先查当日计划
                 existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, today)
                 if existing:
@@ -191,39 +215,60 @@ def main(argv: list[str] | None = None) -> int:
                         total_received[0], total_parsed[0],
                     )
         elif action == "ARR":
-            # ARR：先查当日/昨日计划，处理跨日期落地
+            # ARR：优先查找未落地计划（ATA 为空），再按 DOF 回退
             raw_has_dof = "DOF/" in (plan.raw_message_text or "").upper()
             if not raw_has_dof:
-                today = _beijing_date_from_utc(datetime.utcnow())
-                existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, today)
-                if existing:
-                    db.upsert_flight_plan(plan)
+                # 无 DOF → 搜索 (callsign+adep+adest) 匹配的未落地计划
+                candidates = db.query_flight_plans(
+                    callsign=plan.callsign,
+                    adep=plan.adep,
+                    adest=plan.adest,
+                    limit=10,
+                )
+                pending = [p for p in candidates if not p.get("ata")]
+                if pending:
+                    # 取最近一版未落地计划（按 DOF 倒序）
+                    pending.sort(key=lambda p: p.get("dof", "") or "", reverse=True)
+                    target = pending[0]
+                    db.update_flight_plan_ata(target["id"], plan.ata)
                     total_parsed[0] += 1
                     logger.info(
-                        "[ARR] %s %s->%s 当日已有计划，更新 (total: recv=%d, parsed=%d)",
+                        "[ARR] %s %s->%s 未落地计划 (id=%d, dof=%s)，赋 ATA=%s (total: recv=%d, parsed=%d)",
                         plan.callsign, plan.adep, plan.adest,
+                        target["id"], target.get("dof", ""), plan.ata,
                         total_received[0], total_parsed[0],
                     )
                 else:
-                    yesterday = today - timedelta(days=1)
-                    existing_yd = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, yesterday)
-                    if existing_yd and not existing_yd.get("ata"):
-                        # 跨日期落地
-                        db.update_flight_plan_ata(existing_yd["id"], plan.ata)
+                    # 找不到未落地计划，回退到当日/昨日 DOF 匹配逻辑
+                    today = datetime.utcnow().date()
+                    existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, today)
+                    if existing:
+                        db.upsert_flight_plan(plan)
                         total_parsed[0] += 1
                         logger.info(
-                            "[ARR] %s %s->%s 跨日期落地，ATA=%s 赋给昨日计划 (id=%d) (total: recv=%d, parsed=%d)",
-                            plan.callsign, plan.adep, plan.adest, plan.ata, existing_yd["id"],
-                            total_received[0], total_parsed[0],
-                        )
-                    else:
-                        db.create_flight_plan(plan)
-                        total_parsed[0] += 1
-                        logger.info(
-                            "[ARR] %s %s->%s 无计划，新建 (total: recv=%d, parsed=%d)",
+                            "[ARR] %s %s->%s 当日已有计划 (已落地)，upsert (total: recv=%d, parsed=%d)",
                             plan.callsign, plan.adep, plan.adest,
                             total_received[0], total_parsed[0],
                         )
+                    else:
+                        yesterday = today - timedelta(days=1)
+                        existing_yd = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, yesterday)
+                        if existing_yd and not existing_yd.get("ata"):
+                            db.update_flight_plan_ata(existing_yd["id"], plan.ata)
+                            total_parsed[0] += 1
+                            logger.info(
+                                "[ARR] %s %s->%s 跨日期落地，ATA=%s 赋给昨日计划 (id=%d) (total: recv=%d, parsed=%d)",
+                                plan.callsign, plan.adep, plan.adest, plan.ata, existing_yd["id"],
+                                total_received[0], total_parsed[0],
+                            )
+                        else:
+                            db.create_flight_plan(plan)
+                            total_parsed[0] += 1
+                            logger.info(
+                                "[ARR] %s %s->%s 无计划，新建 (total: recv=%d, parsed=%d)",
+                                plan.callsign, plan.adep, plan.adest,
+                                total_received[0], total_parsed[0],
+                            )
             else:
                 # 含有 DOF → 查同 DOF 计划，有则更新 ATA，无则新建
                 existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, plan.dof)

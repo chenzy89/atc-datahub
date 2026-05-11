@@ -100,6 +100,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
         airport = _req_str("airport")  # 关注机场：adep OR adest 匹配
         route = _req_str("route")  # 航路关键词
         source_message_type = _req_str("source_message_type")
+        flight_rule = _req_str("flight_rule")
         limit = request.args.get("limit", 100, type=int)
         offset = request.args.get("offset", 0, type=int)
 
@@ -111,6 +112,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             airport=airport,
             route=route,
             source_message_type=source_message_type,
+            flight_rule=flight_rule,
             limit=min(limit, 500),
             offset=offset,
         )
@@ -122,6 +124,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             airport=airport,
             route=route,
             source_message_type=source_message_type,
+            flight_rule=flight_rule,
         )
         return jsonify({"total": total, "records": records})
 
@@ -179,6 +182,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
         airport = _req_str("airport")
         route = _req_str("route")
         source_message_type = _req_str("source_message_type")
+        flight_rule = _req_str("flight_rule")
 
         records = db.query_flight_plans(
             callsign=callsign,
@@ -188,6 +192,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             airport=airport,
             route=route,
             source_message_type=source_message_type,
+            flight_rule=flight_rule,
             limit=10000,
             offset=0,
         )
@@ -196,8 +201,8 @@ def create_app(config: AppConfig, db: Database) -> Flask:
         ws = wb.active
         ws.title = "飞行计划"
 
-        headers = ["ID", "航班号", "应答机", "机型", "执飞日",
-                   "起飞地", "ETD", "ATD", "目的地", "ETA", "ATA", "航路", "报文类型", "报文时间"]
+        headers = ["ID", "航班号", "规则与种类", "应答机", "机型", "DOF",
+                   "起飞地", "ETD", "ATD", "目的地", "ETA", "ATA", "航路", "报文", "报文时间"]
         hdr_font = Font(bold=True, color="FFFFFF", size=11)
         hdr_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
         thin_border = Border(
@@ -217,23 +222,24 @@ def create_app(config: AppConfig, db: Database) -> Flask:
         for row_idx, rec in enumerate(records, 2):
             ws.cell(row=row_idx, column=1, value=rec.get("id", ""))
             ws.cell(row=row_idx, column=2, value=rec.get("callsign", ""))
-            ws.cell(row=row_idx, column=3, value=rec.get("ssr", ""))
-            ws.cell(row=row_idx, column=4, value=rec.get("aircraft_type", ""))
-            ws.cell(row=row_idx, column=5, value=_safe_date(rec.get("dof")))
-            ws.cell(row=row_idx, column=6, value=rec.get("adep", ""))
-            ws.cell(row=row_idx, column=7, value=_safe_dt(rec.get("etd")))
-            ws.cell(row=row_idx, column=8, value=_safe_dt(rec.get("atd")))
-            ws.cell(row=row_idx, column=9, value=rec.get("adest", ""))
-            ws.cell(row=row_idx, column=10, value=_safe_dt(rec.get("eta")))
-            ws.cell(row=row_idx, column=11, value=_safe_dt(rec.get("ata")))
-            ws.cell(row=row_idx, column=12, value=rec.get("route", ""))
-            ws.cell(row=row_idx, column=13, value=rec.get("source_message_type", ""))
-            ws.cell(row=row_idx, column=14, value=_safe_dt(rec.get("last_message_time")))
-            for col in range(1, 15):
+            ws.cell(row=row_idx, column=3, value=rec.get("flight_rule", ""))
+            ws.cell(row=row_idx, column=4, value=rec.get("ssr", ""))
+            ws.cell(row=row_idx, column=5, value=rec.get("aircraft_type", ""))
+            ws.cell(row=row_idx, column=6, value=_safe_date(rec.get("dof")))
+            ws.cell(row=row_idx, column=7, value=rec.get("adep", ""))
+            ws.cell(row=row_idx, column=8, value=_safe_dt(rec.get("etd")))
+            ws.cell(row=row_idx, column=9, value=_safe_dt(rec.get("atd")))
+            ws.cell(row=row_idx, column=10, value=rec.get("adest", ""))
+            ws.cell(row=row_idx, column=11, value=_safe_dt(rec.get("eta")))
+            ws.cell(row=row_idx, column=12, value=_safe_dt(rec.get("ata")))
+            ws.cell(row=row_idx, column=13, value=rec.get("route", ""))
+            ws.cell(row=row_idx, column=14, value=rec.get("message_types", ""))
+            ws.cell(row=row_idx, column=15, value=_safe_dt(rec.get("last_message_time")))
+            for col in range(1, 16):
                 ws.cell(row=row_idx, column=col).border = thin_border
                 ws.cell(row=row_idx, column=col).alignment = Alignment(vertical="center")
 
-        col_widths = [6, 14, 10, 10, 12, 10, 16, 16, 10, 16, 16, 50, 10, 16]
+        col_widths = [6, 14, 10, 10, 12, 10, 16, 16, 10, 16, 16, 50, 10, 30, 16]
         for i, w in enumerate(col_widths, 1):
             ws.column_dimensions[chr(64 + i)].width = w
 
