@@ -156,7 +156,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
           <option value="ACP">ACP</option>
           <option value="TOC">TOC</option>
           <option value="CHG">CHG</option>
-          <option value="">其他</option>
+          <option value="__OTHER__">其他</option>
         </select>
       </label>
       <label><span>关键词</span><input id="qmk" placeholder="报文内容"></label>
@@ -227,6 +227,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
           <option value="VN">VN</option>
           <option value="VG">VG</option>
           <option value="VX">VX</option>
+          <option value="__OTHER__">其他</option>
         </select>
       </label>
     </div>
@@ -513,7 +514,7 @@ function searchPlans(r) {
   var c = v('qfc'); var a = v('qfa'); var d = v('qfd'); var air = v('qair'); var fr = v('qfr'); var fr2 = v('qfr2');
   if (c) { p.set('callsign', c); }
   if (a) { p.set('adep', a); }
-  if (v('qfd')) { p.set('dof', v('qfd')); }
+  if (v('qfd')) { p.set('adest', v('qfd')); }
   if (v('qfd2')) { p.set('dof', v('qfd2')); }
   if (air) { p.set('airport', air); }
   if (fr) { p.set('route', fr); }

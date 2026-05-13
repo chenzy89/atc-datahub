@@ -68,7 +68,7 @@ class AftnParser:
         # 特殊类型判断依据：发报地址
         if detected_type not in ("HQ", "METAR"):
             sender = _extract_sender(raw_text)
-            if sender == "ZBBBZGZX":
+            if sender in ("ZBBBZGZX", "ZBBBOGXX"):
                 detected_type = "HQ"
             elif sender in ("ZGSDYMYX", "ZGSZYMYX"):
                 detected_type = "METAR"
@@ -203,7 +203,7 @@ class AftnParser:
             etd_utc = self._combine_day_hhmm(base_day, etd_hhmm)
             if etd_utc < message_time:
                 etd_utc = self._combine_day_hhmm(base_day + timedelta(days=1), etd_hhmm)
-            dof = base_day
+            dof = etd_utc.date()
 
         # 提取规则与种类 — 编组8，位于航班号(callsign)与机型之间，
         # 如 IS/IN/IG/IM/IX/IB/VS/VN/VG/VX，长度为2
@@ -252,8 +252,9 @@ class AftnParser:
                         pass
                 break
 
+        # DOF 仅用于匹配飞行计划，ATD 的日期应从收报时间推算
         if dof_utc_day is not None:
-            time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
+            time_utc = self._combine_day_hhmm(base_day, hhmm)
             dof = dof_utc_day
         else:
             time_utc = self._combine_day_hhmm(base_day, hhmm)
@@ -294,8 +295,11 @@ class AftnParser:
                         pass
                 break
 
+        # DOF 仅用于匹配飞行计划，ETD 的日期应从收报时间推算
         if dof_utc_day is not None:
-            time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
+            time_utc = self._combine_day_hhmm(base_day, hhmm)
+            if time_utc < message_time:
+                time_utc = self._combine_day_hhmm(base_day + timedelta(days=1), hhmm)
             dof = dof_utc_day
         else:
             time_utc = self._combine_day_hhmm(base_day, hhmm)
@@ -337,8 +341,9 @@ class AftnParser:
                         pass
                 break
 
+        # DOF 仅用于匹配飞行计划，ATA 的日期应从收报时间推算
         if dof_utc_day is not None:
-            ata_utc = self._combine_day_hhmm(dof_utc_day, ata_hhmm)
+            ata_utc = self._combine_day_hhmm(base_day, ata_hhmm)
             dof = dof_utc_day
         else:
             ata_utc = self._combine_day_hhmm(base_day, ata_hhmm)
