@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.15b</title>
+<title>ATC AFTN WebHub v26.5.16</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -124,12 +124,12 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.15b</span>
+  <span class="badge">v26.5.16</span>
 </div>
 
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('msgs')">📨 AFTN 报文</button>
-  <button class="tab-btn" onclick="switchTab('plans')">✈️ 飞行计划</button>
+  <button class="tab-btn" onclick="switchTab('plans')">飞行计划</button>
 </div>
 
 <!-- ════════════════════════════════════════════════════════
@@ -214,7 +214,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
         </select>
       </label>
       <label><span>航路</span><input id="qfr" placeholder="含关键词"></label>
-      <label><span>规则与种类</span>
+      <label><span>规则</span>
         <select id="qfr2">
           <option value="">全部</option>
           <option value="IS">IS</option>
@@ -257,7 +257,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   <div class="table-wrap">
     <table>
       <thead><tr>
-        <th>航班号</th><th>规则与种类</th><th>移交点</th><th>机型</th><th>DOF</th>
+        <th>航班号</th><th>规则</th><th>移交点</th><th>机型</th><th>DOF</th>
         <th>起飞地</th><th>ETD</th><th>ATD</th>
         <th>目的地</th><th>ETA</th><th>ATA</th>
         <th>航路</th><th>报文</th>
