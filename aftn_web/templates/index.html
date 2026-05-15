@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.15a</title>
+<title>ATC AFTN WebHub v26.5.15b</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -124,7 +124,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.15a</span>
+  <span class="badge">v26.5.15b</span>
 </div>
 
 <div class="tabs">
@@ -228,6 +228,19 @@ select option { background: var(--bg-card); color: var(--text-primary); }
           <option value="VG">VG</option>
           <option value="VX">VX</option>
           <option value="__OTHER__">其他</option>
+        </select>
+      </label>
+      <label><span>移交点</span>
+        <select id="qhp">
+          <option value="">全部</option>
+          <option value="SAREX">SAREX</option>
+          <option value="OVGOT">OVGOT</option>
+          <option value="LOVTA">LOVTA</option>
+          <option value="LANDA">LANDA</option>
+          <option value="IDUMA">IDUMA</option>
+          <option value="MIPAG">MIPAG</option>
+          <option value="SIERA">SIERA</option>
+          <option value="TOMUD">TOMUD</option>
         </select>
       </label>
     </div>
@@ -511,7 +524,7 @@ function searchPlans(r) {
   if (r !== false) { fplOff = 0; }
   var p = new URLSearchParams({limit: PS, offset: fplOff});
   var v = function(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  var c = v('qfc'); var a = v('qfa'); var d = v('qfd'); var air = v('qair'); var fr = v('qfr'); var fr2 = v('qfr2');
+  var c = v('qfc'); var a = v('qfa'); var d = v('qfd'); var air = v('qair'); var fr = v('qfr'); var fr2 = v('qfr2'); var hp = v('qhp');
   if (c) { p.set('callsign', c); }
   if (a) { p.set('adep', a); }
   if (v('qfd')) { p.set('adest', v('qfd')); }
@@ -519,6 +532,7 @@ function searchPlans(r) {
   if (air) { p.set('airport', air); }
   if (fr) { p.set('route', fr); }
   if (fr2) { p.set('flight_rule', fr2); }
+  if (hp) { p.set('handover_pt', hp); }
 
   document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="13" class="loading">查询中...</td></tr>';
   fetch('/api/flight_plans?' + p.toString()).then(function(r) { return r.json(); }).then(function(d) {
@@ -603,7 +617,7 @@ function resetPlans() {
 function exportExcel() {
   var params = new URLSearchParams({limit: 10000, offset: 0});
   var v = function(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  var c = v('qfc'); var a = v('qfa'); var s = v('qfs'); var ac = v('qfac'); var fr2 = v('qfr2');
+  var c = v('qfc'); var a = v('qfa'); var s = v('qfs'); var ac = v('qfac'); var fr2 = v('qfr2'); var hp = v('qhp');
   if (c) { params.set('callsign', c); }
   if (a) { params.set('adep', a); }
   if (v('qfd')) { params.set('dof', v('qfd')); }
@@ -611,6 +625,7 @@ function exportExcel() {
   if (s) { params.set('ssr', s); }
   if (ac) { params.set('aircraft_type', ac); }
   if (fr2) { params.set('flight_rule', fr2); }
+  if (hp) { params.set('handover_pt', hp); }
   window.location.href = '/api/flight_plans/export?' + params.toString();
 }
 

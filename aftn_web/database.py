@@ -566,41 +566,17 @@ class Database:
         route: str | None = None,  # 航路关键词
         source_message_type: str | None = None,
         flight_rule: str | None = None,
+        handover_pt: str | None = None,  # 移交点关键词
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         conn = self._get_conn()
-        conditions: list[str] = []
-        params: list[Any] = []
-
-        if callsign:
-            conditions.append("callsign LIKE ?")
-            params.append(f"%{callsign.upper()}%")
-        if adep:
-            conditions.append("adep LIKE ?")
-            params.append(f"%{adep.upper()}%")
-        if adest:
-            conditions.append("adest LIKE ?")
-            params.append(f"%{adest.upper()}%")
-        if dof:
-            conditions.append("dof = ?")
-            params.append(_fmt_date(dof))
-        if airport:
-            conditions.append("(adep LIKE ? OR adest LIKE ?)")
-            params.append(f"%{airport.upper()}%")
-            params.append(f"%{airport.upper()}%")
-        if route:
-            conditions.append("route LIKE ?")
-            params.append(f"%{route.upper()}%")
-        if source_message_type:
-            conditions.append("source_message_type = ?")
-            params.append(source_message_type.upper())
-        if flight_rule == "__OTHER__":
-            conditions.append("flight_rule NOT IN ('IS','IN','IG','IM','IX','IB','VS','VN','VG','VX')")
-        elif flight_rule:
-            conditions.append("flight_rule = ?")
-            params.append(flight_rule.upper())
-
+        params, conditions = _build_fpl_conditions(
+            callsign=callsign, adep=adep, adest=adest, dof=dof,
+            airport=airport, route=route,
+            source_message_type=source_message_type,
+            flight_rule=flight_rule, handover_pt=handover_pt,
+        )
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         sql = f"SELECT * FROM flight_plans {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?"
         rows = conn.execute(sql, params + [limit, offset]).fetchall()
@@ -623,37 +599,15 @@ class Database:
         route: str | None = None,
         source_message_type: str | None = None,
         flight_rule: str | None = None,
+        handover_pt: str | None = None,
     ) -> int:
         conn = self._get_conn()
-        conditions: list[str] = []
-        params: list[Any] = []
-        if callsign:
-            conditions.append("callsign LIKE ?")
-            params.append(f"%{callsign.upper()}%")
-        if adep:
-            conditions.append("adep LIKE ?")
-            params.append(f"%{adep.upper()}%")
-        if adest:
-            conditions.append("adest LIKE ?")
-            params.append(f"%{adest.upper()}%")
-        if dof:
-            conditions.append("dof = ?")
-            params.append(_fmt_date(dof))
-        if airport:
-            conditions.append("(adep LIKE ? OR adest LIKE ?)")
-            params.append(f"%{airport.upper()}%")
-            params.append(f"%{airport.upper()}%")
-        if route:
-            conditions.append("route LIKE ?")
-            params.append(f"%{route.upper()}%")
-        if source_message_type:
-            conditions.append("source_message_type = ?")
-            params.append(source_message_type.upper())
-        if flight_rule == "__OTHER__":
-            conditions.append("flight_rule NOT IN ('IS','IN','IG','IM','IX','IB','VS','VN','VG','VX')")
-        elif flight_rule:
-            conditions.append("flight_rule = ?")
-            params.append(flight_rule.upper())
+        params, conditions = _build_fpl_conditions(
+            callsign=callsign, adep=adep, adest=adest, dof=dof,
+            airport=airport, route=route,
+            source_message_type=source_message_type,
+            flight_rule=flight_rule, handover_pt=handover_pt,
+        )
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         row = conn.execute(f"SELECT COUNT(*) FROM flight_plans {where}", params).fetchone()
         return row[0]
@@ -745,6 +699,53 @@ class Database:
         if new_type not in types:
             types.append(new_type)
         return ",".join(types)
+
+
+def _build_fpl_conditions(
+    callsign: str | None = None,
+    adep: str | None = None,
+    adest: str | None = None,
+    dof: date | None = None,
+    airport: str | None = None,
+    route: str | None = None,
+    source_message_type: str | None = None,
+    flight_rule: str | None = None,
+    handover_pt: str | None = None,
+) -> tuple[list[Any], list[str]]:
+    """构建飞行计划查询条件，返回 (params, conditions)"""
+    conditions: list[str] = []
+    params: list[Any] = []
+    if callsign:
+        conditions.append("callsign LIKE ?")
+        params.append(f"%{callsign.upper()}%")
+    if adep:
+        conditions.append("adep LIKE ?")
+        params.append(f"%{adep.upper()}%")
+    if adest:
+        conditions.append("adest LIKE ?")
+        params.append(f"%{adest.upper()}%")
+    if dof:
+        conditions.append("dof = ?")
+        params.append(_fmt_date(dof))
+    if airport:
+        conditions.append("(adep LIKE ? OR adest LIKE ?)")
+        p = f"%{airport.upper()}%"
+        params.extend([p, p])
+    if route:
+        conditions.append("route LIKE ?")
+        params.append(f"%{route.upper()}%")
+    if source_message_type:
+        conditions.append("source_message_type = ?")
+        params.append(source_message_type.upper())
+    if flight_rule == "__OTHER__":
+        conditions.append("flight_rule NOT IN ('IS','IN','IG','IM','IX','IB','VS','VN','VG','VX')")
+    elif flight_rule:
+        conditions.append("flight_rule = ?")
+        params.append(flight_rule.upper())
+    if handover_pt:
+        conditions.append("handover_pt LIKE ?")
+        params.append(f"%{handover_pt.upper()}%")
+    return params, conditions
 
 
 def _fmt_dt(dt: datetime | None) -> str | None:

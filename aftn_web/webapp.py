@@ -101,6 +101,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
         route = _req_str("route")  # 航路关键词
         source_message_type = _req_str("source_message_type")
         flight_rule = _req_str("flight_rule")
+        handover_pt = _req_str("handover_pt")
         limit = request.args.get("limit", 100, type=int)
         offset = request.args.get("offset", 0, type=int)
 
@@ -113,6 +114,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             route=route,
             source_message_type=source_message_type,
             flight_rule=flight_rule,
+            handover_pt=handover_pt,
             limit=min(limit, 500),
             offset=offset,
         )
@@ -125,6 +127,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             route=route,
             source_message_type=source_message_type,
             flight_rule=flight_rule,
+            handover_pt=handover_pt,
         )
         return jsonify({"total": total, "records": records})
 
@@ -183,6 +186,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
         route = _req_str("route")
         source_message_type = _req_str("source_message_type")
         flight_rule = _req_str("flight_rule")
+        handover_pt = _req_str("handover_pt")
 
         records = db.query_flight_plans(
             callsign=callsign,
@@ -193,6 +197,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             route=route,
             source_message_type=source_message_type,
             flight_rule=flight_rule,
+            handover_pt=handover_pt,
             limit=10000,
             offset=0,
         )
