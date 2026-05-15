@@ -518,9 +518,10 @@ class Database:
 
         msg_types = self._merge_message_type(existing["message_types"] or "", "CHG")
         now = _fmt_dt(datetime.utcnow())
+        new_handover = get_resolver().resolve(route) if route else ""
         conn.execute(
-            "UPDATE flight_plans SET route=?, message_types=?, updated_at=? WHERE id=?",
-            (route, msg_types, now, existing["id"]),
+            "UPDATE flight_plans SET route=?, handover_pt=?, message_types=?, updated_at=? WHERE id=?",
+            (route, new_handover, msg_types, now, existing["id"]),
         )
         conn.commit()
         return True
@@ -536,9 +537,10 @@ class Database:
 
         msg_types = self._merge_message_type(existing["message_types"] or "", "CHG")
         now = _fmt_dt(datetime.utcnow())
+        new_handover = get_resolver().resolve(route) if route else ""
         cur = conn.execute(
-            "UPDATE flight_plans SET route=?, message_types=?, updated_at=? WHERE id=?",
-            (route, msg_types, now, fpl_id),
+            "UPDATE flight_plans SET route=?, handover_pt=?, message_types=?, updated_at=? WHERE id=?",
+            (route, new_handover, msg_types, now, fpl_id),
         )
         conn.commit()
         return cur.rowcount > 0
