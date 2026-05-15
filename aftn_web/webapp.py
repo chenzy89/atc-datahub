@@ -201,7 +201,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
         ws = wb.active
         ws.title = "飞行计划"
 
-        headers = ["ID", "航班号", "规则与种类", "应答机", "机型", "DOF",
+        headers = ["ID", "航班号", "规则与种类", "移交点", "机型", "DOF",
                    "起飞地", "ETD", "ATD", "目的地", "ETA", "ATA", "航路", "报文", "报文时间"]
         hdr_font = Font(bold=True, color="FFFFFF", size=11)
         hdr_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
@@ -223,7 +223,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             ws.cell(row=row_idx, column=1, value=rec.get("id", ""))
             ws.cell(row=row_idx, column=2, value=rec.get("callsign", ""))
             ws.cell(row=row_idx, column=3, value=rec.get("flight_rule", ""))
-            ws.cell(row=row_idx, column=4, value=rec.get("ssr", ""))
+            ws.cell(row=row_idx, column=4, value=rec.get("handover_pt", ""))
             ws.cell(row=row_idx, column=5, value=rec.get("aircraft_type", ""))
             ws.cell(row=row_idx, column=6, value=_safe_date(rec.get("dof")))
             ws.cell(row=row_idx, column=7, value=rec.get("adep", ""))
@@ -239,7 +239,7 @@ def create_app(config: AppConfig, db: Database) -> Flask:
                 ws.cell(row=row_idx, column=col).border = thin_border
                 ws.cell(row=row_idx, column=col).alignment = Alignment(vertical="center")
 
-        col_widths = [6, 14, 10, 10, 12, 10, 16, 16, 10, 16, 16, 50, 10, 30, 16]
+        col_widths = [6, 14, 10, 12, 12, 10, 16, 16, 10, 16, 16, 50, 10, 30, 16]
         for i, w in enumerate(col_widths, 1):
             ws.column_dimensions[chr(64 + i)].width = w
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.15</title>
+<title>ATC AFTN WebHub v26.5.15a</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -124,7 +124,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.15</span>
+  <span class="badge">v26.5.15a</span>
 </div>
 
 <div class="tabs">
@@ -244,7 +244,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   <div class="table-wrap">
     <table>
       <thead><tr>
-        <th>航班号</th><th>规则与种类</th><th>应答机</th><th>机型</th><th>DOF</th>
+        <th>航班号</th><th>规则与种类</th><th>移交点</th><th>机型</th><th>DOF</th>
         <th>起飞地</th><th>ETD</th><th>ATD</th>
         <th>目的地</th><th>ETA</th><th>ATA</th>
         <th>航路</th><th>报文</th>
@@ -555,7 +555,7 @@ function renderPlans(rs) {
     h += '<tr>' +
       '<td class="callsign">' + (r.callsign||'-') + '</td>' +
       '<td>' + (r.flight_rule||'-') + '</td>' +
-      '<td>' + (r.ssr||'-') + '</td>' +
+      '<td>' + (r.handover_pt||'-') + '</td>' +
       '<td>' + (r.aircraft_type||'-') + '</td>' +
       '<td>' + fd + '</td>' +
       '<td class="airport">' + (r.adep||'-') + '</td>' +

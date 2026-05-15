@@ -8,6 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from .handover import get_resolver
 from .models import AftnMessage, FlightPlan
 
 # 匹配阈值：DEP/ARR 找 ETD/ETA 最近计划时的最大允许差值（秒）
@@ -56,6 +57,7 @@ class Database:
                 eta TEXT,
                 ata TEXT,
                 route TEXT NOT NULL DEFAULT '',
+                handover_pt TEXT NOT NULL DEFAULT '',
                 source_message_type TEXT NOT NULL DEFAULT '',
                 last_message_time TEXT,
                 raw_message_text TEXT NOT NULL DEFAULT '',
@@ -81,6 +83,12 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_aftn_time
                 ON aftn_messages(received_at);
         """)
+        # 迁移：新增 handover_pt 列（v26.5.15），兼容新旧数据库
+        try:
+            conn.execute("ALTER TABLE flight_plans ADD COLUMN handover_pt TEXT NOT NULL DEFAULT ''")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # 列已存在
         conn.commit()
 
     # ── AFTN 报文 ──────────────────────────────────────────────
@@ -263,6 +271,7 @@ class Database:
                 updates["aircraft_type"] = plan.aircraft_type
             if plan.route:
                 updates["route"] = plan.route
+                updates["handover_pt"] = get_resolver().resolve(plan.route)
             if plan.source_message_type not in ("DEP", "ARR") or not existing["dof"]:
                 if plan.dof:
                     updates["dof"] = _fmt_date(plan.dof)
@@ -385,20 +394,21 @@ class Database:
 
             # ── 新建记录，初始化 message_types ──────────────
             init_types = plan.source_message_type if plan.source_message_type else ""
+            handover_pt = plan.handover_pt or (get_resolver().resolve(plan.route) if plan.route else "")
             conn.execute(
                 """INSERT INTO flight_plans
                    (callsign, ssr, aircraft_type, dof, adep, etd, atd,
-                    adest, eta, ata, route,
+                    adest, eta, ata, route, handover_pt,
                     source_message_type, last_message_time, raw_message_text,
                     flight_rule, message_types, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     plan.callsign, plan.ssr, plan.aircraft_type,
                     _fmt_date(plan.dof), plan.adep,
                     _fmt_dt(plan.etd), _fmt_dt(plan.atd),
                     plan.adest,
                     _fmt_dt(plan.eta), _fmt_dt(plan.ata),
-                    plan.route,
+                    plan.route, handover_pt,
                     plan.source_message_type,
                     _fmt_dt(plan.last_message_time),
                     plan.raw_message_text or "",
@@ -652,20 +662,21 @@ class Database:
         """手动新增飞行计划"""
         now = _fmt_dt(datetime.utcnow())
         conn = self._get_conn()
+        handover_pt = plan.handover_pt or (get_resolver().resolve(plan.route) if plan.route else "")
         conn.execute(
             """INSERT INTO flight_plans
                (callsign, ssr, aircraft_type, dof, adep, etd, atd,
-                adest, eta, ata, route, source_message_type,
+                adest, eta, ata, route, handover_pt, source_message_type,
                 last_message_time, raw_message_text,
                 flight_rule, message_types, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 plan.callsign, plan.ssr, plan.aircraft_type,
                 _fmt_date(plan.dof), plan.adep,
                 _fmt_dt(plan.etd), _fmt_dt(plan.atd),
                 plan.adest,
                 _fmt_dt(plan.eta), _fmt_dt(plan.ata),
-                plan.route,
+                plan.route, handover_pt,
                 plan.source_message_type or "MANUAL",
                 _fmt_dt(plan.last_message_time),
                 plan.raw_message_text or "",
@@ -686,10 +697,11 @@ class Database:
         ).fetchone()
         if not existing:
             return False
+        handover_pt = plan.handover_pt or (get_resolver().resolve(plan.route) if plan.route else "")
         conn.execute(
             """UPDATE flight_plans SET
                callsign=?, ssr=?, aircraft_type=?, dof=?, adep=?,
-               etd=?, atd=?, adest=?, eta=?, ata=?, route=?,
+               etd=?, atd=?, adest=?, eta=?, ata=?, route=?, handover_pt=?,
                source_message_type=?, last_message_time=?,
                raw_message_text=?, flight_rule=?, message_types=?, updated_at=?
                WHERE id=?""",
@@ -699,7 +711,7 @@ class Database:
                 _fmt_dt(plan.etd), _fmt_dt(plan.atd),
                 plan.adest,
                 _fmt_dt(plan.eta), _fmt_dt(plan.ata),
-                plan.route,
+                plan.route, handover_pt,
                 plan.source_message_type or "MANUAL",
                 _fmt_dt(plan.last_message_time),
                 plan.raw_message_text or "",

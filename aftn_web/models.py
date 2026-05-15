@@ -45,6 +45,7 @@ class FlightPlan:
     eta: datetime | None = None
     ata: datetime | None = None
     route: str = ""
+    handover_pt: str = ""   # 移交点，从航路自动解析
     source_message_type: str = ""
     last_message_time: datetime | None = None
     raw_message_text: str = ""
@@ -67,6 +68,7 @@ class FlightPlan:
             "eta": self.eta.isoformat() if self.eta else None,
             "ata": self.ata.isoformat() if self.ata else None,
             "route": self.route,
+            "handover_pt": self.handover_pt,
             "source_message_type": self.source_message_type,
             "last_message_time": self.last_message_time.isoformat() if self.last_message_time else None,
             "raw_message_text": self.raw_message_text,
