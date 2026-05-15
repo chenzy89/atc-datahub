@@ -8,8 +8,8 @@ from typing import Any, Optional
 
 from .models import AftnMessage, FlightPlan
 
-PARSED_TYPES = {"FPL", "DEP", "ARR", "DLA", "CNL"}
-LABEL_ONLY_TYPES = {"AOC", "ACP", "TOC", "CHG", "EST", "HQ", "METAR"}
+PARSED_TYPES = {"FPL", "DEP", "ARR", "DLA", "CNL", "CHG"}
+LABEL_ONLY_TYPES = {"AOC", "ACP", "TOC", "EST", "HQ", "METAR"}
 SKIP_TYPES = {"LAM"}
 RECOGNIZED_TYPES = PARSED_TYPES | LABEL_ONLY_TYPES | SKIP_TYPES
 
@@ -110,6 +110,8 @@ class AftnParser:
                 plan = self._parse_arr(core_text, message_time)
             elif detected_type == "CNL":
                 plan = self._parse_cnl(core_text, message_time)
+            elif detected_type == "CHG":
+                plan = self._parse_chg(core_text, message_time)
             else:
                 result.errors.append(f"不支持的报文类型: {detected_type}")
                 return result
@@ -314,6 +316,52 @@ class AftnParser:
             ssr=ssr,
             dof=dof,
             etd=time_utc,
+        )
+        return plan
+
+    def _parse_chg(self, core_text: str, message_time: datetime) -> FlightPlan:
+        fields = self._split_fields(core_text)
+        if len(fields) < 5:
+            raise AftnParseError(f"CHG 报文段数不足: {len(fields)}")
+        callsign, ssr = self._parse_callsign_and_ssr(fields[1])
+        if not callsign:
+            raise AftnParseError("CHG 缺少呼号")
+
+        departure = fields[2].strip().upper()
+        adest = fields[3].strip().upper()[:4]
+
+        # 提取 DOF（同 DLA 逻辑）
+        dof_utc_day: Optional[date] = None
+        for field in fields:
+            marker = field.upper().find("DOF/")
+            if marker >= 0:
+                digits = field[marker + 4: marker + 10]
+                if len(digits) == 6 and digits.isdigit():
+                    try:
+                        dof_utc_day = datetime.strptime("20" + digits, "%Y%m%d").date()
+                    except ValueError:
+                        pass
+                break
+
+        if dof_utc_day is None:
+            raise AftnParseError("CHG 缺少 DOF")
+
+        # 提取编组 15（航路），去掉打头的速度/巡航高度（如 K0780S0950）
+        route: str = ""
+        for field in fields:
+            if field.startswith("15/"):
+                raw = field[3:].strip()
+                # 去掉第一个空格前的速度/高度信息
+                route = raw.split(" ", 1)[1].strip() if " " in raw else ""
+                break
+
+        plan = FlightPlan(
+            callsign=callsign,
+            adep=departure[:4],
+            adest=adest,
+            ssr=ssr or "",
+            dof=dof_utc_day,
+            route=route,
         )
         return plan
 

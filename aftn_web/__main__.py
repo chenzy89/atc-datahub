@@ -203,6 +203,42 @@ def main(argv: list[str] | None = None) -> int:
                     plan.callsign, plan.adep, plan.adest, plan.dof, plan.ata,
                     total_received[0], total_parsed[0],
                 )
+        elif action == "CHG":
+            # CHG（更正报）：只处理编组 15（航路），忽略不含编组 15 的 CHG
+            if not plan.route:
+                total_parsed[0] += 1
+                logger.info(
+                    "[CHG] %s %s->%s DOF=%s 无编组15，忽略 (total: recv=%d, parsed=%d)",
+                    plan.callsign, plan.adep, plan.adest, plan.dof,
+                    total_received[0], total_parsed[0],
+                )
+            else:
+                updated = db.update_chg_route(
+                    plan.callsign, plan.adep, plan.adest, plan.dof, plan.route,
+                )
+                total_parsed[0] += 1
+                if updated:
+                    logger.info(
+                        "[CHG] %s %s->%s DOF=%s 更新航路 (total: recv=%d, parsed=%d)",
+                        plan.callsign, plan.adep, plan.adest, plan.dof,
+                        total_received[0], total_parsed[0],
+                    )
+                else:
+                    # DOF 精确匹配不到，降级到无视 DOF 查找
+                    fallback = db.find_flight_plans_by_key(plan.callsign, plan.adep, plan.adest)
+                    if fallback:
+                        db.update_chg_route_by_id(fallback[0]["id"], plan.route)
+                        logger.info(
+                            "[CHG] %s %s->%s DOF=%s 未精确匹配，fallback 更新航路 (id=%d, total: recv=%d, parsed=%d)",
+                            plan.callsign, plan.adep, plan.adest, plan.dof,
+                            fallback[0]["id"], total_received[0], total_parsed[0],
+                        )
+                    else:
+                        logger.info(
+                            "[CHG] %s %s->%s DOF=%s 无匹配计划，忽略 (total: recv=%d, parsed=%d)",
+                            plan.callsign, plan.adep, plan.adest, plan.dof,
+                            total_received[0], total_parsed[0],
+                        )
         else:
             # DLA：upsert
             db.upsert_flight_plan(plan)

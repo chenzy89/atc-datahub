@@ -184,26 +184,56 @@ class Database:
 
     # ── 飞行计划 ──────────────────────────────────────────────
 
+    def _row_to_dict(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        """sqlite3.Row → dict，兼容 Python 3.8（Row 没有 .get()）"""
+        return dict(row) if row else None
+
     def upsert_flight_plan(self, plan: FlightPlan) -> int:
         """由报文自动调用：按 callsign+adep+adest+dof+etd 插入或更新已有记录
         同 DOF 不同 ETD → 视为不同计划（各自独立更新）
+        DLA 是延误报，ETD 是延误后的新值，故按 callsign+adep+adest+dof 匹配（忽略 ETD）
         """
         now = _fmt_dt(datetime.utcnow())
         conn = self._get_conn()
 
-        if plan.etd:
-            # 精确匹配 (cs, adep, adest, dof, etd)：同ETD的FPL/DLA更新，不同ETD则是不同计划
-            existing = conn.execute(
-                "SELECT id, dof, atd, ata, etd, eta, flight_rule, message_types FROM flight_plans "
+        sel_cols = "id, dof, atd, ata, etd, eta, flight_rule, source_message_type, message_types"
+
+        if plan.source_message_type == "DLA":
+            # DLA：按 callsign+adep+adest+dof 匹配，忽略 etd（ETD 是 DLA 将更新的新值）
+            # 当有多个同呼号起降地同 DOF 的计划时，选择已有 ETD 距 DLA 收报时间最近的那份
+            candidates = conn.execute(
+                f"SELECT {sel_cols} FROM flight_plans "
+                "WHERE callsign=? AND adep=? AND adest=? AND dof=?",
+                (plan.callsign, plan.adep, plan.adest, _fmt_date(plan.dof)),
+            ).fetchall()
+            if len(candidates) > 1:
+                # 多计划中选 ETD 最接近 DLA 收报时间的那个
+                ref_time = plan.last_message_time or plan.etd or datetime.utcnow()
+                best = None
+                best_diff = float("inf")
+                for c in candidates:
+                    etd_val = _parse_dt_stored(c["etd"])
+                    if etd_val is None:
+                        continue
+                    diff = abs((ref_time - etd_val).total_seconds())
+                    if diff < best_diff:
+                        best_diff = diff
+                        best = c
+                existing = self._row_to_dict(best) if best else self._row_to_dict(candidates[0])
+            else:
+                existing = self._row_to_dict(candidates[0]) if candidates else None
+        elif plan.etd:
+            existing = self._row_to_dict(conn.execute(
+                f"SELECT {sel_cols} FROM flight_plans "
                 "WHERE callsign=? AND adep=? AND adest=? AND dof=? AND etd=?",
                 (plan.callsign, plan.adep, plan.adest, _fmt_date(plan.dof), _fmt_dt(plan.etd)),
-            ).fetchone()
+            ).fetchone())
         else:
-            existing = conn.execute(
-                "SELECT id, dof, atd, ata, etd, eta, flight_rule, message_types FROM flight_plans "
+            existing = self._row_to_dict(conn.execute(
+                f"SELECT {sel_cols} FROM flight_plans "
                 "WHERE callsign=? AND adep=? AND adest=? AND dof=? AND (etd IS NULL OR etd='')",
                 (plan.callsign, plan.adep, plan.adest, _fmt_date(plan.dof)),
-            ).fetchone()
+            ).fetchone())
 
         if existing:
             # ── 维护 message_types（逗号分隔，去重） ──────────────
@@ -214,12 +244,14 @@ class Database:
             merged_types = ",".join(existing_types)
 
             updates: dict[str, Any] = {
-                "source_message_type": plan.source_message_type,
                 "last_message_time": _fmt_dt(plan.last_message_time),
                 "raw_message_text": plan.raw_message_text or "",
                 "updated_at": now,
                 "message_types": merged_types,
             }
+            # source_message_type 保留首次创建时的值（通常是 FPL），不因后续 DLA/CHG 覆盖
+            if plan.source_message_type == "FPL" or not existing.get("source_message_type"):
+                updates["source_message_type"] = plan.source_message_type
             # 维护 flight_rule（只在 FPL 时更新，避免被 DEP/ARR 覆盖）
             if plan.flight_rule and plan.source_message_type == "FPL":
                 updates["flight_rule"] = plan.flight_rule
@@ -248,7 +280,17 @@ class Database:
                         pass
             if plan.atd:
                 updates["atd"] = _fmt_dt(plan.atd)
-            if plan.eta:
+                # DEP 设置 ATD 后，自动重算 ETA = ATD + 原飞行时长
+                if plan.source_message_type == "DEP" and existing.get("etd") and existing.get("eta"):
+                    try:
+                        old_etd = datetime.fromisoformat(existing["etd"])
+                        old_eta = datetime.fromisoformat(existing["eta"])
+                        flight_duration = old_eta - old_etd
+                        new_eta = plan.atd + flight_duration
+                        updates["eta"] = _fmt_dt(new_eta)
+                    except (ValueError, TypeError):
+                        pass
+            if plan.eta and (plan.source_message_type != "DEP" or not updates.get("eta")):
                 updates["eta"] = _fmt_dt(plan.eta)
             if plan.ata:
                 updates["ata"] = _fmt_dt(plan.ata)
@@ -263,25 +305,73 @@ class Database:
         else:
             # ── 精确 DOF 未匹配 → ARR/DEP/DLA 尝试无 DOF 查找 ──────
             if plan.source_message_type in ("ARR", "DEP", "DLA"):
-                alt = conn.execute(
-                    "SELECT id, dof, atd, ata, etd, eta, message_types FROM flight_plans WHERE callsign=? AND adep=? AND adest=?",
+                alt_candidates = conn.execute(
+                    "SELECT id, dof, atd, ata, etd, eta, source_message_type, message_types FROM flight_plans WHERE callsign=? AND adep=? AND adest=?",
                     (plan.callsign, plan.adep, plan.adest),
-                ).fetchone()
+                ).fetchall()
+                alt = None
+                if len(alt_candidates) > 1:
+                    # 多计划：DLA 选 ETD 最接近收报时间的，其他选第一个
+                    if plan.source_message_type == "DLA":
+                        ref_time = plan.last_message_time or plan.etd or datetime.utcnow()
+                        best = None
+                        best_diff = float("inf")
+                        for c in alt_candidates:
+                            etd_val = _parse_dt_stored(c["etd"])
+                            if etd_val is None:
+                                continue
+                            diff = abs((ref_time - etd_val).total_seconds())
+                            if diff < best_diff:
+                                best_diff = diff
+                                best = c
+                        alt = self._row_to_dict(best) if best else None
+                    else:
+                        alt = self._row_to_dict(alt_candidates[0])
+                elif alt_candidates:
+                    alt = self._row_to_dict(alt_candidates[0])
                 if alt:
                     msg_types_raw = alt["message_types"] or ""
                     existing_types = [t.strip() for t in msg_types_raw.split(",") if t.strip()]
                     if plan.source_message_type and plan.source_message_type not in existing_types:
                         existing_types.append(plan.source_message_type)
                     updates: dict[str, Any] = {
-                        "source_message_type": plan.source_message_type,
                         "last_message_time": _fmt_dt(plan.last_message_time),
                         "raw_message_text": plan.raw_message_text or "",
                         "updated_at": now,
                         "message_types": ",".join(existing_types),
                     }
+                    # 保留首次创建的 source_message_type，不被 DLA 等覆盖
+                    if plan.source_message_type == "FPL" or not alt.get("source_message_type"):
+                        updates["source_message_type"] = plan.source_message_type
+                    if plan.source_message_type == "DLA":
+                        # DLA fallback 也更新 ETD/SSR
+                        if plan.etd:
+                            updates["etd"] = _fmt_dt(plan.etd)
+                            # 重算 ETA
+                            if alt.get("etd") and alt.get("eta"):
+                                try:
+                                    old_etd = datetime.fromisoformat(alt["etd"])
+                                    old_eta = datetime.fromisoformat(alt["eta"])
+                                    flight_duration = old_eta - old_etd
+                                    new_eta = plan.etd + flight_duration
+                                    updates["eta"] = _fmt_dt(new_eta)
+                                except (ValueError, TypeError):
+                                    pass
+                        if plan.ssr:
+                            updates["ssr"] = plan.ssr
                     if plan.atd:
                         updates["atd"] = _fmt_dt(plan.atd)
-                    if plan.eta:
+                        # DEP 设置 ATD 后，自动重算 ETA = ATD + 原飞行时长
+                        if plan.source_message_type == "DEP" and alt.get("etd") and alt.get("eta"):
+                            try:
+                                old_etd = datetime.fromisoformat(alt["etd"])
+                                old_eta = datetime.fromisoformat(alt["eta"])
+                                flight_duration = old_eta - old_etd
+                                new_eta = plan.atd + flight_duration
+                                updates["eta"] = _fmt_dt(new_eta)
+                            except (ValueError, TypeError):
+                                pass
+                    if plan.eta and plan.source_message_type not in ("DLA", "DEP"):
                         updates["eta"] = _fmt_dt(plan.eta)
                     if plan.ata:
                         updates["ata"] = _fmt_dt(plan.ata)
@@ -400,6 +490,45 @@ class Database:
         cur = conn.execute(
             "UPDATE flight_plans SET ata=?, message_types=?, updated_at=? WHERE id=?",
             (_fmt_dt(ata), msg_types, now, fpl_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+    def update_chg_route(self, callsign: str, adep: str, adest: str,
+                          dof: date, route: str) -> bool:
+        """按 callsign+adep+adest+dof 查找飞行计划，更新航路（CHG 编组15）"""
+        conn = self._get_conn()
+        existing = conn.execute(
+            "SELECT id, message_types FROM flight_plans "
+            "WHERE callsign=? AND adep=? AND adest=? AND dof=?",
+            (callsign.upper(), adep.upper()[:4], adest.upper()[:4], _fmt_date(dof)),
+        ).fetchone()
+        if not existing:
+            return False
+
+        msg_types = self._merge_message_type(existing["message_types"] or "", "CHG")
+        now = _fmt_dt(datetime.utcnow())
+        conn.execute(
+            "UPDATE flight_plans SET route=?, message_types=?, updated_at=? WHERE id=?",
+            (route, msg_types, now, existing["id"]),
+        )
+        conn.commit()
+        return True
+
+    def update_chg_route_by_id(self, fpl_id: int, route: str) -> bool:
+        """按 ID 更新航路（CHG fallback 用）"""
+        conn = self._get_conn()
+        existing = conn.execute(
+            "SELECT message_types FROM flight_plans WHERE id=?", (fpl_id,)
+        ).fetchone()
+        if not existing:
+            return False
+
+        msg_types = self._merge_message_type(existing["message_types"] or "", "CHG")
+        now = _fmt_dt(datetime.utcnow())
+        cur = conn.execute(
+            "UPDATE flight_plans SET route=?, message_types=?, updated_at=? WHERE id=?",
+            (route, msg_types, now, fpl_id),
         )
         conn.commit()
         return cur.rowcount > 0
