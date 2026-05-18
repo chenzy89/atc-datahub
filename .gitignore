@@ -15,3 +15,4 @@ data/*.db-shm
 logs/*.log
 .env
 .DS_Store
+aftn_web/data.db
