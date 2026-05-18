@@ -307,26 +307,8 @@ select option { background: var(--bg-card); color: var(--text-primary); }
       </label>
     </div>
     <div class="search-row" style="align-items:end;">
-      <label><span>起始日期</span>
-        <div class="st-date-group">
-          <select id="st-yf" class="st-date-sel"></select>
-          <span style="color:var(--text-muted);font-size:13px;">年</span>
-          <select id="st-mf" class="st-date-sel"></select>
-          <span style="color:var(--text-muted);font-size:13px;">月</span>
-          <select id="st-df" class="st-date-sel"></select>
-          <span style="color:var(--text-muted);font-size:13px;">日</span>
-        </div>
-      </label>
-      <label><span>截止日期</span>
-        <div class="st-date-group">
-          <select id="st-yt" class="st-date-sel"></select>
-          <span style="color:var(--text-muted);font-size:13px;">年</span>
-          <select id="st-mt" class="st-date-sel"></select>
-          <span style="color:var(--text-muted);font-size:13px;">月</span>
-          <select id="st-dt" class="st-date-sel"></select>
-          <span style="color:var(--text-muted);font-size:13px;">日</span>
-        </div>
-      </label>
+      <label><span>起始日期</span><input id="st-df" type="date"></label>
+      <label><span>截止日期</span><input id="st-dt" type="date"></label>
     </div>
     <div class="search-actions">
       <button class="btn btn-primary" onclick="generateStats()">🔍 查询</button>
@@ -721,45 +703,22 @@ function exportExcel() {
 // 数据统计
 // ═══════════════════════════════════════════════════════
 
-// 初始化日期下拉框
+// 初始化日期选择器默认值（昨天~今天）
 function initDateSelects() {
   var now = new Date();
-  var y = now.getFullYear();
-  function fill(id, arr) {
-    var sel = document.getElementById(id);
-    if (!sel) return;
-    // 已有选项则不重复填充
-    if (sel.options.length > 0) return;
-    for (var i = 0; i < arr.length; i++) {
-      var o = document.createElement('option');
-      o.value = arr[i]; o.textContent = arr[i];
-      sel.appendChild(o);
-    }
-  }
-  var years = [];
-  for (var i = y - 1; i <= y + 1; i++) years.push(i);
-  fill('st-yf', years); fill('st-yt', years);
-  var months = [];
-  for (var i = 1; i <= 12; i++) months.push(i);
-  fill('st-mf', months); fill('st-mt', months);
-  var days = [];
-  for (var i = 1; i <= 31; i++) days.push(i);
-  fill('st-df', days); fill('st-dt', days);
-  // 默认昨天~今天
   var yd = new Date(now); yd.setDate(yd.getDate() - 1);
-  document.getElementById('st-yf').value = yd.getFullYear();
-  document.getElementById('st-mf').value = yd.getMonth() + 1;
-  document.getElementById('st-df').value = yd.getDate();
-  document.getElementById('st-yt').value = y;
-  document.getElementById('st-mt').value = now.getMonth() + 1;
-  document.getElementById('st-dt').value = now.getDate();
+  var fmt = function(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  };
+  var df = document.getElementById('st-df');
+  var dt = document.getElementById('st-dt');
+  if (df) df.value = fmt(yd);
+  if (dt) dt.value = fmt(now);
 }
 
 function getDateStr(prefix) {
-  var y = document.getElementById('st-y' + prefix).value;
-  var m = String(document.getElementById('st-m' + prefix).value).padStart(2, '0');
-  var d = String(document.getElementById('st-d' + prefix).value).padStart(2, '0');
-  return y + '-' + m + '-' + d;
+  var el = document.getElementById(prefix === 'f' ? 'st-df' : 'st-dt');
+  return el ? el.value : '';
 }
 
 function generateStats() {
