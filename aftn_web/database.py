@@ -237,11 +237,19 @@ class Database:
                 (plan.callsign, plan.adep, plan.adest, _fmt_date(plan.dof), _fmt_dt(plan.etd)),
             ).fetchone())
         else:
+            # DEP/ARR/CNL/CHG 等无 ETD 的报文：先按 callsign+adep+adest+dof 找已有记录
+            # （包括由 FPL 创建的带 ETD 的记录），找不到再回退到 ETD 为空的记录
             existing = self._row_to_dict(conn.execute(
                 f"SELECT {sel_cols} FROM flight_plans "
-                "WHERE callsign=? AND adep=? AND adest=? AND dof=? AND (etd IS NULL OR etd='')",
+                "WHERE callsign=? AND adep=? AND adest=? AND dof=?",
                 (plan.callsign, plan.adep, plan.adest, _fmt_date(plan.dof)),
             ).fetchone())
+            if not existing:
+                existing = self._row_to_dict(conn.execute(
+                    f"SELECT {sel_cols} FROM flight_plans "
+                    "WHERE callsign=? AND adep=? AND adest=? AND dof=? AND (etd IS NULL OR etd='')",
+                    (plan.callsign, plan.adep, plan.adest, _fmt_date(plan.dof)),
+                ).fetchone())
 
         if existing:
             # ── 维护 message_types（逗号分隔，去重） ──────────────
@@ -744,7 +752,9 @@ def _build_fpl_conditions(
     elif flight_rule:
         conditions.append("flight_rule = ?")
         params.append(flight_rule.upper())
-    if handover_pt:
+    if handover_pt == "__OTHER__":
+        conditions.append("(handover_pt = '' OR handover_pt IS NULL)")
+    elif handover_pt:
         conditions.append("handover_pt LIKE ?")
         params.append(f"%{handover_pt.upper()}%")
     return params, conditions

@@ -254,12 +254,13 @@ class AftnParser:
                         pass
                 break
 
-        # DOF 仅用于匹配飞行计划，ATD 的日期应从收报时间推算
         if dof_utc_day is not None:
-            time_utc = self._combine_day_hhmm(base_day, hhmm)
+            time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
             dof = dof_utc_day
         else:
             time_utc = self._combine_day_hhmm(base_day, hhmm)
+            if time_utc > message_time:
+                time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
             dof = base_day
 
         plan = FlightPlan(
@@ -297,11 +298,8 @@ class AftnParser:
                         pass
                 break
 
-        # DOF 仅用于匹配飞行计划，ETD 的日期应从收报时间推算
         if dof_utc_day is not None:
-            time_utc = self._combine_day_hhmm(base_day, hhmm)
-            if time_utc < message_time:
-                time_utc = self._combine_day_hhmm(base_day + timedelta(days=1), hhmm)
+            time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
             dof = dof_utc_day
         else:
             time_utc = self._combine_day_hhmm(base_day, hhmm)
@@ -389,12 +387,13 @@ class AftnParser:
                         pass
                 break
 
-        # DOF 仅用于匹配飞行计划，ATA 的日期应从收报时间推算
         if dof_utc_day is not None:
-            ata_utc = self._combine_day_hhmm(base_day, ata_hhmm)
+            ata_utc = self._combine_day_hhmm(dof_utc_day, ata_hhmm)
             dof = dof_utc_day
         else:
             ata_utc = self._combine_day_hhmm(base_day, ata_hhmm)
+            if ata_utc > message_time:
+                ata_utc = self._combine_day_hhmm(base_day - timedelta(days=1), ata_hhmm)
             dof = base_day
 
         plan = FlightPlan(
