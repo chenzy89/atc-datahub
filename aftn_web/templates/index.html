@@ -110,6 +110,16 @@ tbody tr:hover { background: var(--bg-hover); }
 /* ── no select ── */
 select option { background: var(--bg-card); color: var(--text-primary); }
 
+/* ── 数据统计 ── */
+.st-apt-group { display:flex; gap:6px; flex-wrap:wrap; padding:2px 0; }
+.st-apt-tag { display:inline-flex; align-items:center; gap:3px; cursor:pointer; background:var(--bg-input); border:1px solid var(--border); border-radius:5px; padding:4px 10px; font-size:13px; color:var(--text-secondary); transition:.12s; user-select:none; }
+.st-apt-tag input { display:none; }
+.st-apt-tag:has(input:checked) { background:rgba(88,166,255,.15); border-color:var(--accent); color:var(--accent); }
+.st-apt-tag:hover { border-color:var(--accent); }
+.st-date-group { display:flex; align-items:center; gap:4px; }
+.st-date-sel { padding:6px 8px; border:1px solid var(--border); border-radius:4px; font-size:13px; background:var(--bg-input); color:var(--text-primary); outline:none; cursor:pointer; min-width:70px; }
+.st-date-sel:focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(88,166,255,.15); }
+
 /* ── responsive ── */
 @media (max-width: 768px) {
   .search-row label { width: 100%; }
@@ -130,6 +140,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('msgs')">📨 AFTN 报文</button>
   <button class="tab-btn" onclick="switchTab('plans')">飞行计划</button>
+  <button class="tab-btn" onclick="switchTab('stats')">📊 数据统计</button>
 </div>
 
 <!-- ════════════════════════════════════════════════════════
@@ -278,6 +289,83 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   </div>
 </div>
 
+<!-- ════════════════════════════════════════════════════════
+     Tab 3: 数据统计
+     ════════════════════════════════════════════════════════ -->
+<div class="panel" id="panel-stats">
+  <div class="search-bar">
+    <div class="search-row">
+      <label><span>机场（勾选）</span>
+        <div class="st-apt-group">
+          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGSZ" checked><span>ZGSZ 深圳</span></label>
+          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGSD" checked><span>ZGSD 珠海</span></label>
+          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="VMMC" checked><span>VMMC 澳门</span></label>
+          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGNT" checked><span>ZGNT 南头</span></label>
+          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGUH" checked><span>ZGUH 九洲</span></label>
+          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGHZ" checked><span>ZGHZ 惠州</span></label>
+        </div>
+      </label>
+    </div>
+    <div class="search-row" style="align-items:end;">
+      <label><span>起始日期</span>
+        <div class="st-date-group">
+          <select id="st-yf" class="st-date-sel"></select>
+          <span style="color:var(--text-muted);font-size:13px;">年</span>
+          <select id="st-mf" class="st-date-sel"></select>
+          <span style="color:var(--text-muted);font-size:13px;">月</span>
+          <select id="st-df" class="st-date-sel"></select>
+          <span style="color:var(--text-muted);font-size:13px;">日</span>
+        </div>
+      </label>
+      <label><span>截止日期</span>
+        <div class="st-date-group">
+          <select id="st-yt" class="st-date-sel"></select>
+          <span style="color:var(--text-muted);font-size:13px;">年</span>
+          <select id="st-mt" class="st-date-sel"></select>
+          <span style="color:var(--text-muted);font-size:13px;">月</span>
+          <select id="st-dt" class="st-date-sel"></select>
+          <span style="color:var(--text-muted);font-size:13px;">日</span>
+        </div>
+      </label>
+    </div>
+    <div class="search-actions">
+      <button class="btn btn-primary" onclick="generateStats()">🔍 查询</button>
+      <span id="st-info" class="text-muted" style="margin-left:8px;"></span>
+    </div>
+  </div>
+
+  <div id="st-result" style="padding: 12px; display: none;">
+    <div style="max-width:960px;margin:0 auto;">
+      <div id="st-summary" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;"></div>
+
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow-x:auto;margin-bottom:16px;">
+        <h3 style="font-size:14px;font-weight:600;margin:12px 12px 8px;color:var(--text-primary);">🕐 24小时流量分布（架次）</h3>
+        <table id="st-hourly-tbl" style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px;">
+          <thead><tr id="st-hourly-head"></tr></thead>
+          <tbody id="st-hourly-body"></tbody>
+        </table>
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:16px;">
+        <div style="flex:1;min-width:300px;">
+          <h3 style="font-size:14px;font-weight:600;margin-bottom:8px;color:var(--text-primary);">进港移交点（日均架次）</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead><tr style="background:#1c2333;"><th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">移交点</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">总架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">占比</th></tr></thead>
+            <tbody id="st-arr-tbl"></tbody>
+          </table>
+        </div>
+        <div style="flex:1;min-width:300px;">
+          <h3 style="font-size:14px;font-weight:600;margin-bottom:8px;color:var(--text-primary);">出港移交点（日均架次）</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead><tr style="background:#1c2333;"><th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">移交点</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">总架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">占比</th></tr></thead>
+            <tbody id="st-dep-tbl"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ── AFTN 报文详情弹窗 ── -->
 <div id="modal-msg" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:transparent;z-index:1100;align-items:center;justify-content:center;" onclick="if(event.target===this)closeMsg()">
   <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;max-width:900px;width:92%;max-height:85vh;overflow-y:auto;padding:20px;">
@@ -324,13 +412,10 @@ var PS = 100;
 function switchTab(n) {
   document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
   document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
-  if (n === 'msgs') {
-    document.querySelector('.tabs .tab-btn:first-child').classList.add('active');
-    document.getElementById('panel-msgs').classList.add('active');
-  } else {
-    document.querySelector('.tabs .tab-btn:last-child').classList.add('active');
-    document.getElementById('panel-plans').classList.add('active');
-  }
+  var btns = document.querySelectorAll('.tab-btn');
+  var idx = {'msgs':0, 'plans':1, 'stats':2}[n] || 0;
+  btns[idx].classList.add('active');
+  document.getElementById('panel-'+n).classList.add('active');
 }
 
 // ═══════════════════════════════════════════════════════
@@ -631,6 +716,153 @@ function exportExcel() {
   if (hp) { params.set('handover_pt', hp); }
   window.location.href = '/api/flight_plans/export?' + params.toString();
 }
+
+// ═══════════════════════════════════════════════════════
+// 数据统计
+// ═══════════════════════════════════════════════════════
+
+// 初始化日期下拉框
+function initDateSelects() {
+  var now = new Date();
+  var y = now.getFullYear();
+  function fill(id, arr) {
+    var sel = document.getElementById(id);
+    if (!sel) return;
+    // 已有选项则不重复填充
+    if (sel.options.length > 0) return;
+    for (var i = 0; i < arr.length; i++) {
+      var o = document.createElement('option');
+      o.value = arr[i]; o.textContent = arr[i];
+      sel.appendChild(o);
+    }
+  }
+  var years = [];
+  for (var i = y - 1; i <= y + 1; i++) years.push(i);
+  fill('st-yf', years); fill('st-yt', years);
+  var months = [];
+  for (var i = 1; i <= 12; i++) months.push(i);
+  fill('st-mf', months); fill('st-mt', months);
+  var days = [];
+  for (var i = 1; i <= 31; i++) days.push(i);
+  fill('st-df', days); fill('st-dt', days);
+  // 默认昨天~今天
+  var yd = new Date(now); yd.setDate(yd.getDate() - 1);
+  document.getElementById('st-yf').value = yd.getFullYear();
+  document.getElementById('st-mf').value = yd.getMonth() + 1;
+  document.getElementById('st-df').value = yd.getDate();
+  document.getElementById('st-yt').value = y;
+  document.getElementById('st-mt').value = now.getMonth() + 1;
+  document.getElementById('st-dt').value = now.getDate();
+}
+
+function getDateStr(prefix) {
+  var y = document.getElementById('st-y' + prefix).value;
+  var m = String(document.getElementById('st-m' + prefix).value).padStart(2, '0');
+  var d = String(document.getElementById('st-d' + prefix).value).padStart(2, '0');
+  return y + '-' + m + '-' + d;
+}
+
+function generateStats() {
+  var aps = [];
+  document.querySelectorAll('.st-airport:checked').forEach(function(cb) { aps.push(cb.value); });
+  if (aps.length === 0) { alert('请至少勾选一个机场'); return; }
+  var df = getDateStr('f');
+  var dt = getDateStr('t');
+  if (!df || !dt) { alert('请选择起止日期'); return; }
+  if (df > dt) { alert('起始日期不能晚于截止日期'); return; }
+
+  document.getElementById('st-info').textContent = '查询中...';
+  var url = '/api/statistics?airports=' + aps.join(',') + '&date_from=' + df + '&date_to=' + dt;
+  fetch(url).then(function(r) { return r.json(); }).then(function(d) {
+    renderStats(d, aps, df, dt);
+    document.getElementById('st-info').textContent = '✅ 统计完成';
+  }).catch(function(e) {
+    document.getElementById('st-info').textContent = '❌ 查询失败: ' + e;
+  });
+}
+
+function renderStats(d, aps, df, dt) {
+  var days = d.days || 1;
+  var depAvg = (d.dep_count / days).toFixed(0);
+  var arrAvg = (d.arr_count / days).toFixed(0);
+
+  var peakHour = d.peak_hour || 0;
+  var peakDep = d.peak_hour_dep || 0;
+  var peakArr = d.peak_hour_arr || 0;
+  var peakTotal = peakDep + peakArr;
+  var peakDayStr = (d.peak_day || '').replace(/^\d{4}-(\d{2})-(\d{2})$/, '$1-$2');
+  var peakDayCount = d.peak_day_count || 0;
+
+  var resultEl = document.getElementById('st-result');
+  resultEl.style.display = 'block';
+
+  document.getElementById('st-summary').innerHTML =
+    '<div class="stat-card"><div class="num">' + depAvg + '</div><div class="label">日均出港</div></div>' +
+    '<div class="stat-card"><div class="num">' + arrAvg + '</div><div class="label">日均进港</div></div>' +
+    '<div class="stat-card"><div class="num">' + peakTotal + '</div><div class="label">高峰小时架次</div></div>' +
+    '<div class="stat-card"><div class="num">' + peakDayStr + ' ' + String(peakHour).padStart(2,'0') + '时</div><div class="label">高峰时段</div></div>' +
+    '<div class="stat-card"><div class="num">' + peakDayCount + '</div><div class="label">高峰日架次</div></div>' +
+    '<div class="stat-card"><div class="num">' + aps.join(', ') + '</div><div class="label">机场</div></div>' +
+    '<div class="stat-card"><div class="num">' + df + ' ~ ' + dt + '</div><div class="label">日期范围</div></div>';
+
+  // ── 24小时流量表（小时平均）──
+  var depH = (d.dep_hourly || []).map(function(v){ return (v / days).toFixed(0); });
+  var arrH = (d.arr_hourly || []).map(function(v){ return (v / days).toFixed(0); });
+  var totalH = depH.map(function(v,i){ return (parseFloat(v) + parseFloat(arrH[i])).toFixed(0); });
+
+  // 表头
+  var headHTML = '<tr><th style="padding:6px 8px;background:#1c2333;color:var(--text-secondary);border-bottom:2px solid var(--border);font-weight:600;position:sticky;left:0;background:#1c2333;z-index:1;">类型</th>';
+  for (var h = 0; h < 24; h++) {
+    headHTML += '<th style="padding:6px 4px;text-align:center;border-bottom:2px solid var(--border);' + (h === peakHour ? 'background:#1c2d3f;' : '') + '">' + h + '时</th>';
+  }
+  headHTML += '<th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--border);background:#1c2333;color:var(--text-secondary);">日均架次</th></tr>';
+  document.getElementById('st-hourly-head').innerHTML = headHTML;
+
+  function hourlyRow(label, data, isTotal) {
+    var row = '<tr><td style="padding:5px 8px;border-bottom:1px solid var(--border);' + (isTotal ? 'background:#1c2333;' : '') + 'color:var(--text-primary);font-weight:' + (isTotal ? '600' : '400') + ';position:sticky;left:0;z-index:1;">' + label + '</td>';
+    for (var h = 0; h < 24; h++) {
+      var v = data[h] || '0';
+      var cellStyle = h === peakHour ? 'background:#1c2d3f;color:var(--accent);font-weight:600;' : 'color:var(--text-secondary);';
+      row += '<td style="padding:5px 4px;text-align:center;border-bottom:1px solid var(--border);' + cellStyle + '">' + v + '</td>';
+    }
+    var avgDaily = isTotal
+      ? ((d.dep_count + d.arr_count) / days).toFixed(0)
+      : (label === '进港' ? (d.arr_count / days).toFixed(0) : (d.dep_count / days).toFixed(0));
+    row += '<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);color:var(--text-primary);' + (isTotal ? 'background:#1c2333;' : '') + 'font-weight:600;">' + avgDaily + '</td></tr>';
+    return row;
+  }
+
+  document.getElementById('st-hourly-body').innerHTML =
+    hourlyRow('进港', arrH, false) +
+    hourlyRow('出港', depH, false) +
+    hourlyRow('进出港', totalH, true);
+
+  function buildHandoverRows(handoverDict, totalCount) {
+    var entries = Object.entries(handoverDict || {}).sort(function(a,b){ return b[1]-a[1]; });
+    var rows = '';
+    entries.forEach(function(e) {
+      var hp = e[0];
+      var total = e[1];
+      var daily = (total / days).toFixed(0);
+      var pct = totalCount > 0 ? (total / totalCount * 100).toFixed(1) + '%' : '-';
+      rows += '<tr>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:500;">' + hp + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + total + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + daily + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + pct + '</td>' +
+      '</tr>';
+    });
+    return rows;
+  }
+
+  var arrTotal = d.arr_count || 0;
+  var depTotal = d.dep_count || 0;
+  document.getElementById('st-arr-tbl').innerHTML = buildHandoverRows(d.arr_handover, arrTotal);
+  document.getElementById('st-dep-tbl').innerHTML = buildHandoverRows(d.dep_handover, depTotal);
+}
+
+// 初始化日期选择
+initDateSelects();
 
 // ── utility ──
 function esc(s) {

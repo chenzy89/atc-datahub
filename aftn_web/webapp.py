@@ -30,6 +30,17 @@ def create_app(config: AppConfig, db: Database) -> Flask:
 
     # ── 统计 ──────────────────────────────────────────────────
 
+    @app.route("/api/statistics")
+    def api_statistics():
+        airports_str = _req_str("airports")
+        date_from = _req_str("date_from")
+        date_to = _req_str("date_to")
+        airports = [a.strip().upper() for a in airports_str.split(",") if a.strip()] if airports_str else []
+        if not airports or not date_from or not date_to:
+            return jsonify({"error": "机场和日期范围必填"}), 400
+        result = db.query_traffic_statistics(airports, date_from, date_to)
+        return jsonify(result)
+
     @app.route("/api/stats")
     def api_stats():
         total_fpl = db.count_flight_plans()

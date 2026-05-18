@@ -622,6 +622,111 @@ class Database:
         row = conn.execute(f"SELECT COUNT(*) FROM flight_plans {where}", params).fetchone()
         return row[0]
 
+    def query_traffic_statistics(
+        self,
+        airports: list[str],
+        date_from: str,
+        date_to: str,
+    ) -> dict[str, Any]:
+        """
+        查询流量统计：
+        - dep_hourly / arr_hourly: 各小时出港/进港总数（24元数组）
+        - dep_count / arr_count: 出港/进港总数
+        - dep_handover / arr_handover: dict[移交点] = 总数
+        - peak_hour, peak_hour_dep, peak_hour_arr, peak_day, peak_day_count
+        - days: 统计天数
+        """
+        result: dict[str, Any] = {
+            "dep_count": 0, "arr_count": 0,
+            "dep_hourly": [0]*24, "arr_hourly": [0]*24,
+            "dep_handover": {}, "arr_handover": {},
+            "peak_hour": 0, "peak_hour_dep": 0, "peak_hour_arr": 0,
+            "peak_day": "", "peak_day_count": 0,
+            "days": 1,
+        }
+        if not airports:
+            return result
+
+        conn = self._get_conn()
+        placeholders = ",".join("?" for _ in airports)
+        date_to_end = date_to + " 23:59:59"
+
+        # ── 出港统计 ──
+        dep_rows = conn.execute(
+            f"""SELECT atd, handover_pt FROM flight_plans
+               WHERE adep IN ({placeholders})
+                 AND atd IS NOT NULL AND atd >= ? AND atd <= ?""",
+            [*airports, date_from, date_to_end],
+        ).fetchall()
+
+        for row in dep_rows:
+            h = _hour_from_dt_str(row["atd"])
+            if h is not None:
+                result["dep_hourly"][h] += 1
+            result["dep_count"] += 1
+            hp = row["handover_pt"] or ""
+            if hp:
+                result["dep_handover"][hp] = result["dep_handover"].get(hp, 0) + 1
+
+        # ── 进港统计 ──
+        arr_rows = conn.execute(
+            f"""SELECT ata, handover_pt FROM flight_plans
+               WHERE adest IN ({placeholders})
+                 AND ata IS NOT NULL AND ata >= ? AND ata <= ?""",
+            [*airports, date_from, date_to_end],
+        ).fetchall()
+
+        for row in arr_rows:
+            h = _hour_from_dt_str(row["ata"])
+            if h is not None:
+                result["arr_hourly"][h] += 1
+            result["arr_count"] += 1
+            hp = row["handover_pt"] or ""
+            if hp:
+                result["arr_handover"][hp] = result["arr_handover"].get(hp, 0) + 1
+
+        # ── 天数 ──
+        try:
+            d1 = datetime.strptime(date_from, "%Y-%m-%d")
+            d2 = datetime.strptime(date_to, "%Y-%m-%d")
+            result["days"] = max((d2 - d1).days + 1, 1)
+        except ValueError:
+            result["days"] = 1
+
+        # ── 高峰小时 ──
+        peak_total = 0
+        peak_dep = 0
+        peak_arr = 0
+        peak_h = 0
+        for h in range(24):
+            total_h = result["dep_hourly"][h] + result["arr_hourly"][h]
+            if total_h > peak_total:
+                peak_total = total_h
+                peak_dep = result["dep_hourly"][h]
+                peak_arr = result["arr_hourly"][h]
+                peak_h = h
+        result["peak_hour"] = peak_h
+        result["peak_hour_dep"] = peak_dep
+        result["peak_hour_arr"] = peak_arr
+
+        # ── 高峰日 ──
+        # 按日聚合 atd/ata
+        day_counts: dict[str, int] = {}
+        for row in dep_rows:
+            d = _day_from_dt_str(row["atd"])
+            if d:
+                day_counts[d] = day_counts.get(d, 0) + 1
+        for row in arr_rows:
+            d = _day_from_dt_str(row["ata"])
+            if d:
+                day_counts[d] = day_counts.get(d, 0) + 1
+        if day_counts:
+            peak_day = max(day_counts, key=day_counts.get)
+            result["peak_day"] = peak_day
+            result["peak_day_count"] = day_counts[peak_day]
+
+        return result
+
     def create_flight_plan(self, plan: FlightPlan) -> int:
         """手动新增飞行计划"""
         now = _fmt_dt(datetime.utcnow())
@@ -804,3 +909,20 @@ def _pick_closest_datetime(
     if best and best_diff <= max_diff_seconds:
         return best, best_diff
     return None, float("inf")
+
+
+def _hour_from_dt_str(dt_str: str | None) -> int | None:
+    """从 'YYYY-MM-DD HH:MM:SS' 提取小时"""
+    if not dt_str or len(dt_str) < 14:
+        return None
+    try:
+        return int(dt_str[11:13])
+    except (ValueError, IndexError):
+        return None
+
+
+def _day_from_dt_str(dt_str: str | None) -> str | None:
+    """从 'YYYY-MM-DD HH:MM:SS' 提取日期"""
+    if not dt_str or len(dt_str) < 10:
+        return None
+    return dt_str[:10]
