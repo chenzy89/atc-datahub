@@ -255,13 +255,14 @@ class AftnParser:
                 break
 
         if dof_utc_day is not None:
-            time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
             dof = dof_utc_day
         else:
-            time_utc = self._combine_day_hhmm(base_day, hhmm)
-            if time_utc > message_time:
-                time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
             dof = base_day
+
+        # ATD 始终基于收报日期（base_day），不等于 DOF
+        time_utc = self._combine_day_hhmm(base_day, hhmm)
+        if time_utc > message_time:
+            time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
 
         plan = FlightPlan(
             callsign=callsign,
@@ -299,13 +300,14 @@ class AftnParser:
                 break
 
         if dof_utc_day is not None:
-            time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
             dof = dof_utc_day
         else:
-            time_utc = self._combine_day_hhmm(base_day, hhmm)
-            if time_utc < message_time:
-                time_utc = self._combine_day_hhmm(base_day + timedelta(days=1), hhmm)
             dof = base_day
+
+        # ETD 始终基于收报日期（base_day），不等于 DOF
+        time_utc = self._combine_day_hhmm(base_day, hhmm)
+        if time_utc < message_time:
+            time_utc = self._combine_day_hhmm(base_day + timedelta(days=1), hhmm)
 
         plan = FlightPlan(
             callsign=callsign,
@@ -388,13 +390,14 @@ class AftnParser:
                 break
 
         if dof_utc_day is not None:
-            ata_utc = self._combine_day_hhmm(dof_utc_day, ata_hhmm)
             dof = dof_utc_day
         else:
-            ata_utc = self._combine_day_hhmm(base_day, ata_hhmm)
-            if ata_utc > message_time:
-                ata_utc = self._combine_day_hhmm(base_day - timedelta(days=1), ata_hhmm)
             dof = base_day
+
+        # ATA 始终基于收报日期（base_day），不等于 DOF
+        ata_utc = self._combine_day_hhmm(base_day, ata_hhmm)
+        if ata_utc > message_time:
+            ata_utc = self._combine_day_hhmm(base_day - timedelta(days=1), ata_hhmm)
 
         plan = FlightPlan(
             callsign=callsign,
