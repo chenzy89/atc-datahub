@@ -428,51 +428,59 @@ class Database:
             conn.commit()
             return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def find_flight_plan(self, callsign: str, adep: str, adest: str, dof: date | None = None) -> dict[str, Any] | None:
-        """按 callsign+adep+adest+可选 DOF 查找飞行计划（返回第一条）"""
+    def find_flight_plans_by_key(self, callsign: str, adep: str, adest: str, dof: date | None = None,
+                                  exclude_cancelled: bool = False) -> list[dict[str, Any]]:
+        """返回所有匹配 (callsign, adep, adest, 可选 dof) 的飞行计划
+        exclude_cancelled=True 时排除 message_types 含 CNL 的已取消计划"""
         conn = self._get_conn()
-        if dof:
-            row = conn.execute(
-                "SELECT * FROM flight_plans WHERE callsign=? AND adep=? AND adest=? AND dof=?",
-                (callsign, adep, adest, _fmt_date(dof)),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT * FROM flight_plans WHERE callsign=? AND adep=? AND adest=?",
-                (callsign, adep, adest),
-            ).fetchone()
-        return dict(row) if row else None
-
-    def find_flight_plans_by_key(self, callsign: str, adep: str, adest: str, dof: date | None = None) -> list[dict[str, Any]]:
-        """返回所有匹配 (callsign, adep, adest, 可选 dof) 的飞行计划"""
-        conn = self._get_conn()
+        cancelled_clause = " AND message_types NOT LIKE '%CNL%'" if exclude_cancelled else ""
         if dof:
             rows = conn.execute(
-                "SELECT * FROM flight_plans WHERE callsign=? AND adep=? AND adest=? AND dof=?",
+                f"SELECT * FROM flight_plans WHERE callsign=? AND adep=? AND adest=? AND dof=?{cancelled_clause}",
                 (callsign, adep, adest, _fmt_date(dof)),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM flight_plans WHERE callsign=? AND adep=? AND adest=?",
+                f"SELECT * FROM flight_plans WHERE callsign=? AND adep=? AND adest=?{cancelled_clause}",
                 (callsign, adep, adest),
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def find_flight_plan(self, callsign: str, adep: str, adest: str, dof: date | None = None,
+                          exclude_cancelled: bool = False) -> dict[str, Any] | None:
+        """按 callsign+adep+adest+可选 DOF 查找飞行计划（返回第一条）
+        exclude_cancelled=True 时排除已取消计划"""
+        conn = self._get_conn()
+        cancelled_clause = " AND message_types NOT LIKE '%CNL%'" if exclude_cancelled else ""
+        if dof:
+            row = conn.execute(
+                f"SELECT * FROM flight_plans WHERE callsign=? AND adep=? AND adest=? AND dof=?{cancelled_clause}",
+                (callsign, adep, adest, _fmt_date(dof)),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                f"SELECT * FROM flight_plans WHERE callsign=? AND adep=? AND adest=?{cancelled_clause}",
+                (callsign, adep, adest),
+            ).fetchone()
+        return dict(row) if row else None
+
     def find_closest_plan_by_etd(self, callsign: str, adep: str, adest: str, dof: date, target_time: datetime,
-                                 max_diff_seconds: int = MAX_ETD_DIFF_SECONDS) -> dict[str, Any] | None:
+                                 max_diff_seconds: int = MAX_ETD_DIFF_SECONDS,
+                                 exclude_cancelled: bool = False) -> dict[str, Any] | None:
         """找 ETD 离 target_time 最近的计划（DEP 用），差值超过阈值则返回 None"""
         if not target_time:
             return None
-        plans = self.find_flight_plans_by_key(callsign, adep, adest, dof)
+        plans = self.find_flight_plans_by_key(callsign, adep, adest, dof, exclude_cancelled=exclude_cancelled)
         best, _ = _pick_closest_datetime(plans, "etd", target_time, max_diff_seconds)
         return best
 
     def find_closest_plan_by_eta(self, callsign: str, adep: str, adest: str, dof: date, target_time: datetime,
-                                 max_diff_seconds: int = MAX_ETD_DIFF_SECONDS) -> dict[str, Any] | None:
+                                 max_diff_seconds: int = MAX_ETD_DIFF_SECONDS,
+                                 exclude_cancelled: bool = False) -> dict[str, Any] | None:
         """找 ETA（从 eta 字段）离 target_time 最近的计划（ARR 用），差值超过阈值则返回 None"""
         if not target_time:
             return None
-        plans = self.find_flight_plans_by_key(callsign, adep, adest, dof)
+        plans = self.find_flight_plans_by_key(callsign, adep, adest, dof, exclude_cancelled=exclude_cancelled)
         best, _ = _pick_closest_datetime(plans, "eta", target_time, max_diff_seconds)
         return best
 

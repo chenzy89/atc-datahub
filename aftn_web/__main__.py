@@ -164,8 +164,8 @@ def main(argv: list[str] | None = None) -> int:
                         total_received[0], total_parsed[0],
                     )
             elif action == "FPL":
-                # FPL：同 DOF 已存在则 upsert（更新 flight_rule、message_types），否则新建
-                existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, plan.dof)
+                # FPL：同 DOF 已有有效计划则 upsert，已取消则新建
+                existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, plan.dof, exclude_cancelled=True)
                 if existing:
                     db.upsert_flight_plan(plan)
                     total_parsed[0] += 1
@@ -183,14 +183,15 @@ def main(argv: list[str] | None = None) -> int:
                         total_received[0], total_parsed[0],
                     )
             elif action == "DEP":
-                # DEP：在同 DOF 中找 ETD 最接近 ATD 的计划
+                # DEP：在同 DOF 中找 ETD 最接近 ATD 的计划（排除已取消）
                 # 若差值 > 12h 则新建；若 DOF 匹配不到，降级搜索全部 DOF 防跨日
                 _matched_dep = db.find_closest_plan_by_etd(
                     plan.callsign, plan.adep, plan.adest, plan.dof, plan.atd,
+                    exclude_cancelled=True,
                 )
                 if not _matched_dep:
-                    # DOF 匹配不到 → 尝试无视 DOF 找 ETD 最接近的计划（处理跨日 ARR 场景）
-                    all_plans = db.find_flight_plans_by_key(plan.callsign, plan.adep, plan.adest)
+                    # DOF 匹配不到 → 尝试无视 DOF 找 ETD 最接近的计划（排除已取消）
+                    all_plans = db.find_flight_plans_by_key(plan.callsign, plan.adep, plan.adest, exclude_cancelled=True)
                     _matched_dep, _ = _pick_closest_datetime(all_plans, "etd", plan.atd, 12 * 3600)
                     # ETD 仍匹配不到 → 尝试按 ATD 匹配防重复（DEP 先到后 FPL 迟到场景）
                     if not _matched_dep:
@@ -216,14 +217,15 @@ def main(argv: list[str] | None = None) -> int:
                         total_received[0], total_parsed[0],
                     )
             elif action == "ARR":
-                # ARR：在同 DOF 中找 ETA 最接近 ATA 的计划
+                # ARR：在同 DOF 中找 ETA 最接近 ATA 的计划（排除已取消）
                 # 若差值 > 12h 则新建；若 DOF 匹配不到，降级搜索全部 DOF 防跨日
                 _matched_arr = db.find_closest_plan_by_eta(
                     plan.callsign, plan.adep, plan.adest, plan.dof, plan.ata,
+                    exclude_cancelled=True,
                 )
                 if not _matched_arr:
-                    # DOF 匹配不到 → 尝试无视 DOF 找 ETA 最接近的计划（处理跨日落地场景）
-                    all_plans = db.find_flight_plans_by_key(plan.callsign, plan.adep, plan.adest)
+                    # DOF 匹配不到 → 尝试无视 DOF 找 ETA 最接近的计划（排除已取消）
+                    all_plans = db.find_flight_plans_by_key(plan.callsign, plan.adep, plan.adest, exclude_cancelled=True)
                     _matched_arr, _ = _pick_closest_datetime(all_plans, "eta", plan.ata, 12 * 3600)
                     # ETA 仍匹配不到 → 尝试按 ATA 匹配防重复（ARR 先到后 FPL 迟到场景）
                     if not _matched_arr:
