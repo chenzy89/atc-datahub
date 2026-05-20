@@ -614,6 +614,8 @@ class Database:
         source_message_type: str | None = None,
         flight_rule: str | None = None,
         handover_pt: str | None = None,  # 移交点关键词
+        sort_by: str | None = None,  # 排序字段：callsign / etd
+        sort_order: str | None = None,  # asc / desc
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -625,7 +627,16 @@ class Database:
             flight_rule=flight_rule, handover_pt=handover_pt,
         )
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        sql = f"SELECT * FROM flight_plans {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+
+        # 排序
+        valid_sort = {"callsign", "etd"}
+        if sort_by and sort_by in valid_sort:
+            order = "ASC" if sort_order and sort_order.lower() == "asc" else "DESC"
+            order_clause = f"ORDER BY {sort_by} {order}"
+        else:
+            order_clause = "ORDER BY updated_at DESC"
+
+        sql = f"SELECT * FROM flight_plans {where} {order_clause} LIMIT ? OFFSET ?"
         rows = conn.execute(sql, params + [limit, offset]).fetchall()
         return [dict(r) for r in rows]
 

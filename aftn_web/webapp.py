@@ -113,6 +113,8 @@ def create_app(config: AppConfig, db: Database) -> Flask:
         source_message_type = _req_str("source_message_type")
         flight_rule = _req_str("flight_rule")
         handover_pt = _req_str("handover_pt")
+        sort_by = _req_str("sort_by")  # callsign / etd
+        sort_order = _req_str("sort_order")  # asc / desc
         limit = request.args.get("limit", 100, type=int)
         offset = request.args.get("offset", 0, type=int)
 
@@ -126,6 +128,8 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             source_message_type=source_message_type,
             flight_rule=flight_rule,
             handover_pt=handover_pt,
+            sort_by=sort_by,
+            sort_order=sort_order,
             limit=min(limit, 500),
             offset=offset,
         )

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.28</title>
+<title>ATC AFTN WebHub v26.5.29</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -134,7 +134,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.28</span>
+  <span class="badge">v26.5.29</span>
 </div>
 
 <div class="tabs">
@@ -271,8 +271,10 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   <div class="table-wrap">
     <table>
       <thead><tr>
-        <th>航班号</th><th>规则</th><th>移交点</th><th>机型</th><th>DOF</th>
-        <th>起飞地</th><th>ETD</th><th>ATD</th>
+        <th onclick="sortFpl('callsign')" style="cursor:pointer;user-select:none;">航班号<span id="sort-arrow-callsign" style="margin-left:3px;color:var(--accent);"></span></th>
+        <th>规则</th><th>移交点</th><th>机型</th><th>DOF</th>
+        <th>起飞地</th><th onclick="sortFpl('etd')" style="cursor:pointer;user-select:none;">ETD<span id="sort-arrow-etd" style="margin-left:3px;color:var(--accent);"></span></th>
+        <th>ATD</th>
         <th>目的地</th><th>ETA</th><th>ATA</th>
         <th>航路</th><th>报文</th>
       </tr></thead>
@@ -588,7 +590,38 @@ function showFplMsg(callsign, dof) {
 }
 
 // ═══════════════════════════════════════════════════════
-// Flight Plans
+// Flight Plans — 排序
+// ═══════════════════════════════════════════════════════
+var fplSortBy = '';    // 'callsign' | 'etd'
+var fplSortOrder = ''; // 'asc' | 'desc'
+
+function sortFpl(field) {
+  if (fplSortBy === field) {
+    // 同字段切换升降序
+    fplSortOrder = fplSortOrder === 'asc' ? 'desc' : 'asc';
+  } else {
+    fplSortBy = field;
+    fplSortOrder = 'asc';
+  }
+  updateFplSortArrows();
+  fplOff = 0;
+  searchPlans(false);
+}
+
+function updateFplSortArrows() {
+  ['callsign', 'etd'].forEach(function(f) {
+    var el = document.getElementById('sort-arrow-' + f);
+    if (!el) return;
+    if (fplSortBy === f) {
+      el.textContent = fplSortOrder === 'asc' ? '▲' : '▼';
+    } else {
+      el.textContent = '';
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// Flight Plans — 查询
 // ═══════════════════════════════════════════════════════
 function searchPlans(r) {
   if (r !== false) { fplOff = 0; }
@@ -603,6 +636,8 @@ function searchPlans(r) {
   if (fr) { p.set('route', fr); }
   if (fr2) { p.set('flight_rule', fr2); }
   if (hp) { p.set('handover_pt', hp); }
+  if (fplSortBy) { p.set('sort_by', fplSortBy); }
+  if (fplSortOrder) { p.set('sort_order', fplSortOrder); }
 
   document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="13" class="loading">查询中...</td></tr>';
   fetch('/api/flight_plans?' + p.toString()).then(function(r) { return r.json(); }).then(function(d) {
@@ -676,6 +711,8 @@ function goFplPage(d) {
 function resetPlans() {
   document.querySelectorAll('#panel-plans input, #panel-plans select').forEach(function(e) { e.value = ''; });
   fplOff = 0; fplTot = 0;
+  fplSortBy = ''; fplSortOrder = '';
+  updateFplSortArrows();
   document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="13" class="loading">输入条件后按查询</td></tr>';
   document.getElementById('pg-fpl').style.display = 'none';
   document.getElementById('fpl-info').textContent = '';
