@@ -277,10 +277,13 @@ class AftnParser:
         else:
             dof = base_day
 
-        # ATD 始终基于收报日期（base_day），不等于 DOF
-        time_utc = self._combine_day_hhmm(base_day, hhmm)
-        if time_utc > message_time:
-            time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
+        # ATD 优先基于 DOF 日期，无 DOF 时回退到收报日期
+        if dof_utc_day is not None:
+            time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
+        else:
+            time_utc = self._combine_day_hhmm(base_day, hhmm)
+            if time_utc > message_time:
+                time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
 
         plan = FlightPlan(
             callsign=callsign,
