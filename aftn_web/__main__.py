@@ -190,6 +190,9 @@ def main(argv: list[str] | None = None) -> int:
                     # DOF 匹配不到 → 尝试无视 DOF 找 ETD 最接近的计划（处理跨日 ARR 场景）
                     all_plans = db.find_flight_plans_by_key(plan.callsign, plan.adep, plan.adest)
                     _matched_dep, _ = _pick_closest_datetime(all_plans, "etd", plan.atd, 12 * 3600)
+                    # ETD 仍匹配不到 → 尝试按 ATD 匹配防重复（DEP 先到后 FPL 迟到场景）
+                    if not _matched_dep:
+                        _matched_dep, _ = _pick_closest_datetime(all_plans, "atd", plan.atd, 12 * 3600)
                 if _matched_dep:
                     db.update_flight_plan_atd(_matched_dep["id"], plan.atd, ssr=plan.ssr, source_message_type="DEP")
                     total_parsed[0] += 1
@@ -217,6 +220,9 @@ def main(argv: list[str] | None = None) -> int:
                     # DOF 匹配不到 → 尝试无视 DOF 找 ETA 最接近的计划（处理跨日落地场景）
                     all_plans = db.find_flight_plans_by_key(plan.callsign, plan.adep, plan.adest)
                     _matched_arr, _ = _pick_closest_datetime(all_plans, "eta", plan.ata, 12 * 3600)
+                    # ETA 仍匹配不到 → 尝试按 ATA 匹配防重复（ARR 先到后 FPL 迟到场景）
+                    if not _matched_arr:
+                        _matched_arr, _ = _pick_closest_datetime(all_plans, "ata", plan.ata, 12 * 3600)
                 if _matched_arr:
                     db.update_flight_plan_ata(_matched_arr["id"], plan.ata, source_message_type="ARR")
                     total_parsed[0] += 1
