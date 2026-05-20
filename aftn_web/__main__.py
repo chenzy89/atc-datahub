@@ -193,6 +193,9 @@ def main(argv: list[str] | None = None) -> int:
                     # ETD 仍匹配不到 → 尝试按 ATD 匹配防重复（DEP 先到后 FPL 迟到场景）
                     if not _matched_dep:
                         _matched_dep, _ = _pick_closest_datetime(all_plans, "atd", plan.atd, 12 * 3600)
+                    # 所有时间字段匹配均失败但同 key 有计划 → 直接匹配到它（防跨报文类型重复）
+                    if not _matched_dep and all_plans:
+                        _matched_dep = all_plans[0]
                 if _matched_dep:
                     db.update_flight_plan_atd(_matched_dep["id"], plan.atd, ssr=plan.ssr, source_message_type="DEP")
                     total_parsed[0] += 1
@@ -223,6 +226,9 @@ def main(argv: list[str] | None = None) -> int:
                     # ETA 仍匹配不到 → 尝试按 ATA 匹配防重复（ARR 先到后 FPL 迟到场景）
                     if not _matched_arr:
                         _matched_arr, _ = _pick_closest_datetime(all_plans, "ata", plan.ata, 12 * 3600)
+                    # 所有时间字段匹配均失败但同 key 有计划 → 直接匹配到它（防跨报文类型重复）
+                    if not _matched_arr and all_plans:
+                        _matched_arr = all_plans[0]
                 if _matched_arr:
                     db.update_flight_plan_ata(_matched_arr["id"], plan.ata, source_message_type="ARR")
                     total_parsed[0] += 1
