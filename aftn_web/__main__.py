@@ -175,6 +175,16 @@ def main(argv: list[str] | None = None) -> int:
                         total_received[0], total_parsed[0],
                     )
                 else:
+                    # 有同 key 的已取消计划 → 删旧建新（UNIQUE 约束不允许同 etd 存在两条）
+                    cancelled = db.find_flight_plan(
+                        plan.callsign, plan.adep, plan.adest, plan.dof,
+                    )
+                    if cancelled and "CNL" in (cancelled.get("message_types", "") or "").split(","):
+                        db.delete_flight_plan(cancelled["id"])
+                        logger.info(
+                            "[FPL] %s %s->%s DOF=%s 已取消计划 %d，删除重建",
+                            plan.callsign, plan.adep, plan.adest, plan.dof, cancelled["id"],
+                        )
                     db.create_flight_plan(plan)
                     total_parsed[0] += 1
                     logger.info(
