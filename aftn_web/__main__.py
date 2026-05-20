@@ -12,6 +12,8 @@ from threading import Thread
 
 from .config import load_config
 from .database import Database, _fmt_dt, _pick_closest_datetime
+import json
+
 from .parser import AftnParser, split_multi_aftn
 from .receiver import UdpReceiver
 from .webapp import create_app
@@ -84,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         nonlocal total_received, total_parsed
         total_received[0] += 1
 
-        # ── 提取原始文本，检测多报文粘连 ──────────────────────
+        # ── 提取原始文本 ─────────────────────────────────────
         raw_text = ""
         if isinstance(payload, bytes):
             raw_text = payload.decode("utf-8", errors="replace")
@@ -93,7 +95,18 @@ def main(argv: list[str] | None = None) -> int:
         elif isinstance(payload, dict):
             raw_text = str(payload.get("MessageText", payload.get("message_text", payload.get("raw_text", ""))))
 
-        sub_messages = split_multi_aftn(raw_text)
+        # ── 检测多报文粘连 ──────────────────────────────────
+        # 优先判断是否为 JSON 包装格式，若是则解包后对 MessageText 做拆分
+        _unwrapped_text = raw_text
+        if raw_text.strip().startswith("{") and "MessageText" in raw_text:
+            try:
+                _parsed = json.loads(raw_text)
+                _unwrapped_text = _parsed.get("MessageText", raw_text)
+                logger.debug("JSON 报文解包: len=%d", len(_unwrapped_text))
+            except json.JSONDecodeError:
+                pass  # 非标准 JSON，按原始文本处理
+
+        sub_messages = split_multi_aftn(_unwrapped_text)
         if len(sub_messages) > 1:
             logger.info("多报文粘连: %d 份子报文 <- %s:%d", len(sub_messages), addr, port)
             _iter_payloads: list = sub_messages
