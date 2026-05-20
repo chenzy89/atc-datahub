@@ -12,7 +12,7 @@ from threading import Thread
 
 from .config import load_config
 from .database import Database, _fmt_dt, _pick_closest_datetime
-from .parser import AftnParser
+from .parser import AftnParser, split_multi_aftn
 from .receiver import UdpReceiver
 from .webapp import create_app
 
@@ -83,36 +83,54 @@ def main(argv: list[str] | None = None) -> int:
     def on_aftn_message(payload: bytes, addr: str, port: int, received_at: datetime) -> None:
         nonlocal total_received, total_parsed
         total_received[0] += 1
-        try:
-            result = parser_aftn.parse(payload, received_at=received_at)
-        except Exception:
-            logger.exception("parse error from %s:%d", addr, port)
-            return
 
-        # LAM 报文：不记录、不解析
-        if result.message.message_type == "LAM":
-            logger.debug("AFTN LAM ignored: not recorded")
-            return
+        # ── 提取原始文本，检测多报文粘连 ──────────────────────
+        raw_text = ""
+        if isinstance(payload, bytes):
+            raw_text = payload.decode("utf-8", errors="replace")
+        elif isinstance(payload, str):
+            raw_text = payload
+        elif isinstance(payload, dict):
+            raw_text = str(payload.get("MessageText", payload.get("message_text", payload.get("raw_text", ""))))
 
-        # 保存原始报文
-        db.save_aftn_message(result.message)
+        sub_messages = split_multi_aftn(raw_text)
+        if len(sub_messages) > 1:
+            logger.info("多报文粘连: %d 份子报文 <- %s:%d", len(sub_messages), addr, port)
+            _iter_payloads: list = sub_messages
+        else:
+            _iter_payloads = [payload]
 
-        # EST：只记录报文，不解析、不生成 FlightPlan、不更新飞行计划
-        if result.message.message_type == "EST":
-            total_parsed[0] += 1
-            logger.info(
-                "[EST] recorded only (total: recv=%d, parsed=%d)",
-                total_received[0], total_parsed[0],
-            )
-            return
+        for _sub_payload in _iter_payloads:
+            try:
+                result = parser_aftn.parse(_sub_payload, received_at=received_at)
+            except Exception:
+                logger.exception("parse error from %s:%d", addr, port)
+                continue
 
-        if not result.accepted:
-            if result.errors:
-                logger.debug("AFTN ignored: %s", "; ".join(result.errors))
-            return
+            # LAM 报文：不记录、不解析
+            if result.message.message_type == "LAM":
+                logger.debug("AFTN LAM ignored: not recorded")
+                continue
 
-        plan = result.flight_plan
-        action = result.action
+            # 保存原始报文
+            db.save_aftn_message(result.message)
+
+            # EST：只记录报文，不解析、不生成 FlightPlan、不更新飞行计划
+            if result.message.message_type == "EST":
+                total_parsed[0] += 1
+                logger.info(
+                    "[EST] recorded only (total: recv=%d, parsed=%d)",
+                    total_received[0], total_parsed[0],
+                )
+                continue
+
+            if not result.accepted:
+                if result.errors:
+                    logger.debug("AFTN ignored: %s", "; ".join(result.errors))
+                continue
+
+            plan = result.flight_plan
+            action = result.action
 
         if action == "CNL":
             # CNL：查找并删除关联的飞行计划

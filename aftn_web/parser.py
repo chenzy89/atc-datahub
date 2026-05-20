@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
@@ -12,6 +13,23 @@ PARSED_TYPES = {"FPL", "DEP", "ARR", "DLA", "CNL", "CHG"}
 LABEL_ONLY_TYPES = {"AOC", "ACP", "TOC", "EST", "HQ", "METAR"}
 SKIP_TYPES = {"LAM"}
 RECOGNIZED_TYPES = PARSED_TYPES | LABEL_ONLY_TYPES | SKIP_TYPES
+
+
+# RDX4位数字+空格+6位时间+空格+FF/GG → 子报文起始标记
+_RE_MULTI_MSG = re.compile(r'(?=RDX\d{4} \d{6} (?:FF|GG) )')
+
+
+def split_multi_aftn(raw_text: str) -> list[str]:
+    """将可能拼接了多份 AFTN 报文的 raw_text 拆分为单条报文列表。
+    依据：每条 AFTN 报以 RDX+4位流水号 + 时间 + FF/GG 开头。
+    """
+    if not raw_text:
+        return []
+    parts = _RE_MULTI_MSG.split(raw_text.strip())
+    parts = [p.strip() for p in parts if p.strip()]
+    if len(parts) <= 1:
+        return parts  # 单条报文
+    return parts
 
 
 def _extract_sender(raw_text: str) -> str:
