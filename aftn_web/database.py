@@ -566,6 +566,35 @@ class Database:
         conn.commit()
         return True
 
+    def mark_cancelled(self, callsign: str, adep: str, adest: str, dof: date | None) -> bool:
+        """CNL：在已有计划的 message_types 中添加 CNL 标签"""
+        conn = self._get_conn()
+        cs = callsign.strip().upper()
+        ad = adep.strip().upper()[:4]
+        ae = adest.strip().upper()[:4]
+
+        if dof:
+            row = conn.execute(
+                "SELECT id, message_types FROM flight_plans WHERE callsign=? AND adep=? AND adest=? AND dof=?",
+                (cs, ad, ae, _fmt_date(dof)),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id, message_types FROM flight_plans WHERE callsign=? AND adep=? AND adest=?",
+                (cs, ad, ae),
+            ).fetchone()
+        if not row:
+            return False
+
+        new_types = self._merge_message_type(row["message_types"], "CNL")
+        now = _fmt_dt(datetime.utcnow())
+        conn.execute(
+            "UPDATE flight_plans SET message_types=?, updated_at=? WHERE id=?",
+            (new_types, now, row["id"]),
+        )
+        conn.commit()
+        return True
+
     def query_flight_plans(
         self,
         callsign: str | None = None,

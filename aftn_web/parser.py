@@ -433,7 +433,7 @@ class AftnParser:
         return plan
 
     def _parse_cnl(self, core_text: str, message_time: datetime) -> FlightPlan:
-        """CNL 取消报：提取航班号、起降机场（无 SSR 字段），数据库层按 key 删除。"""
+        """CNL 取消报：提取航班号、起降机场、DOF。"""
         fields = self._split_fields(core_text)
         if len(fields) < 4:
             raise AftnParseError(f"CNL 报文段数不足: {len(fields)}")
@@ -444,11 +444,26 @@ class AftnParser:
         callsign = callsign_raw.split("/A")[0].strip()
         departure = fields[2].strip().upper()
         arrival = fields[3].strip().upper()
+
+        # 提取 DOF
+        dof: Optional[date] = None
+        for field in fields:
+            marker = field.upper().find("DOF/")
+            if marker >= 0:
+                digits = field[marker + 4: marker + 10]
+                if len(digits) == 6 and digits.isdigit():
+                    try:
+                        dof = datetime.strptime("20" + digits, "%Y%m%d").date()
+                    except ValueError:
+                        pass
+                break
+
         return FlightPlan(
             callsign=callsign,
             ssr="",
             adep=departure[:4] if len(departure) >= 4 else departure,
             adest=arrival[:4] if len(arrival) >= 4 else arrival,
+            dof=dof,
         )
 
 

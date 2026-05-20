@@ -146,13 +146,15 @@ def main(argv: list[str] | None = None) -> int:
             action = result.action
 
             if action == "CNL":
-                # CNL：查找并删除关联的飞行计划
-                deleted = db.delete_by_key(plan.callsign, plan.adep, plan.adest)
+                # CNL：标记取消，不删除
+                marked = db.mark_cancelled(
+                    plan.callsign, plan.adep, plan.adest, plan.dof,
+                )
                 total_parsed[0] += 1
-                if deleted:
+                if marked:
                     logger.info(
-                        "[CNL] %s %s->%s 已取消删除 (total: recv=%d, parsed=%d)",
-                        plan.callsign, plan.adep, plan.adest,
+                        "[CNL] %s %s->%s DOF=%s 已标记取消 (total: recv=%d, parsed=%d)",
+                        plan.callsign, plan.adep, plan.adest, plan.dof or "?",
                         total_received[0], total_parsed[0],
                     )
                 else:
