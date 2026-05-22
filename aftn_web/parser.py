@@ -277,13 +277,12 @@ class AftnParser:
         else:
             dof = base_day
 
-        # ATD 优先基于 DOF 日期，无 DOF 时回退到收报日期
-        if dof_utc_day is not None:
-            time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
-        else:
-            time_utc = self._combine_day_hhmm(base_day, hhmm)
-            if time_utc > message_time:
-                time_utc = self._combine_day_hhmm(base_day - timedelta(days=1), hhmm)
+        # ATD 日期推断：优先用收报日期拼起飞时间。
+        # 若拼出的时间比当前（message_time）大 23h+（跨午夜），则用 DOF/前一日回退。
+        time_utc = self._combine_day_hhmm(base_day, hhmm)
+        if (time_utc - message_time).total_seconds() / 3600 > 23:
+            use_day = dof_utc_day if dof_utc_day is not None else base_day - timedelta(days=1)
+            time_utc = self._combine_day_hhmm(use_day, hhmm)
 
         plan = FlightPlan(
             callsign=callsign,
@@ -418,10 +417,12 @@ class AftnParser:
         else:
             dof = base_day
 
-        # ATA 始终基于收报日期（base_day），不等于 DOF
+        # ATA 日期推断：同 DEP/ATD 逻辑。
+        #   优先用收报日期，若到达时间比当前时间大 23h+ 则回退到 DOF/前一日。
         ata_utc = self._combine_day_hhmm(base_day, ata_hhmm)
-        if ata_utc > message_time:
-            ata_utc = self._combine_day_hhmm(base_day - timedelta(days=1), ata_hhmm)
+        if (ata_utc - message_time).total_seconds() / 3600 > 23:
+            use_day = dof_utc_day if dof_utc_day is not None else base_day - timedelta(days=1)
+            ata_utc = self._combine_day_hhmm(use_day, ata_hhmm)
 
         plan = FlightPlan(
             callsign=callsign,

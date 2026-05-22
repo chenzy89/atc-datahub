@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atc-aftn-web"
-version = "26.5.19"
+version = "26.5.22"
 description = "ATC AFTN WebHub — AFTN 报文 UDP 接收、解析、存储和 WEB 查询"
 readme = "README.md"
 requires-python = ">=3.8"
