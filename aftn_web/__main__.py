@@ -84,12 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         def on_radar_data(parsed: dict, addr: str, port: int, received_at: datetime) -> None:
             callsign = parsed.get("callsign", "").strip()
             runway = parsed.get("runway", "").strip()
-            sid = parsed.get("sid", "").strip()
-            star = parsed.get("star", "").strip()
-            # 组合飞行程序：有 SID 就填 SID，有 STAR 就填 STAR，两者均有则用 / 分隔
-            flight_procedure = sid or star
-            if sid and star:
-                flight_procedure = f"{sid}/{star}"
+            flight_procedure = parsed.get("flight_procedure", "").strip()
             ssr = parsed.get("ssr", "").strip()
             if not callsign and not ssr:
                 return
