@@ -29,9 +29,18 @@ class WebConfig:
 
 
 @dataclass
+class RadarEndpointConfig:
+    multicast_group: str = "228.28.28.28"
+    port: int = 8107
+    interface_ip: str = "0.0.0.0"
+    enabled: bool = False
+
+
+@dataclass
 class AppConfig:
     system_name: str = "ATC AFTN WebHub"
     aftn: EndpointConfig = field(default_factory=EndpointConfig)
+    radar: RadarEndpointConfig = field(default_factory=RadarEndpointConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     web: WebConfig = field(default_factory=WebConfig)
     config_file: Path | None = None
@@ -53,6 +62,7 @@ def load_config(config_path: str | Path) -> AppConfig:
 
 def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
     net = raw.get("network", {}).get("aftn", {})
+    radar_raw = raw.get("network", {}).get("radar", {})
     db = raw.get("database", {})
     web = raw.get("web", {})
 
@@ -63,6 +73,12 @@ def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
             port=int(net.get("port", 31031)),
             multicast_group=net.get("multicast_group"),
             interface_ip=net.get("interface_ip", "0.0.0.0"),
+        ),
+        radar=RadarEndpointConfig(
+            multicast_group=radar_raw.get("multicast_group", "228.28.28.28"),
+            port=int(radar_raw.get("port", 8107)),
+            interface_ip=radar_raw.get("interface_ip", "0.0.0.0"),
+            enabled=bool(radar_raw.get("enabled", False)),
         ),
         database=DatabaseConfig(
             path=db.get("path", "./data/aftn.db"),

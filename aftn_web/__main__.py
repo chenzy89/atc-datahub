@@ -12,6 +12,7 @@ from threading import Thread
 
 from .config import load_config
 from .database import Database, _fmt_dt, _pick_closest_datetime
+from .radar_receiver import RadarReceiver, parse_cat062_frame
 import json
 
 from .parser import AftnParser, split_multi_aftn
@@ -77,6 +78,36 @@ def main(argv: list[str] | None = None) -> int:
 
     # AFTN 解析器
     parser_aftn = AftnParser()
+
+    # 雷达 CAT062 接收器（可选）
+    if config.radar.enabled:
+        def on_radar_data(parsed: dict, addr: str, port: int, received_at: datetime) -> None:
+            callsign = parsed.get("callsign", "").strip()
+            runway = parsed.get("runway", "").strip()
+            sidstar = parsed.get("sidstar", "").strip()
+            if not callsign and not parsed.get("ssr_str", ""):
+                return
+            if not runway and not sidstar:
+                return
+            if callsign:
+                db.update_radar_data(callsign, runway, sidstar)
+            elif parsed.get("ssr_str"):
+                db.update_radar_data_by_ssr(parsed["ssr_str"], runway, sidstar)
+
+        radar_receiver = RadarReceiver(
+            multicast_group=config.radar.multicast_group,
+            port=config.radar.port,
+            interface_ip=config.radar.interface_ip,
+            on_radar_data=on_radar_data,
+        )
+        radar_receiver.start()
+        logger.info(
+            "radar receiver: %s:%d (enabled)",
+            config.radar.multicast_group, config.radar.port,
+        )
+    else:
+        radar_receiver = None
+        logger.info("radar receiver: disabled")
 
     # UDP 接收器
     total_received = [0]
@@ -346,9 +377,11 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"\n{'='*50}")
     print(f"  {config.system_name}")
-    print(f"  UDP 接收: {config.aftn.bind_host}:{config.aftn.port}")
+    print(f"  AFTN 接收: {config.aftn.bind_host}:{config.aftn.port}")
     if config.aftn.multicast_group:
-        print(f"  组播组:   {config.aftn.multicast_group}")
+        print(f"  AFTN 组播: {config.aftn.multicast_group}")
+    if config.radar.enabled:
+        print(f"  雷达接收: {config.radar.multicast_group}:{config.radar.port}")
     print(f"  Web 页面: http://{web_host}:{web_port}")
     print(f"  数据库:   {config.db_path}")
     print(f"{'='*50}\n")
@@ -362,6 +395,8 @@ def main(argv: list[str] | None = None) -> int:
         pass
     finally:
         receiver.stop()
+        if radar_receiver:
+            radar_receiver.stop()
         logger.info("shutdown complete")
 
     return 0

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from datetime import date, datetime
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from .handover import get_resolver
+
+logger = logging.getLogger("aftn_web.database")
 from .models import AftnMessage, FlightPlan
 
 # 匹配阈值：DEP/ARR 找 ETD/ETA 最近计划时的最大允许差值（秒）
@@ -58,6 +61,8 @@ class Database:
                 ata TEXT,
                 route TEXT NOT NULL DEFAULT '',
                 handover_pt TEXT NOT NULL DEFAULT '',
+                runway TEXT NOT NULL DEFAULT '',
+                flight_procedure TEXT NOT NULL DEFAULT '',
                 source_message_type TEXT NOT NULL DEFAULT '',
                 last_message_time TEXT,
                 raw_message_text TEXT NOT NULL DEFAULT '',
@@ -86,6 +91,18 @@ class Database:
         # 迁移：新增 handover_pt 列（v26.5.15），兼容新旧数据库
         try:
             conn.execute("ALTER TABLE flight_plans ADD COLUMN handover_pt TEXT NOT NULL DEFAULT ''")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+        # 迁移：新增 runway 列（v26.5.25），来自雷达 CAT062
+        try:
+            conn.execute("ALTER TABLE flight_plans ADD COLUMN runway TEXT NOT NULL DEFAULT ''")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # 列已存在
+        # 迁移：新增 flight_procedure 列（v26.5.25），来自雷达 CAT062
+        try:
+            conn.execute("ALTER TABLE flight_plans ADD COLUMN flight_procedure TEXT NOT NULL DEFAULT ''")
             conn.commit()
         except sqlite3.OperationalError:
             pass  # 列已存在
@@ -406,10 +423,10 @@ class Database:
             conn.execute(
                 """INSERT INTO flight_plans
                    (callsign, ssr, aircraft_type, dof, adep, etd, atd,
-                    adest, eta, ata, route, handover_pt,
+                    adest, eta, ata, runway, flight_procedure, route, handover_pt,
                     source_message_type, last_message_time, raw_message_text,
                     flight_rule, message_types, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     plan.callsign, plan.ssr, plan.aircraft_type,
                     _fmt_date(plan.dof), plan.adep,
@@ -417,6 +434,7 @@ class Database:
                     plan.adest,
                     _fmt_dt(plan.eta), _fmt_dt(plan.ata),
                     plan.route, handover_pt,
+                    plan.runway, plan.flight_procedure,
                     plan.source_message_type,
                     _fmt_dt(plan.last_message_time),
                     plan.raw_message_text or "",
@@ -519,6 +537,44 @@ class Database:
         )
         conn.commit()
         return cur.rowcount > 0
+
+    def update_radar_data(self, callsign: str, runway: str, flight_procedure: str) -> int:
+        """按航班号更新使用跑道和飞行程序（来自雷达 CAT062）
+        返回更新的记录数
+        """
+        if not callsign:
+            return 0
+        conn = self._get_conn()
+        now = _fmt_dt(datetime.utcnow())
+        cur = conn.execute(
+            "UPDATE flight_plans SET runway=?, flight_procedure=?, updated_at=? "
+            "WHERE callsign=? AND (runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')",
+            (runway, flight_procedure, now, callsign.upper(), runway, flight_procedure),
+        )
+        conn.commit()
+        affected = cur.rowcount
+        if affected > 0:
+            logger.info("[RADAR] %s 更新 跑道=%s 程序=%s (影响 %d 条)",
+                        callsign, runway or '-', flight_procedure or '-', affected)
+        return affected
+
+    def update_radar_data_by_ssr(self, ssr: str, runway: str, flight_procedure: str) -> int:
+        """按 SSR 码更新使用跑道和飞行程序（来自雷达 CAT062，无呼号时备用）"""
+        if not ssr:
+            return 0
+        conn = self._get_conn()
+        now = _fmt_dt(datetime.utcnow())
+        cur = conn.execute(
+            "UPDATE flight_plans SET runway=?, flight_procedure=?, updated_at=? "
+            "WHERE ssr=? AND (runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')",
+            (runway, flight_procedure, now, ssr, runway, flight_procedure),
+        )
+        conn.commit()
+        affected = cur.rowcount
+        if affected > 0:
+            logger.info("[RADAR] SSR=%s 更新 跑道=%s 程序=%s (影响 %d 条)",
+                        ssr, runway or '-', flight_procedure or '-', affected)
+        return affected
 
     def update_chg_route(self, callsign: str, adep: str, adest: str,
                           dof: date, route: str) -> bool:
@@ -783,16 +839,17 @@ class Database:
         conn.execute(
             """INSERT INTO flight_plans
                (callsign, ssr, aircraft_type, dof, adep, etd, atd,
-                adest, eta, ata, route, handover_pt, source_message_type,
+                adest, eta, ata, runway, flight_procedure, route, handover_pt, source_message_type,
                 last_message_time, raw_message_text,
                 flight_rule, message_types, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 plan.callsign, plan.ssr, plan.aircraft_type,
                 _fmt_date(plan.dof), plan.adep,
                 _fmt_dt(plan.etd), _fmt_dt(plan.atd),
                 plan.adest,
                 _fmt_dt(plan.eta), _fmt_dt(plan.ata),
+                plan.runway, plan.flight_procedure,
                 plan.route, handover_pt,
                 plan.source_message_type or "MANUAL",
                 _fmt_dt(plan.last_message_time),
@@ -819,6 +876,7 @@ class Database:
             """UPDATE flight_plans SET
                callsign=?, ssr=?, aircraft_type=?, dof=?, adep=?,
                etd=?, atd=?, adest=?, eta=?, ata=?, route=?, handover_pt=?,
+               runway=?, flight_procedure=?,
                source_message_type=?, last_message_time=?,
                raw_message_text=?, flight_rule=?, message_types=?, updated_at=?
                WHERE id=?""",
@@ -829,6 +887,7 @@ class Database:
                 plan.adest,
                 _fmt_dt(plan.eta), _fmt_dt(plan.ata),
                 plan.route, handover_pt,
+                plan.runway, plan.flight_procedure,
                 plan.source_message_type or "MANUAL",
                 _fmt_dt(plan.last_message_time),
                 plan.raw_message_text or "",

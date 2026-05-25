@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.22</title>
+<title>ATC AFTN WebHub v26.5.25</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -134,7 +134,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.22</span>
+  <span class="badge">v26.5.25</span>
 </div>
 
 <div class="tabs">
@@ -272,13 +272,13 @@ select option { background: var(--bg-card); color: var(--text-primary); }
     <table>
       <thead><tr>
         <th onclick="sortFpl('callsign')" style="cursor:pointer;user-select:none;">航班号<span id="sort-arrow-callsign" style="margin-left:3px;color:var(--accent);"></span></th>
-        <th>规则</th><th>移交点</th><th>机型</th><th>DOF</th>
+        <th>规则</th><th>移交点</th><th>机型</th><th>DOF</th><th>跑道</th><th>飞行程序</th>
         <th>起飞地</th><th onclick="sortFpl('etd')" style="cursor:pointer;user-select:none;">ETD<span id="sort-arrow-etd" style="margin-left:3px;color:var(--accent);"></span></th>
         <th>ATD</th>
         <th>目的地</th><th>ETA</th><th>ATA</th>
         <th>航路</th><th>报文</th>
       </tr></thead>
-      <tbody id="tbl-fpl"><tr><td colspan="12" class="loading">输入条件后按查询</td></tr></tbody>
+      <tbody id="tbl-fpl"><tr><td colspan="15" class="loading">输入条件后按查询</td></tr></tbody>
     </table>
   </div>
 
@@ -639,7 +639,7 @@ function searchPlans(r) {
   if (fplSortBy) { p.set('sort_by', fplSortBy); }
   if (fplSortOrder) { p.set('sort_order', fplSortOrder); }
 
-  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="13" class="loading">查询中...</td></tr>';
+  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="15" class="loading">查询中...</td></tr>';
   fetch('/api/flight_plans?' + p.toString()).then(function(r) { return r.json(); }).then(function(d) {
     fplTot = d.total;
     renderPlans(d.records);
@@ -647,20 +647,24 @@ function searchPlans(r) {
     if (pi) { pi.textContent = '共 ' + d.total + ' 条'; }
     pgFpl();
   }).catch(function(e) {
-    document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="12" class="error-msg">查询失败: ' + e.message + '</td></tr>';
+    document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="15" class="error-msg">查询失败: ' + e.message + '</td></tr>';
   });
 }
 
 function renderPlans(rs) {
   var tb = document.getElementById('tbl-fpl');
   if (!rs || rs.length === 0) {
-    tb.innerHTML = '<tr><td colspan="13" class="text-muted text-center" style="padding:30px">没有匹配的飞行计划</td></tr>';
+    tb.innerHTML = '<tr><td colspan="15" class="text-muted text-center" style="padding:30px">没有匹配的飞行计划</td></tr>';
     return;
   }
   var h = '';
   for (var i = 0; i < rs.length; i++) {
     var r = rs[i];
-    var fd = r.dof ? r.dof.slice(0,10) : '-';
+    var fd = '-';
+    if (r.dof) {
+      var dp = r.dof.split('-');
+      fd = (dp[0]||'').slice(2) + (dp[1]||'') + (dp[2]||'');
+    }
     var ft = function(v) { return v ? v.slice(5,16) : '-'; };
     var rt = r.route ? (r.route.length > 30 ? r.route.slice(0,30) + '...' : r.route) : '-';
     var msgTypes = r.message_types ? r.message_types.split(',') : [];
@@ -669,7 +673,8 @@ function renderPlans(rs) {
       var mt = msgTypes[j].trim();
       if (!mt) continue;
       var mtc = 'tag-' + mt;
-      msgTagsHtml += '<span class="tag ' + mtc + '" style="cursor:pointer;margin-right:3px;" onclick="showFplMsg(\'' + esc(r.callsign||'') + '\',\'' + (r.dof||'').slice(0,10) + '\')" title="查看该计划的两天内所有报文">' + mt + '</span>';
+      var dofStr = r.dof ? r.dof.slice(0,10) : '';
+      msgTagsHtml += '<span class="tag ' + mtc + '" style="cursor:pointer;margin-right:3px;" onclick="showFplMsg(\'' + esc(r.callsign||'') + '\',\'' + dofStr + '\')" title="查看该计划的两天内所有报文">' + mt + '</span>';
     }
     h += '<tr>' +
       '<td class="callsign">' + (r.callsign||'-') + '</td>' +
@@ -677,6 +682,8 @@ function renderPlans(rs) {
       '<td>' + (r.handover_pt||'-') + '</td>' +
       '<td>' + (r.aircraft_type||'-') + '</td>' +
       '<td>' + fd + '</td>' +
+      '<td>' + (r.runway||'-') + '</td>' +
+      '<td>' + (r.flight_procedure||'-') + '</td>' +
       '<td class="airport">' + (r.adep||'-') + '</td>' +
       '<td>' + ft(r.etd) + '</td>' +
       '<td>' + ft(r.atd) + '</td>' +
@@ -713,7 +720,7 @@ function resetPlans() {
   fplOff = 0; fplTot = 0;
   fplSortBy = ''; fplSortOrder = '';
   updateFplSortArrows();
-  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="13" class="loading">输入条件后按查询</td></tr>';
+  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="15" class="loading">输入条件后按查询</td></tr>';
   document.getElementById('pg-fpl').style.display = 'none';
   document.getElementById('fpl-info').textContent = '';
 }

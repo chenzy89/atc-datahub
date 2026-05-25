@@ -44,6 +44,8 @@ class FlightPlan:
     adest: str = ""
     eta: datetime | None = None
     ata: datetime | None = None
+    runway: str = ""          # 使用跑道（来自雷达 CAT062）
+    flight_procedure: str = "" # 飞行程序 SID/STAR（来自雷达 CAT062）
     route: str = ""
     handover_pt: str = ""   # 移交点，从航路自动解析
     source_message_type: str = ""
@@ -67,6 +69,8 @@ class FlightPlan:
             "adest": self.adest,
             "eta": self.eta.isoformat() if self.eta else None,
             "ata": self.ata.isoformat() if self.ata else None,
+            "runway": self.runway,
+            "flight_procedure": self.flight_procedure,
             "route": self.route,
             "handover_pt": self.handover_pt,
             "source_message_type": self.source_message_type,
