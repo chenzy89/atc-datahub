@@ -60,6 +60,8 @@ def parse_datagram(payload: bytes) -> list[dict[str, Any]]:
             "flight_procedure": flight_procedure,
             "ssr": (t.ssr or "").strip(),
             "track_number": t.track_number,
+            "adep": (t.adep or "").strip().upper(),
+            "adest": (t.adst or "").strip().upper(),
         })
 
     return records

@@ -86,12 +86,14 @@ def main(argv: list[str] | None = None) -> int:
             runway = parsed.get("runway", "").strip()
             flight_procedure = parsed.get("flight_procedure", "").strip()
             ssr = parsed.get("ssr", "").strip()
+            adep = parsed.get("adep", "").strip()
+            adest = parsed.get("adest", "").strip()
             if not callsign and not ssr:
                 return
             if not runway and not flight_procedure:
                 return
             if callsign:
-                db.update_radar_data(callsign, runway, flight_procedure)
+                db.update_radar_data(callsign, runway, flight_procedure, adep=adep, adest=adest)
             elif ssr:
                 db.update_radar_data_by_ssr(ssr, runway, flight_procedure)
 

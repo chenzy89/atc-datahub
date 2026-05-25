@@ -538,11 +538,35 @@ class Database:
         conn.commit()
         return cur.rowcount > 0
 
-    def _match_radar_record(self, callsign: str) -> dict[str, Any] | None:
-        """按呼号匹配最合适的飞行计划记录（优先今日 DOF，其次最新报文时间）"""
+    def _match_radar_record(self, callsign: str, adep: str = "", adest: str = "") -> dict[str, Any] | None:
+        """匹配最合适的飞行计划记录
+
+        优先顺序：
+        1. callsign + adep + adest + 今日 DOF（CAT062 提供机场时最精确）
+        2. callsign + 今日 DOF
+        3. callsign + 最近报文时间
+        """
         conn = self._get_conn()
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
-        # 优先查今天 DOF 的记录
+
+        if adep and adest:
+            row = conn.execute(
+                "SELECT id, dof, last_message_time, adep, adest FROM flight_plans "
+                "WHERE callsign=? AND adep=? AND adest=? AND dof=? ORDER BY updated_at DESC LIMIT 1",
+                (callsign, adep, adest, today_str),
+            ).fetchone()
+            if row:
+                return dict(row)
+        elif adep:
+            row = conn.execute(
+                "SELECT id, dof, last_message_time, adep, adest FROM flight_plans "
+                "WHERE callsign=? AND adep=? AND dof=? ORDER BY updated_at DESC LIMIT 1",
+                (callsign, adep, today_str),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+        # 无机场信息或机场匹配不到 → 降级到呼号+今日 DOF
         row = conn.execute(
             "SELECT id, dof, last_message_time FROM flight_plans "
             "WHERE callsign=? AND dof=? ORDER BY updated_at DESC LIMIT 1",
@@ -550,7 +574,8 @@ class Database:
         ).fetchone()
         if row:
             return dict(row)
-        # 无今天 DOF → 找最近报文时间的记录
+
+        # 今日无计划 → 找最近活跃的记录
         row = conn.execute(
             "SELECT id, dof, last_message_time FROM flight_plans "
             "WHERE callsign=? ORDER BY last_message_time DESC, updated_at DESC LIMIT 1",
@@ -558,14 +583,20 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
-    def update_radar_data(self, callsign: str, runway: str, flight_procedure: str) -> int:
+    def update_radar_data(self, callsign: str, runway: str, flight_procedure: str,
+                           adep: str = "", adest: str = "") -> int:
         """按航班号更新使用跑道和飞行程序（来自雷达 CAT062）
-        优先匹配今日 DOF 的记录，避免批量更新历史计划。
+
+        优先匹配规则：
+        - 若 CAT062 提供起降地 → callsign + adep + adest + 今日 DOF
+        - 否则 → callsign + 今日 DOF 降级匹配
+        避免批量更新历史计划。
+
         返回更新的记录数
         """
         if not callsign:
             return 0
-        match = self._match_radar_record(callsign)
+        match = self._match_radar_record(callsign, adep, adest)
         if match is None:
             return 0
         conn = self._get_conn()
@@ -578,8 +609,10 @@ class Database:
         conn.commit()
         affected = cur.rowcount
         if affected > 0:
-            logger.info("[RADAR] %s (id=%d) 更新 跑道=%s 程序=%s",
-                        callsign, match["id"], runway or '-', flight_procedure or '-')
+            loc = f"{adep}->{adest}" if adep and adest else ""
+            logger.info("[RADAR] %s%s (id=%d) 更新 跑道=%s 程序=%s",
+                        callsign, f" {loc}" if loc else "",
+                        match["id"], runway or '-', flight_procedure or '-')
         return affected
 
     def update_radar_data_by_ssr(self, ssr: str, runway: str, flight_procedure: str) -> int:
