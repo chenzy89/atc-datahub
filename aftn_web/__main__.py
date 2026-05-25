@@ -12,7 +12,7 @@ from threading import Thread
 
 from .config import load_config
 from .database import Database, _fmt_dt, _pick_closest_datetime
-from .radar_receiver import RadarReceiver, parse_cat062_frame
+from .radar_receiver import RadarReceiver, parse_datagram
 import json
 
 from .parser import AftnParser, split_multi_aftn
@@ -84,15 +84,21 @@ def main(argv: list[str] | None = None) -> int:
         def on_radar_data(parsed: dict, addr: str, port: int, received_at: datetime) -> None:
             callsign = parsed.get("callsign", "").strip()
             runway = parsed.get("runway", "").strip()
-            sidstar = parsed.get("sidstar", "").strip()
-            if not callsign and not parsed.get("ssr_str", ""):
+            sid = parsed.get("sid", "").strip()
+            star = parsed.get("star", "").strip()
+            # 组合飞行程序：有 SID 就填 SID，有 STAR 就填 STAR，两者均有则用 / 分隔
+            flight_procedure = sid or star
+            if sid and star:
+                flight_procedure = f"{sid}/{star}"
+            ssr = parsed.get("ssr", "").strip()
+            if not callsign and not ssr:
                 return
-            if not runway and not sidstar:
+            if not runway and not flight_procedure:
                 return
             if callsign:
-                db.update_radar_data(callsign, runway, sidstar)
-            elif parsed.get("ssr_str"):
-                db.update_radar_data_by_ssr(parsed["ssr_str"], runway, sidstar)
+                db.update_radar_data(callsign, runway, flight_procedure)
+            elif ssr:
+                db.update_radar_data_by_ssr(ssr, runway, flight_procedure)
 
         radar_receiver = RadarReceiver(
             multicast_group=config.radar.multicast_group,

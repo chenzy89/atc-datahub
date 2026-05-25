@@ -3,12 +3,14 @@
 监听组播 228.28.28.28:8107，接收 ASTERIX CAT062 格式雷达数据报文，
 解析航班呼号、使用跑道、飞行程序，并更新到飞行计划表。
 
+解析逻辑参考: ATC_Display/atc_display/cat062.py (工作验证版)
 CAT062 标准参考：EUROCONTROL ASTERIX Category 062 (Track Messages)
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import socket
 import struct
 import threading
@@ -17,242 +19,417 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger("aftn_web.radar")
 
-# ── CAT062 FSPEC 字段定义 ──────────────────────────────────────
-# (fspec_byte_idx, bit_position_in_byte): (field_name, field_length_or_None_means_variable)
-# 位序：bit 7 = first field, bit 0 = extension flag (在 FSPEC byte 中)
-_CAT062_FIELDS: dict[tuple[int, int], tuple[str, int]] = {
-    # FSPEC byte 0
-    (0, 7): ("I062_010", 2),    # Data Source Identifier (SAC+SIC)
-    (0, 6): ("I062_015", 1),    # Service Management
-    (0, 5): ("I062_040", 0),    # Track Status (variable, special)
-    (0, 4): ("I062_070", 3),    # Mode-3/A Code (2 bytes) actually +1 for V=1
-    (0, 3): ("I062_105", 2),    # Track Number
-    (0, 2): ("I062_100", 1),    # Emergency
-    (0, 1): ("I062_200", 4),    # Calculated Track Position (cartesian)
-    (0, 0): ("_EXT", 0),        # Extension
 
-    # FSPEC byte 1
-    (1, 7): ("I062_210", 1),    # Calculated Ground Speed (1 byte)
-    (1, 6): ("I062_220", 2),    # Track Angle (2 bytes)
-    (1, 5): ("I062_230", 1),    # Track Angle Rate (1 byte)
-    (1, 4): ("I062_290", 1),    # Mode-3/A Code Confidence
-    (1, 3): ("I062_300", 0),    # Calculated Track Position Polar
-    (1, 2): ("I062_340", 0),    # Measured Radar Position (variable)
-    (1, 1): ("I062_360", 0),    # Track Quality (variable)
-    (1, 0): ("_EXT", 0),
+class _Cursor:
+    """字节流读取游标"""
+    def __init__(self, data: bytes, start: int, end: int):
+        self.data = data
+        self.idx = start
+        self.end = end
 
-    # FSPEC byte 2
-    (2, 7): ("I062_380", 0),    # Flight Plan Related Data (variable, special)
-    (2, 6): ("I062_390", 1),    # Receive Status
-    (2, 5): ("I062_400", 0),    # Track Data Ages (variable)
-    (2, 4): ("I062_320", 2),    # Flight Level
-    (2, 3): ("I062_500", 0),    # Standard Deviation of Position
-    (2, 2): ("I062_510", 0),    # Standard Deviation of Velocity
-    (2, 1): ("I062_520", 0),    # Amplitude of the Plot
-    (2, 0): ("_EXT", 0),
-    # ... more bytes possible but we only need up to byte 2
-}
+    def remaining(self) -> int:
+        return self.end - self.idx
 
-# I062/380 子字段定义（sub-FSPEC）
-# Bit 7 → first subfield, bit 0 → extension
-_062_380_SUBFIELDS: dict[int, tuple[str, int]] = {
-    7: ("TRP", 1),        # Trajectory Pointer
-    6: ("CS", 1),         # Calculated Track Status
-    5: ("TTR", 1),        # Type of Trip (bits: dep/arr)
-    4: ("STI", 1),        # Stand/Terminal Info
-    3: ("CFL", 2),        # Cleared Flight Level
-    2: ("ID", 8),         # Track Identifier (callsign, space-padded)
-    1: ("RWY", 8),        # Runway (space-padded)
-    0: ("_EXT", 0),       # Extension
-}
+    def skip(self, size: int) -> None:
+        if self.idx + size > self.end:
+            raise ValueError(f"数据不足: 需要 {size} 字节, 剩余 {self.remaining()} 字节")
+        self.idx += size
 
-# Extension byte for I062/380
-_062_380_SUBFIELDS_EXT: dict[int, tuple[str, int]] = {
-    7: ("SIDSTAR", 8),    # SID/STAR procedure name (space-padded)
-    6: ("FLTID", 8),      # Flight Identifier
-    5: ("COM", 1),        # Communication status
-    4: ("SNR", 1),        # Sequence Number
-    3: ("FSS", 0),        # FSS data
-    2: ("TID", 1),        # TID
-    1: ("ACS", 0),        # Additional Code Space
-    0: ("_EXT", 0),
-}
+    def read(self, size: int) -> bytes:
+        if self.idx + size > self.end:
+            raise ValueError(f"数据不足: 需要 {size} 字节, 剩余 {self.remaining()} 字节")
+        chunk = self.data[self.idx:self.idx + size]
+        self.idx += size
+        return chunk
+
+    def read_u8(self) -> int:
+        v = self.data[self.idx]
+        self.idx += 1
+        return v
+
+    def read_u16(self) -> int:
+        return int.from_bytes(self.read(2), "big", signed=False)
+
+    def read_i16(self) -> int:
+        return int.from_bytes(self.read(2), "big", signed=True)
+
+    def read_i32(self) -> int:
+        return int.from_bytes(self.read(4), "big", signed=True)
 
 
-def _strip_padding(data: bytes) -> str:
-    """去除尾部空格和空字节"""
-    return data.rstrip(b' \x00').decode('ascii', errors='replace')
+def _decode_ia5_callsign(payload: bytes) -> str:
+    """从 6 字节 IA5 编码解码航班呼号"""
+    if len(payload) != 6:
+        return ""
+    codes = [
+        (payload[0] & 0xFC) >> 2,
+        ((payload[0] & 0x03) << 4) | ((payload[1] & 0xF0) >> 4),
+        ((payload[1] & 0x0F) << 2) | ((payload[2] & 0xC0) >> 6),
+        payload[2] & 0x3F,
+        (payload[3] & 0xFC) >> 2,
+        ((payload[3] & 0x03) << 4) | ((payload[4] & 0xF0) >> 4),
+        ((payload[4] & 0x0F) << 2) | ((payload[5] & 0xC0) >> 6),
+        payload[5] & 0x3F,
+    ]
+
+    def _to_ascii(v: int) -> str:
+        if v == 0:
+            return " "
+        if v <= 26:
+            return chr(v + 64)
+        return chr(v)
+
+    return "".join(_to_ascii(c) for c in codes)
 
 
-def _safe_ssr(code: int) -> str:
-    """SSR code to 4-digit octal string"""
-    octal = oct(code)[2:]
-    return octal.zfill(4)
+def _read_ssr(cursor: _Cursor) -> str:
+    """读取 4 位八进制 SSR 应答机编码"""
+    b1 = cursor.read_u8() & 0x0F
+    b2 = cursor.read_u8()
+    value = b1 * 256 + b2
+    digits = []
+    for _ in range(4):
+        digits.append(str(value & 0x07))
+        value >>= 3
+    return "".join(reversed(digits))
 
 
-def _parse_fspec(data: bytes, offset: int) -> tuple[list[int], int]:
-    """解析 FSPEC，返回 (位序列表, 新的 offset)"""
-    bits = []
-    while offset < len(data):
-        b = data[offset]
-        for bp in range(7, -1, -1):
-            if b & (1 << bp):
-                bits.append(bp)
-        offset += 1
-        if not (b & 1):  # extension bit = 0 means last FSPEC byte
+def _parse_fspecs(cursor: _Cursor) -> list:
+    """读取 FSPEC，返回每个字节的值列表（最多 5 字节）"""
+    fspecs = []
+    while True:
+        v = cursor.read_u8()
+        fspecs.append(v)
+        if v & 0x01 == 0:  # extension bit = 0 → last FSPEC byte
             break
-    return bits, offset
-
-
-def _parse_380_subfields(data: bytes, offset: int) -> tuple[dict[str, Any], int]:
-    """解析 I062/380 Flight Plan Related Data 的子字段
-    返回 (子字段 dict, 新的 offset) 其中子字段包括 TRP, CS, TTR, ID, RWY, SIDSTAR 等
-    """
-    if offset >= len(data):
-        return {}, offset
-
-    rep = data[offset]
-    offset += 1
-    result: dict[str, Any] = {}
-
-    for _ in range(rep):
-        sub_bits, offset = _parse_fspec(data, offset)
-        for bp in sub_bits:
-            fname, flen = _062_380_SUBFIELDS.get(bp, (None, 0))
-            if fname is None or flen == 0:
-                # 遇到 extension 或未知字段，尝试跳过
-                if bp == 0:  # EXT flag
-                    continue
-                # 尝试从 ext subfields 找
-                fname, flen = _062_380_SUBFIELDS_EXT.get(bp, (None, 0))
-            if fname is None or flen == 0:
-                continue
-            if offset + flen > len(data):
-                break
-            raw = data[offset:offset + flen]
-            offset += flen
-            if fname == "ID":
-                result["callsign"] = _strip_padding(raw)
-            elif fname == "RWY":
-                result["runway"] = _strip_padding(raw)
-            elif fname == "SIDSTAR":
-                result["sidstar"] = _strip_padding(raw)
-            elif fname == "TTR":
-                result["ttr"] = raw[0]
-            result[fname.lower()] = _strip_padding(raw)
-
-    return result, offset
-
-
-def parse_cat062_frame(data: bytes) -> dict[str, Any] | None:
-    """解析单个 CAT062 (0x3E) ASTERIX 雷达帧
-
-    返回 dict（可能包含 keys: callsign, runway, sidstar, ssr, sac, sic, track_number, ttr）
-    若不是 CAT062 帧则返回 None
-    """
-    if len(data) < 3:
-        return None
-
-    cat = data[0]
-    if cat != 0x3E:
-        return None
-
-    length = struct.unpack('>H', data[1:3])[0]
-    frame = data[:min(length, len(data))]
-
-    result: dict[str, Any] = {
-        'callsign': '',
-        'runway': '',
-        'sidstar': '',
-        'ssr': 0,
-        'ssr_str': '',
-        'sac': 0,
-        'sic': 0,
-        'track_number': 0,
-        'ttr': 0,
-    }
-
-    offset = 3
-
-    # 解析 FSPEC，得到位序列表（每个元素是 FSPEC 中的 bit 序号，从 7 开始）
-    fspec_byte_map: list[int] = []
-    fspec_byte_idx = 0
-    while offset < len(frame):
-        b = frame[offset]
-        offset += 1
-        for bp in range(7, -1, -1):
-            if b & (1 << bp):
-                fspec_byte_map.append(fspec_byte_idx * 8 + (7 - bp))
-        if not (b & 1):
+        if len(fspecs) >= 5:
             break
-        fspec_byte_idx += 1
+    return fspecs
 
-    # 遍历字段
-    for raw_bit_idx in fspec_byte_map:
-        byte_idx = raw_bit_idx // 8
-        bit_pos = 7 - (raw_bit_idx % 8)  # 反转 bit 序：index 0 → bit 7
-        field_info = _CAT062_FIELDS.get((byte_idx, bit_pos))
-        if field_info is None:
-            # 跳过未知字段（这只是保守处理，实际需要跳过正确的字节数）
-            # 对于未知的变长字段，只能碰运气
-            continue
 
-        fname, flen = field_info
-
-        if fname == "_EXT":
-            continue
-
-        if fname == "I062_380":
-            # 变长子字段
-            sub, offset = _parse_380_subfields(frame, offset)
-            if "callsign" in sub:
-                result["callsign"] = sub["callsign"]
-            if "runway" in sub:
-                result["runway"] = sub["runway"]
-            if "sidstar" in sub:
-                result["sidstar"] = sub["sidstar"]
-            if "ttr" in sub:
-                result["ttr"] = sub["ttr"]
-            continue
-
-        if flen == 0:
-            # 已知变长字段但未实现特殊解析——记录日志并尝试跳过
-            # 保守跳过一个字节（可能错误，但 CAT062 流数据不影响后续接收）
-            logger.debug("skipping variable field %s at offset %d", fname, offset)
-            offset += 1
-            continue
-
-        if offset + flen > len(frame):
+def _parse_380(cursor: _Cursor) -> dict:
+    """解析 I062/380 Flight Plan Related Data，返回 callsign 等"""
+    result: dict = {}
+    octets = []
+    while True:
+        octet = cursor.read_u8()
+        octets.append(octet)
+        if octet & 0x01 == 0:
+            break
+        if len(octets) >= 4:
             break
 
-        if fname == "I062_010":
-            # Data Source Identifier: 2 bytes (SAC, SIC)
-            result["sac"] = frame[offset]
-            result["sic"] = frame[offset + 1]
-        elif fname == "I062_070":
-            # Mode-3/A Code: 2 bytes (standard ASTERIX SSR encoding)
-            # b1: V(7) G(6) L(5) spare(4) D1[2:0](4:2) D2[1](1:0)
-            # b2: D2[2](7) D3[2:0](6:4) D4[2:0](3:1) spare(0) — varies by implementation
-            # Standard encoding (bits to 4 octal digits):
-            b1, b2 = frame[offset], frame[offset + 1]
-            d1 = (b1 >> 2) & 0x07
-            d2 = ((b1 & 0x03) << 1) | ((b2 >> 7) & 0x01)
-            d3 = (b2 >> 4) & 0x07
-            d4 = (b2 >> 1) & 0x07
-            result["ssr"] = d1 * 512 + d2 * 64 + d3 * 8 + d4
-            result["ssr_str"] = f"{d1}{d2}{d3}{d4}"
-        elif fname == "I062_105":
-            result["track_number"] = struct.unpack('>H', frame[offset:offset + 2])[0]
-        elif fname == "I062_200":
-            # Cartesian position (x, y each 2 bytes signed) - just skip
-            pass
-        elif fname == "I062_320":
-            # Flight Level (2 bytes) - just skip
-            pass
+    def _has(byte_idx: int, mask: int) -> bool:
+        return len(octets) > byte_idx and bool(octets[byte_idx] & mask)
 
-        offset += flen
+    # First FSPEC byte (main aircraft parameters)
+    if _has(0, 0x80): cursor.skip(3)  # ADR - Target Address
+    if _has(0, 0x40):  # ID - Target Identification (callsign, 6 bytes IA5)
+        result["callsign"] = _decode_ia5_callsign(cursor.read(6)).strip()
+    if _has(0, 0x20): cursor.skip(2)  # MHG - Magnetic Heading
+    if _has(0, 0x10): cursor.skip(2)  # IAS - Indicated Airspeed
+    if _has(0, 0x08): cursor.skip(2)  # TAS - True Airspeed
+    if _has(0, 0x04): cursor.skip(2)  # SAL - Selected Altitude
+    if _has(0, 0x02): cursor.skip(2)  # FSS - Final State Select Altitude
+
+    # Second FSPEC byte
+    if _has(1, 0x80): cursor.skip(1)  # TIS - Track Intent Status
+    if _has(1, 0x40):  # TID - Track Intent Data
+        rep = cursor.read_u8()
+        cursor.skip(15 * rep)
+    if _has(1, 0x20): cursor.skip(2)  # COM - Communication
+    if _has(1, 0x10): cursor.skip(2)  # SAB - Selected Altitude Blank
+    if _has(1, 0x08): cursor.skip(7)  # ACS - Aircraft Characteristics
+    if _has(1, 0x04): cursor.skip(2)  # BVR - Barometric Vertical Rate
+    if _has(1, 0x02): cursor.skip(2)  # GVR - Geometric Vertical Rate
+
+    # Third/forth FSPEC bytes (skipped, none relevant)
+    for i in range(2, len(octets)):
+        if octets[i] & 0x80: cursor.skip(2)  # RAN
+        if octets[i] & 0x40: cursor.skip(2)  # TAR
+        if octets[i] & 0x20: cursor.skip(2)  # TAN
+        if octets[i] & 0x10: cursor.skip(2)  # GSP
+        if octets[i] & 0x08: cursor.skip(1)  # VUN
+        if octets[i] & 0x04: cursor.skip(8)  # MET
+        if octets[i] & 0x02: cursor.skip(1)  # EMC
 
     return result
+
+
+def _parse_390(cursor: _Cursor) -> dict:
+    """解析 I062/390 Flight Plan Info，返回 runway, sid, star 等"""
+    result: dict = {}
+    octets = []
+    while True:
+        octet = cursor.read_u8()
+        octets.append(octet)
+        if octet & 0x01 == 0:
+            break
+        if len(octets) >= 3:
+            break
+
+    def _has(byte_idx: int, mask: int) -> bool:
+        return len(octets) > byte_idx and bool(octets[byte_idx] & mask)
+
+    # First byte
+    if _has(0, 0x80): cursor.skip(2)  # TAG
+    if _has(0, 0x40):  # CSN - Callsign (7 bytes)
+        result["acid"] = cursor.read(7).decode("utf-8", errors="ignore").strip()
+    if _has(0, 0x20): cursor.skip(4)  # IFI
+    if _has(0, 0x10): cursor.skip(1)  # FCT
+    if _has(0, 0x08): cursor.skip(4)  # TAC - Aircraft Type
+    if _has(0, 0x04): cursor.skip(1)  # WTC
+    if _has(0, 0x02): cursor.skip(4)  # DEP - Departure Airport
+
+    # Second byte
+    if _has(1, 0x80): cursor.skip(4)  # DST - Destination Airport
+    if _has(1, 0x40):  # RDS - Runway Designator (3 bytes)
+        result["runway"] = cursor.read(3).decode("utf-8", errors="ignore").strip()
+    if _has(1, 0x20): cursor.skip(2)  # CFL
+    if _has(1, 0x10): cursor.skip(2)  # CTL
+    if _has(1, 0x08):  # TOD
+        rep = cursor.read_u8()
+        cursor.skip(rep * 4)
+    if _has(1, 0x04): cursor.skip(6)  # AST
+    if _has(1, 0x02): cursor.skip(1)  # STS
+
+    # Third byte
+    if _has(2, 0x80):  # STD - SID (7 bytes)
+        result["sid"] = cursor.read(7).decode("utf-8", errors="ignore").strip()
+    if _has(2, 0x40):  # STA - STAR (7 bytes)
+        result["star"] = cursor.read(7).decode("utf-8", errors="ignore").strip()
+    if _has(2, 0x20): cursor.skip(2)  # PEM
+    if _has(2, 0x10): cursor.skip(7)  # PEC
+
+    return result
+
+
+def _parse_one_record(data: bytes, start: int, end: int) -> tuple[dict[str, Any], int]:
+    """解析 CAT062 报文中的单条记录，返回 (解析结果, 下一个记录的起始位置)"""
+    result: dict[str, Any] = {
+        'callsign': '',
+        'acid': '',
+        'runway': '',
+        'sid': '',
+        'star': '',
+        'ssr': '',
+        'track_number': -1,
+        'sac': 0,
+        'sic': 0,
+        'received_at': datetime.utcnow(),
+    }
+
+    cursor = _Cursor(data, start, end)
+
+    try:
+        fspecs = _parse_fspecs(cursor)
+    except ValueError:
+        return result, cursor.idx
+
+    if not fspecs:
+        return result
+
+    fs1 = fspecs[0]
+    fs2 = fspecs[1] if len(fspecs) > 1 else 0
+    fs3 = fspecs[2] if len(fspecs) > 2 else 0
+    fs4 = fspecs[3] if len(fspecs) > 3 else 0
+
+    # FSPEC1 bits
+    bit010  = (fs1 & 0x80) >> 7   # SAC/SIC (2 bytes)
+    # bit015 = (fs1 & 0x20) >> 5   # Service Identifier (1 byte) — skip
+    bit070  = (fs1 & 0x10) >> 4   # Time of Track (3 bytes, seconds/128)
+    bit105  = (fs1 & 0x08) >> 3   # Lat/Lon (4+4 bytes)
+    bit100  = (fs1 & 0x04) >> 2   # Cartesian position (6 bytes)
+    bit185  = (fs1 & 0x02) >> 1   # Velocity (4 bytes)
+
+    # FSPEC2 bits
+    bit210  = (fs2 & 0x80) >> 7   # Calculated Ground Speed (2 bytes)
+    bit060  = (fs2 & 0x40) >> 6   # SSR Mode-3/A Code (2 bytes)
+    bit245  = (fs2 & 0x20) >> 5   # Target ID / callsign (1+6 bytes IA5)
+    bit380  = (fs2 & 0x10) >> 4   # I062/380 Flight Plan Related Data
+    bit040  = (fs2 & 0x08) >> 3   # Track Number (2 bytes)
+    bit080  = (fs2 & 0x04) >> 2   # Flight Plan Correlated
+    bit290  = (fs2 & 0x02) >> 1   # Mode-3/A Code Confidence
+
+    # FSPEC3 bits
+    bit200  = (fs3 & 0x80) >> 7   # Calculated Position (1 byte)
+    bit295  = (fs3 & 0x40) >> 6   # Mode-3/A / Mode-C Reported
+    bit136  = (fs3 & 0x20) >> 5   # Flight Level (2 bytes, *25*0.3048)
+    bit130  = (fs3 & 0x10) >> 4   # Position WGS-84 (2 bytes)
+    bit135  = (fs3 & 0x08) >> 3   # Geometric Altitude / QNH (2 bytes)
+    bit220  = (fs3 & 0x04) >> 2   # Track Angle (2 bytes)
+    bit390  = (fs3 & 0x02) >> 1   # I062/390 Flight Plan Info (runway, SID/STAR)
+
+    # FSPEC4 bits
+    # bit270 = (fs4 & 0x80) >> 7
+    # bit300 = (fs4 & 0x40) >> 6
+    # bit110 = (fs4 & 0x20) >> 5
+    # bit120 = (fs4 & 0x10) >> 4
+    # bit510 = (fs4 & 0x08) >> 3
+    # bit500 = (fs4 & 0x04) >> 2
+    # bit340 = (fs4 & 0x02) >> 1
+
+    try:
+        # I010: SAC/SIC
+        if bit010:
+            sacsic = cursor.read(2)
+            result["sac"] = sacsic[0]
+            result["sic"] = sacsic[1]
+
+        # I015: skip
+        if fs1 & 0x20:
+            cursor.skip(1)
+
+        # I070: Time of Track
+        if bit070:
+            cursor.skip(3)
+
+        # I105: Lat/Lon
+        if bit105:
+            cursor.skip(8)  # 4+4 bytes
+
+        # I100: Cartesian coordinates
+        if bit100:
+            cursor.skip(6)
+
+        # I185: Velocity (vx_i16 + vy_i16 = 4 bytes)
+        if bit185:
+            cursor.skip(4)
+
+        # I210: Ground Speed
+        if bit210:
+            cursor.skip(2)
+
+        # I060: SSR
+        if bit060:
+            result["ssr"] = _read_ssr(cursor)
+
+        # I245: Target ID (callsign from SSR)
+        if bit245:
+            cursor.skip(1)  # SPI flag
+            callsign_raw = cursor.read(6)
+            cs = _decode_ia5_callsign(callsign_raw).strip()
+            if cs:
+                result["callsign"] = cs
+
+        # I380: Flight Plan Related Data (callsign from tracked target)
+        if bit380:
+            sub = _parse_380(cursor)
+            if sub.get("callsign") and not result["callsign"]:
+                result["callsign"] = sub["callsign"]
+
+        # I040: Track Number
+        if bit040:
+            result["track_number"] = cursor.read_u16()
+
+        # I080: Flight Plan Correlated
+        if bit080:
+            # Parse sub-FSPEC for correlated flag
+            fx1 = cursor.read_u8()
+            if fx1 & 0x01:
+                second = cursor.read_u8()
+                # remaining subfields not needed
+                if second & 0x01:
+                    third = cursor.read_u8()
+                    if third & 0x01:
+                        cursor.skip(1)
+
+        # I290: Mode-3/A Confidence
+        if bit290:
+            # Parse sub-FSPEC, skip all
+            octet1 = cursor.read_u8()
+            fx1 = octet1 & 0x01
+            if fx1:
+                octet2 = cursor.read_u8()
+                if octet2 & 0x80: cursor.skip(1)
+                if octet2 & 0x40: cursor.skip(1)
+                if octet2 & 0x20: cursor.skip(1)
+            for mask, size in [(0x80, 1), (0x40, 1), (0x20, 1), (0x10, 1), (0x08, 2), (0x04, 1), (0x02, 1)]:
+                if octet1 & mask:
+                    cursor.skip(size)
+
+        # I200: Calculated Position
+        if bit200:
+            cursor.skip(1)
+
+        # I295: Mode-3/A / Mode-C
+        if bit295:
+            # Sub-FSPEC skip
+            while True:
+                octet = cursor.read_u8()
+                if octet & 0x80: cursor.skip(1)
+                if octet & 0x40: cursor.skip(1)
+                if octet & 0x20: cursor.skip(1)
+                if octet & 0x10: cursor.skip(1)
+                if octet & 0x08: cursor.skip(1)
+                if octet & 0x04: cursor.skip(1)
+                if octet & 0x02: cursor.skip(1)
+                if octet & 0x01 == 0:
+                    break
+
+        # I136: Flight Level
+        if bit136:
+            cursor.skip(2)
+
+        # I130: Position WGS-84
+        if bit130:
+            cursor.skip(2)
+
+        # I135: Geometric Altitude (QNH)
+        if bit135:
+            cursor.skip(2)
+
+        # I220: Track Angle
+        if bit220:
+            cursor.skip(2)
+
+        # I390: Flight Plan Info (runway, SID, STAR!)
+        if bit390:
+            sub = _parse_390(cursor)
+            if sub.get("runway"):
+                result["runway"] = sub["runway"]
+            if sub.get("sid"):
+                result["sid"] = sub["sid"]
+            if sub.get("star"):
+                result["star"] = sub["star"]
+            if sub.get("acid") and not result["callsign"]:
+                result["callsign"] = sub["acid"]
+
+        # Skip remaining FSPEC4 fields (not relevant)
+        # (We don't parse them since we got everything we need)
+
+    except (ValueError, IndexError) as e:
+        logger.debug("CAT062 parse field error: %s", e)
+
+    return result, cursor.idx
+
+
+def parse_datagram(payload: bytes) -> list[dict[str, Any]]:
+    """解析完整 CAT062 UDP 数据报，可能包含多条记录
+
+    返回每条记录的解析结果列表
+    """
+    if len(payload) < 3:
+        return []
+    cat = payload[0]
+    if cat != 0x3E:
+        return []
+    declared_length = int.from_bytes(payload[1:3], "big", signed=False)
+    total_length = min(len(payload), declared_length) if declared_length >= 3 else len(payload)
+
+    records: list[dict[str, Any]] = []
+    index = 3
+    while index < total_length:
+        try:
+            record, next_index = _parse_one_record(payload, index, total_length)
+        except (ValueError, IndexError):
+            break
+        if next_index <= index:
+            break
+        index = next_index
+        if record.get("callsign") or record.get("ssr") or record.get("track_number", -1) >= 0:
+            records.append(record)
+    return records
 
 
 class RadarReceiver:
@@ -324,34 +501,15 @@ class RadarReceiver:
             now = datetime.utcnow()
             total_frames += 1
 
-            # UDP 报文中可能包含多个 CAT062 帧（连续拼接）
-            data = payload
-            offset = 0
-            while offset < len(data):
-                if len(data) - offset < 3:
-                    break
-                # 检查 category
-                cat = data[offset]
-                if cat != 0x3E:
-                    offset += 1
-                    continue
-                # 读取帧长度
-                frame_len = struct.unpack('>H', data[offset + 1:offset + 3])[0]
-                if frame_len < 3 or offset + frame_len > len(data):
-                    # 长度不合理，跳过这个字节
-                    offset += 1
-                    continue
+            # 使用 parse_datagram 解析完整 UDP 报文中所有 CAT062 记录
+            try:
+                records = parse_datagram(payload)
+            except Exception:
+                logger.exception("CAT062 parse error from %s", addr[0])
+                continue
 
-                frame_data = data[offset:offset + frame_len]
-                offset += frame_len
-
-                try:
-                    parsed = parse_cat062_frame(frame_data)
-                except Exception:
-                    logger.exception("CAT062 parse error at frame offset %d", offset - frame_len)
-                    continue
-
-                if parsed and (parsed.get('callsign') or parsed.get('ssr_str')):
+            for parsed in records:
+                if parsed.get('callsign') or parsed.get('ssr'):
                     total_parsed += 1
                     try:
                         self.on_radar_data(parsed, addr[0], addr[1], now)
@@ -365,7 +523,7 @@ class RadarReceiver:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)  # 2MB buffer
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)
             sock.settimeout(1.0)
             sock.bind(("0.0.0.0", self.port))
 
