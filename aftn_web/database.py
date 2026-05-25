@@ -538,42 +538,82 @@ class Database:
         conn.commit()
         return cur.rowcount > 0
 
+    def _match_radar_record(self, callsign: str) -> dict[str, Any] | None:
+        """按呼号匹配最合适的飞行计划记录（优先今日 DOF，其次最新报文时间）"""
+        conn = self._get_conn()
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        # 优先查今天 DOF 的记录
+        row = conn.execute(
+            "SELECT id, dof, last_message_time FROM flight_plans "
+            "WHERE callsign=? AND dof=? ORDER BY updated_at DESC LIMIT 1",
+            (callsign, today_str),
+        ).fetchone()
+        if row:
+            return dict(row)
+        # 无今天 DOF → 找最近报文时间的记录
+        row = conn.execute(
+            "SELECT id, dof, last_message_time FROM flight_plans "
+            "WHERE callsign=? ORDER BY last_message_time DESC, updated_at DESC LIMIT 1",
+            (callsign,),
+        ).fetchone()
+        return dict(row) if row else None
+
     def update_radar_data(self, callsign: str, runway: str, flight_procedure: str) -> int:
         """按航班号更新使用跑道和飞行程序（来自雷达 CAT062）
+        优先匹配今日 DOF 的记录，避免批量更新历史计划。
         返回更新的记录数
         """
         if not callsign:
             return 0
-        conn = self._get_conn()
-        now = _fmt_dt(datetime.utcnow())
-        cur = conn.execute(
-            "UPDATE flight_plans SET runway=?, flight_procedure=?, updated_at=? "
-            "WHERE callsign=? AND (runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')",
-            (runway, flight_procedure, now, callsign.upper(), runway, flight_procedure),
-        )
-        conn.commit()
-        affected = cur.rowcount
-        if affected > 0:
-            logger.info("[RADAR] %s 更新 跑道=%s 程序=%s (影响 %d 条)",
-                        callsign, runway or '-', flight_procedure or '-', affected)
-        return affected
-
-    def update_radar_data_by_ssr(self, ssr: str, runway: str, flight_procedure: str) -> int:
-        """按 SSR 码更新使用跑道和飞行程序（来自雷达 CAT062，无呼号时备用）"""
-        if not ssr:
+        match = self._match_radar_record(callsign)
+        if match is None:
             return 0
         conn = self._get_conn()
         now = _fmt_dt(datetime.utcnow())
         cur = conn.execute(
             "UPDATE flight_plans SET runway=?, flight_procedure=?, updated_at=? "
-            "WHERE ssr=? AND (runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')",
-            (runway, flight_procedure, now, ssr, runway, flight_procedure),
+            "WHERE id=? AND (runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')",
+            (runway, flight_procedure, now, match["id"], runway, flight_procedure),
         )
         conn.commit()
         affected = cur.rowcount
         if affected > 0:
-            logger.info("[RADAR] SSR=%s 更新 跑道=%s 程序=%s (影响 %d 条)",
-                        ssr, runway or '-', flight_procedure or '-', affected)
+            logger.info("[RADAR] %s (id=%d) 更新 跑道=%s 程序=%s",
+                        callsign, match["id"], runway or '-', flight_procedure or '-')
+        return affected
+
+    def update_radar_data_by_ssr(self, ssr: str, runway: str, flight_procedure: str) -> int:
+        """按 SSR 码更新使用跑道和飞行程序（来自雷达 CAT062，无呼号时备用）
+        优先匹配今日 DOF 的记录，避免批量更新历史计划。
+        """
+        if not ssr:
+            return 0
+        conn = self._get_conn()
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        row = conn.execute(
+            "SELECT id, dof FROM flight_plans "
+            "WHERE ssr=? AND dof=? ORDER BY updated_at DESC LIMIT 1",
+            (ssr, today_str),
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT id, dof FROM flight_plans "
+                "WHERE ssr=? ORDER BY last_message_time DESC, updated_at DESC LIMIT 1",
+                (ssr,),
+            ).fetchone()
+        if not row:
+            return 0
+        now = _fmt_dt(datetime.utcnow())
+        cur = conn.execute(
+            "UPDATE flight_plans SET runway=?, flight_procedure=?, updated_at=? "
+            "WHERE id=? AND (runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')",
+            (runway, flight_procedure, now, row["id"], runway, flight_procedure),
+        )
+        conn.commit()
+        affected = cur.rowcount
+        if affected > 0:
+            logger.info("[RADAR] SSR=%s (id=%d) 更新 跑道=%s 程序=%s",
+                        ssr, row["id"], runway or '-', flight_procedure or '-')
         return affected
 
     def update_chg_route(self, callsign: str, adep: str, adest: str,
