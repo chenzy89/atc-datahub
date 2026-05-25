@@ -222,8 +222,8 @@ def create_app(config: AppConfig, db: Database) -> Flask:
         ws.title = "飞行计划"
 
         headers = ["ID", "航班号", "规则与种类", "移交点", "机型", "DOF",
-                   "跑道", "飞行程序",
-                   "起飞地", "ETD", "ATD", "目的地", "ETA", "ATA", "航路", "报文", "报文时间"]
+                   "起飞地", "ETD", "ATD", "目的地", "ETA", "ATA",
+                   "跑道", "飞行程序", "航路", "报文", "报文时间"]
         hdr_font = Font(bold=True, color="FFFFFF", size=11)
         hdr_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
         thin_border = Border(
@@ -247,14 +247,14 @@ def create_app(config: AppConfig, db: Database) -> Flask:
             ws.cell(row=row_idx, column=4, value=rec.get("handover_pt", ""))
             ws.cell(row=row_idx, column=5, value=rec.get("aircraft_type", ""))
             ws.cell(row=row_idx, column=6, value=_safe_date(rec.get("dof")))
-            ws.cell(row=row_idx, column=7, value=rec.get("runway", ""))
-            ws.cell(row=row_idx, column=8, value=rec.get("flight_procedure", ""))
-            ws.cell(row=row_idx, column=9, value=rec.get("adep", ""))
-            ws.cell(row=row_idx, column=10, value=_safe_dt(rec.get("etd")))
-            ws.cell(row=row_idx, column=11, value=_safe_dt(rec.get("atd")))
-            ws.cell(row=row_idx, column=12, value=rec.get("adest", ""))
-            ws.cell(row=row_idx, column=13, value=_safe_dt(rec.get("eta")))
-            ws.cell(row=row_idx, column=14, value=_safe_dt(rec.get("ata")))
+            ws.cell(row=row_idx, column=7, value=rec.get("adep", ""))
+            ws.cell(row=row_idx, column=8, value=_safe_dt(rec.get("etd")))
+            ws.cell(row=row_idx, column=9, value=_safe_dt(rec.get("atd")))
+            ws.cell(row=row_idx, column=10, value=rec.get("adest", ""))
+            ws.cell(row=row_idx, column=11, value=_safe_dt(rec.get("eta")))
+            ws.cell(row=row_idx, column=12, value=_safe_dt(rec.get("ata")))
+            ws.cell(row=row_idx, column=13, value=rec.get("runway", ""))
+            ws.cell(row=row_idx, column=14, value=rec.get("flight_procedure", ""))
             ws.cell(row=row_idx, column=15, value=rec.get("route", ""))
             ws.cell(row=row_idx, column=16, value=rec.get("message_types", ""))
             ws.cell(row=row_idx, column=17, value=_safe_dt(rec.get("last_message_time")))

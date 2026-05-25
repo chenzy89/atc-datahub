@@ -272,10 +272,10 @@ select option { background: var(--bg-card); color: var(--text-primary); }
     <table>
       <thead><tr>
         <th onclick="sortFpl('callsign')" style="cursor:pointer;user-select:none;">航班号<span id="sort-arrow-callsign" style="margin-left:3px;color:var(--accent);"></span></th>
-        <th>规则</th><th>移交点</th><th>机型</th><th>DOF</th><th>跑道</th><th>飞行程序</th>
+        <th>规则</th><th>移交点</th><th>机型</th><th>DOF</th>
         <th>起飞地</th><th onclick="sortFpl('etd')" style="cursor:pointer;user-select:none;">ETD<span id="sort-arrow-etd" style="margin-left:3px;color:var(--accent);"></span></th>
         <th>ATD</th>
-        <th>目的地</th><th>ETA</th><th>ATA</th>
+        <th>目的地</th><th>ETA</th><th>ATA</th><th>跑道</th><th>飞行程序</th>
         <th>航路</th><th>报文</th>
       </tr></thead>
       <tbody id="tbl-fpl"><tr><td colspan="15" class="loading">输入条件后按查询</td></tr></tbody>
@@ -682,14 +682,14 @@ function renderPlans(rs) {
       '<td>' + (r.handover_pt||'-') + '</td>' +
       '<td>' + (r.aircraft_type||'-') + '</td>' +
       '<td>' + fd + '</td>' +
-      '<td>' + (r.runway||'-') + '</td>' +
-      '<td>' + (r.flight_procedure||'-') + '</td>' +
       '<td class="airport">' + (r.adep||'-') + '</td>' +
       '<td>' + ft(r.etd) + '</td>' +
       '<td>' + ft(r.atd) + '</td>' +
       '<td class="airport">' + (r.adest||'-') + '</td>' +
       '<td>' + ft(r.eta) + '</td>' +
       '<td>' + ft(r.ata) + '</td>' +
+      '<td>' + (r.runway||'-') + '</td>' +
+      '<td>' + (r.flight_procedure||'-') + '</td>' +
       '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary)" title="' + esc(r.route||'') + '">' + rt + '</td>' +
       '<td>' + msgTagsHtml + '</td>' +
       '</tr>';
