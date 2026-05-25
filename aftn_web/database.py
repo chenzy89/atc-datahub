@@ -542,13 +542,19 @@ class Database:
         """匹配最合适的飞行计划记录
 
         优先顺序：
-        1. callsign + adep + adest + 今日 DOF（CAT062 提供机场时最精确）
-        2. callsign + 今日 DOF
-        3. callsign + 最近报文时间
+        1. callsign + adep + adest + 今日 DOF（最精确）
+        2. callsign + adep + adest（无视 DOF，按最近活跃时间，解决跨午夜场景）
+        3. callsign + 今日 DOF
+        4. callsign（无视 DOF，按最近活跃时间兜底）
+
+        ⚠ 跨午夜场景：FPL DOF=24日 23:59 ETD，实际 ATD=25日 00:01，
+        雷达在25日 00:01探测到。此时今日DOF=2026-05-25匹配不到，
+        但第2步 呼号+起降地 无视DOF能准确匹配到。
         """
         conn = self._get_conn()
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
+        # 1) 呼号 + 起降地 + 今日 DOF
         if adep and adest:
             row = conn.execute(
                 "SELECT id, dof, last_message_time, adep, adest FROM flight_plans "
@@ -566,7 +572,19 @@ class Database:
             if row:
                 return dict(row)
 
-        # 无机场信息或机场匹配不到 → 降级到呼号+今日 DOF
+        # 2) 呼号 + 起降地（无视 DOF，选最近活跃的记录）
+        #    解决跨午夜场景：计划 DOF=24日，雷达探测在 25日 00:01
+        if adep and adest:
+            row = conn.execute(
+                "SELECT id, dof, last_message_time, adep, adest FROM flight_plans "
+                "WHERE callsign=? AND adep=? AND adest=? "
+                "ORDER BY last_message_time DESC, updated_at DESC LIMIT 1",
+                (callsign, adep, adest),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+        # 3) 呼号 + 今日 DOF（无起降地信息时）
         row = conn.execute(
             "SELECT id, dof, last_message_time FROM flight_plans "
             "WHERE callsign=? AND dof=? ORDER BY updated_at DESC LIMIT 1",
@@ -575,7 +593,7 @@ class Database:
         if row:
             return dict(row)
 
-        # 今日无计划 → 找最近活跃的记录
+        # 4) 呼号兜底（无视 DOF，按最近活跃时间）
         row = conn.execute(
             "SELECT id, dof, last_message_time FROM flight_plans "
             "WHERE callsign=? ORDER BY last_message_time DESC, updated_at DESC LIMIT 1",
