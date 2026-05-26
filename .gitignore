@@ -16,3 +16,4 @@ logs/*.log
 .env
 .DS_Store
 aftn_web/data.db
+data/radar_history/*.jsonl.gz
