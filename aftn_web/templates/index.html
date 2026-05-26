@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.29</title>
+<title>ATC AFTN WebHub v26.5.30</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -267,7 +267,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.29</span>
+  <span class="badge">v26.5.30</span>
 </div>
 
 <div class="tabs">
@@ -1861,19 +1861,23 @@ function esc(s) {
             }
           }
           return all;
-        });
       });
 
-    Promise.all([trailPromise, mapPromise])
+    var termPromise = fetch('/api/config/terminal_airports')
+      .then(function(r) { return r.json(); })
+      .catch(function() { return []; });
+
+    Promise.all([trailPromise, mapPromise, termPromise])
       .then(function(results) {
         var trailPoints = results[0];
         _trailMapElements = results[1];
+        var terminalAirports = results[2];
         loading.style.display = 'none';
         if (!trailPoints || trailPoints.length === 0) {
           drawTrailEmpty(canvas, '航班 ' + callsign + ' 无历史航迹数据');
           return;
         }
-        drawFlightTrail(canvas, callsign, trailPoints);
+        drawFlightTrail(canvas, callsign, trailPoints, terminalAirports);
       })
       .catch(function(err) {
         loading.style.display = 'none';
@@ -1909,7 +1913,7 @@ function esc(s) {
     ctx.fillText(msg, w/2, h/2);
   }
 
-  function drawFlightTrail(canvas, callsign, points) {
+  function drawFlightTrail(canvas, callsign, points, terminalAirports) {
     var container = canvas.parentElement;
     var w = container.clientWidth;
     var h = container.clientHeight;
@@ -1941,6 +1945,29 @@ function esc(s) {
       drawTrailEmpty(canvas, '航班 ' + callsign + ' 无有效位置数据');
       return;
     }
+
+    // 判断进港/出港：扫描尾迹点的起降地信息
+    var isArrival = false;   // 进港 → 黄色；出港 → 天蓝
+    var terminalSet = {};
+    if (terminalAirports && terminalAirports.length) {
+      for (var ti = 0; ti < terminalAirports.length; ti++) {
+        terminalSet[terminalAirports[ti]] = true;
+      }
+      for (var ti = 0; ti < points.length; ti++) {
+        var adest = (points[ti].ad || '').toUpperCase().trim();
+        if (adest && terminalSet[adest]) {
+          isArrival = true;
+          break;
+        }
+        var adep = (points[ti].ap || '').toUpperCase().trim();
+        if (adep && terminalSet[adep]) {
+          isArrival = false;
+          break;
+        }
+      }
+    }
+    var trailColor = isArrival ? '#fbbf24' : '#38bdf8';  // 黄色 / 天蓝色
+    var trailLabel = isArrival ? '进港' : '出港';
 
     // 计算中心点和缩放
     var centerLat = (minLat + maxLat) / 2;
@@ -1979,62 +2006,42 @@ function esc(s) {
       return;
     }
 
-    // ── 轨迹线 ──
+    // ── 轨迹线（1px 精细线条） ──
     ctx.beginPath();
     ctx.moveTo(pixelPts[0].x, pixelPts[0].y);
     for (var i = 1; i < pixelPts.length; i++) {
       ctx.lineTo(pixelPts[i].x, pixelPts[i].y);
     }
-    ctx.strokeStyle = '#fbbf24';  // 亮黄色
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = trailColor;
+    ctx.lineWidth = 1;
     ctx.setLineDash([]);
     ctx.stroke();
 
-    // ── 小点标记每个位置 ──
-    ctx.fillStyle = '#fbbf24';
-    ctx.globalAlpha = 0.6;
-    for (var i = 0; i < pixelPts.length; i++) {
-      ctx.beginPath();
-      ctx.arc(pixelPts[i].x, pixelPts[i].y, 2.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1.0;
-
-    // ── 起点（绿色圆） ──
+    // ── 起点（轨迹色圆 + 白边） ──
     ctx.beginPath();
-    ctx.arc(pixelPts[0].x, pixelPts[0].y, 7, 0, Math.PI * 2);
-    ctx.fillStyle = '#34d399';
+    ctx.arc(pixelPts[0].x, pixelPts[0].y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = trailColor;
     ctx.fill();
     ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1.5;
     ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 10px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-    ctx.fillText('起', pixelPts[0].x, pixelPts[0].y - 8);
 
-    // ── 终点（红色圆） ──
+    // ── 终点（轨迹色圆 + 白边） ──
     var last = pixelPts[pixelPts.length - 1];
     ctx.beginPath();
-    ctx.arc(last.x, last.y, 7, 0, Math.PI * 2);
-    ctx.fillStyle = '#f87171';
+    ctx.arc(last.x, last.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = trailColor;
     ctx.fill();
     ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1.5;
     ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 10px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText('终', last.x, last.y + 8);
 
     // ── 航班号标签 ──
-    ctx.fillStyle = '#fbbf24';
+    ctx.fillStyle = trailColor;
     ctx.font = 'bold 13px Consolas, monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
-    ctx.fillText(callsign, 12, h - 12);
+    ctx.fillText(callsign + ' ' + trailLabel, 12, h - 12);
 
     // ── 点数和时间范围 ──
     var firstTs = (points[0].ts || '').slice(0, 19).replace('T', ' ');

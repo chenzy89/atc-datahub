@@ -167,6 +167,18 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         pts.sort(key=lambda p: p.get("ts", ""))
         return jsonify(pts)
 
+    @app.route("/api/config/terminal_airports")
+    def api_terminal_airports():
+        """返回终端区机场列表（用于判断进/出港）"""
+        cfg_path = Path("/home/share/atc_aftn_web/config/terminal_airports.txt")
+        airports: list[str] = []
+        if cfg_path.exists():
+            for line in cfg_path.read_text("utf-8").splitlines():
+                line = line.strip().upper()
+                if line and not line.startswith("#"):
+                    airports.append(line)
+        return jsonify(airports)
+
     @app.route("/api/fdr_stats")
     def api_fdr_stats():
         if fdr_store is None:
