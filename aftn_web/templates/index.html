@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.28</title>
+<title>ATC AFTN WebHub v26.5.29</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -267,7 +267,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.28</span>
+  <span class="badge">v26.5.29</span>
 </div>
 
 <div class="tabs">
@@ -1283,13 +1283,14 @@ function esc(s) {
   }
 
   // ── 绘制引擎 ──
-  function drawElement(ctx, el) {
+  function drawElement(ctx, el, geoOverride) {
     if (!el || !el.pts || el.pts.length === 0) return;
+    var g = geoOverride || geo;
     var color = getColor(el.color);
 
     switch (el.type) {
       case 'TEXT': {
-        var p = geo.realToPixel(el.pts[0]);
+        var p = g.realToPixel(el.pts[0]);
         var text = el.labels.length > 0 ? el.labels[0] : el.name;
         ctx.save();
         ctx.translate(p.x, p.y);
@@ -1305,8 +1306,8 @@ function esc(s) {
 
       case 'LINE': {
         if (el.pts.length < 2) break;
-        var p1 = geo.realToPixel(el.pts[0]);
-        var p2 = geo.realToPixel(el.pts[1]);
+        var p1 = g.realToPixel(el.pts[0]);
+        var p2 = g.realToPixel(el.pts[1]);
         ctx.strokeStyle = color;
         setLineStyle(ctx, el.style, el.width);
         ctx.beginPath();
@@ -1318,7 +1319,7 @@ function esc(s) {
       }
 
       case 'FIX': {
-        var p = geo.realToPixel(el.pts[0]);
+        var p = g.realToPixel(el.pts[0]);
         var ix = Math.round(p.x), iy = Math.round(p.y);
         var st = el.style;
         ctx.strokeStyle = color;
@@ -1384,8 +1385,8 @@ function esc(s) {
         var edge = el.pts[1];
         if (el.fill) {
           // 填充圆 (C# 用两个点确定直径)
-          var cp = geo.realToPixel(center);
-          var ep = geo.realToPixel(edge);
+          var cp = g.realToPixel(center);
+          var ep = g.realToPixel(edge);
           var r = Math.sqrt(Math.pow(ep.x-cp.x,2) + Math.pow(ep.y-cp.y,2));
           ctx.fillStyle = getColorRGBA(el.color, 0.3);
           ctx.strokeStyle = color;
@@ -1394,8 +1395,8 @@ function esc(s) {
           ctx.fill();
           ctx.stroke();
         } else {
-          var cp = geo.realToPixel(center);
-          var ep = geo.realToPixel(edge);
+          var cp = g.realToPixel(center);
+          var ep = g.realToPixel(edge);
           var r = Math.sqrt(Math.pow(ep.x-cp.x,2) + Math.pow(ep.y-cp.y,2));
           ctx.strokeStyle = color;
           setLineStyle(ctx, el.style, el.width);
@@ -1408,21 +1409,21 @@ function esc(s) {
 
       case 'ARC1': {
         if (el.pts.length < 3) break;
-        var a = geo.realToPixel(el.pts[0]);
-        var b = geo.realToPixel(el.pts[1]);
-        var c = geo.realToPixel(el.pts[2]);
+        var a = g.realToPixel(el.pts[0]);
+        var b = g.realToPixel(el.pts[1]);
+        var c = g.realToPixel(el.pts[2]);
         drawArc3Pts(ctx, a, b, c, color, el);
         break;
       }
 
       case 'ARC2': {
         if (el.pts.length < 1) break;
-        var cp = geo.realToPixel(el.pts[0]);
-        var r = el.radius * (geo.degreePerPixel / METERS_PER_DEG) * 100; // approximate
+        var cp = g.realToPixel(el.pts[0]);
+        var r = el.radius * (g.degreePerPixel / METERS_PER_DEG) * 100; // approximate
         // Actually compute from scale:
         // el.radius is in centi-degrees (from _parse_gar: val * 100)
         var rDeg = el.radius / 100;
-        var rPx = rDeg / geo.degreePerPixel;
+        var rPx = rDeg / g.degreePerPixel;
         var sa = el.startAngle;
         var ea = el.endAngle;
         ctx.strokeStyle = color;
@@ -1442,7 +1443,7 @@ function esc(s) {
       case 'ROUTE':
       case 'POLYGON': {
         if (el.pts.length < 2) break;
-        var pixels = el.pts.map(function(pt){ return geo.realToPixel(pt); });
+        var pixels = el.pts.map(function(pt){ return g.realToPixel(pt); });
         var first = pixels[0];
         ctx.beginPath();
         ctx.moveTo(first.x, first.y);
@@ -1959,15 +1960,8 @@ function esc(s) {
     ctx.fillStyle = '#0a1628';
     ctx.fillRect(0, 0, w, h);
 
-    // 临时替换全局 geo，让 drawElement 使用轨迹地图的坐标变换
-    var _savedGeo = window.geo || null;
-    window.geo = _trailGeo;
-    try {
-      for (var i = 0; i < _trailMapElements.length; i++) {
-        drawElement(ctx, _trailMapElements[i]);
-      }
-    } finally {
-      window.geo = _savedGeo;
+    for (var i = 0; i < _trailMapElements.length; i++) {
+      drawElement(ctx, _trailMapElements[i], _trailGeo);
     }
 
     // 收集有效像素点
