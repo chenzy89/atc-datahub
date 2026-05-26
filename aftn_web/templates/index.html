@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.30</title>
+<title>ATC AFTN WebHub v2.0.1</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -267,7 +267,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.30</span>
+  <span class="badge">v2.0.1</span>
 </div>
 
 <div class="tabs">
@@ -2018,24 +2018,7 @@ function esc(s) {
     ctx.setLineDash([]);
     ctx.stroke();
 
-    // ── 起点（轨迹色圆 + 白边） ──
-    ctx.beginPath();
-    ctx.arc(pixelPts[0].x, pixelPts[0].y, 6, 0, Math.PI * 2);
-    ctx.fillStyle = trailColor;
-    ctx.fill();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
 
-    // ── 终点（轨迹色圆 + 白边） ──
-    var last = pixelPts[pixelPts.length - 1];
-    ctx.beginPath();
-    ctx.arc(last.x, last.y, 6, 0, Math.PI * 2);
-    ctx.fillStyle = trailColor;
-    ctx.fill();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
 
     // ── 航班号标签 ──
     ctx.fillStyle = trailColor;
