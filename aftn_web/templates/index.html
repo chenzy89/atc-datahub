@@ -167,52 +167,57 @@ canvas#radarMap {
   background: #161b22;
   border: 1px solid #30363d;
   border-radius: 8px;
-  padding: 12px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  padding: 8px 12px;
 }
 .playback-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 .playback-row .label {
-  font-size: 12px;
+  font-size: 11px;
   color: #8b949e;
   white-space: nowrap;
 }
+.pb-sep {
+  display: inline-block;
+  width: 1px;
+  height: 20px;
+  background: #30363d;
+  margin: 0 4px;
+}
 .pb-time-sel {
-  padding: 4px 8px;
+  padding: 3px 4px;
   border: 1px solid #30363d;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 12px;
   background: #0d1117;
   color: #e6edf3;
   outline: none;
-  width: 60px;
+  width: 48px;
   text-align: center;
 }
 .pb-time-sel:focus { border-color: #58a6ff; }
 .pb-date-sel {
-  padding: 4px 8px;
+  padding: 3px 6px;
   border: 1px solid #30363d;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 12px;
   background: #0d1117;
   color: #e6edf3;
   outline: none;
+  width: 130px;
 }
 .pb-date-sel:focus { border-color: #58a6ff; }
 .pb-btn {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 28px;
   border: 1px solid #30363d;
-  border-radius: 6px;
+  border-radius: 5px;
   background: #21262d;
   color: #e6edf3;
-  font-size: 16px;
+  font-size: 13px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -234,7 +239,7 @@ canvas#radarMap {
 }
 .pb-speed:focus { border-color: #58a6ff; }
 .pb-status {
-  font-size: 12px;
+  font-size: 11px;
   color: #8b949e;
   margin-left: auto;
   white-space: nowrap;
@@ -243,10 +248,10 @@ canvas#radarMap {
 .pb-status.live { color: #3fb950; }
 .pb-progress {
   flex: 1;
-  min-width: 80px;
-  height: 4px;
+  min-width: 60px;
+  height: 6px;
   background: #21262d;
-  border-radius: 2px;
+  border-radius: 3px;
   overflow: hidden;
 }
 .pb-progress-fill {
@@ -497,15 +502,17 @@ canvas#radarMap {
       <select class="pb-time-sel" id="pbMin"></select>
       <span style="color:#8b949e;font-size:14px;">:</span>
       <select class="pb-time-sel" id="pbSec"></select>
-    </div>
-    <div class="playback-row">
+
+      <span class="pb-sep"></span>
+
       <button class="pb-btn" id="pbRewind" title="跳至最早">⏮</button>
       <button class="pb-btn" id="pbStepBack" title="后退10秒">⏪</button>
       <button class="pb-btn" id="pbPlayPause" title="播放/暂停">▶</button>
       <button class="pb-btn" id="pbStop" title="停止">⏹</button>
       <button class="pb-btn" id="pbStepFwd" title="快进10秒">⏩</button>
       <button class="pb-btn" id="pbSkipEnd" title="跳至实时">⏭</button>
-      <span class="label" style="margin-left:8px;">速度</span>
+
+      <span class="label" style="margin-left:0;">速度</span>
       <select class="pb-speed" id="pbSpeed">
         <option value="1">1×</option>
         <option value="4" selected>4×</option>
@@ -513,6 +520,7 @@ canvas#radarMap {
         <option value="12">12×</option>
         <option value="20">20×</option>
       </select>
+
       <div class="pb-progress" id="pbProgress"><div class="pb-progress-fill" id="pbProgressFill"></div></div>
       <span class="pb-status live" id="pbStatus">● 实时</span>
     </div>
