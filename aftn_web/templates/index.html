@@ -2058,9 +2058,15 @@ function esc(s) {
     if (state !== STATE.LIVE) stopReplay();
 
     replaySpeed = parseInt(el.speed.value) || 4;
-    var startTS = el.date.value + 'T' + el.hour.value + ':' + el.min.value + ':' + el.sec.value + '.000Z';
-    var startMs = new Date(startTS).getTime();
-    var endMs = startMs + 30 * 60 * 1000;  // 加载30分钟窗口
+    // 用户选择的是北京时 → 转 UTC
+    var parts = el.date.value.split('-');
+    var localDate = new Date(
+      parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]),
+      parseInt(el.hour.value), parseInt(el.min.value), parseInt(el.sec.value)
+    );
+    var startTS = localDate.toISOString();
+    var startMs = localDate.getTime();
+    var endMs = startMs + 30 * 60 * 1000;
     var endTS = new Date(endMs).toISOString();
 
     replayStartTime = startTS;
