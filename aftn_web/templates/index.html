@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.25</title>
+<title>ATC AFTN WebHub v26.5.26</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -120,6 +120,61 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .st-date-sel { padding:6px 8px; border:1px solid var(--border); border-radius:4px; font-size:13px; background:var(--bg-input); color:var(--text-primary); outline:none; cursor:pointer; min-width:70px; }
 .st-date-sel:focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(88,166,255,.15); }
 
+/* ── 雷达地图 ── */
+.map-container {
+  position: relative;
+  background: #0a1628;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 12px;
+}
+canvas#radarMap {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.coord-bar {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  color: #64748b;
+  font-size: 11px;
+  font-family: 'Consolas', monospace;
+  background: rgba(15,23,42,0.8);
+  padding: 2px 8px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+.legend {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 11px;
+  pointer-events: none;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+  color: #94a3b8;
+}
+.legend-item .swatch {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+.legend-item .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  background: currentColor;
+}
+
 /* ── responsive ── */
 @media (max-width: 768px) {
   .search-row label { width: 100%; }
@@ -134,13 +189,14 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.25</span>
+  <span class="badge">v26.5.26</span>
 </div>
 
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('msgs')">AFTN 报文</button>
   <button class="tab-btn" onclick="switchTab('plans')">飞行计划</button>
   <button class="tab-btn" onclick="switchTab('stats')">数据统计</button>
+  <button class="tab-btn" onclick="switchTab('map')">雷达地图</button>
 </div>
 
 <!-- ════════════════════════════════════════════════════════
@@ -350,6 +406,21 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   </div>
 </div>
 
+<!-- ════════════════════════════════════════════════════════
+     Tab 4: 雷达地图
+     ════════════════════════════════════════════════════════ -->
+<div class="panel" id="panel-map">
+  <div class="map-container">
+    <canvas id="radarMap"></canvas>
+    <div class="coord-bar" id="coordBar"></div>
+    <div class="legend">
+      <div class="legend-item"><span class="swatch" style="background:#34d399;"></span> 边界线 (BORDER)</div>
+    <div class="legend-item"><span class="dot" style="border-color:#34d399;background:#34d399;"></span> 已相关 (4s)</div>
+    <div class="legend-item"><span class="dot" style="border-color:#64748b;background:#64748b;"></span> 未相关 (4s)</div>
+    </div>
+  </div>
+</div>
+
 <!-- ── AFTN 报文详情弹窗 ── -->
 <div id="modal-msg" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:transparent;z-index:1100;align-items:center;justify-content:center;" onclick="if(event.target===this)closeMsg()">
   <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;max-width:900px;width:92%;max-height:85vh;overflow-y:auto;padding:20px;">
@@ -397,7 +468,7 @@ function switchTab(n) {
   document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
   document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
   var btns = document.querySelectorAll('.tab-btn');
-  var idx = {'msgs':0, 'plans':1, 'stats':2}[n] || 0;
+  var idx = {'msgs':0, 'plans':1, 'stats':2, 'map':3}[n] || 0;
   btns[idx].classList.add('active');
   document.getElementById('panel-'+n).classList.add('active');
 }
@@ -872,6 +943,904 @@ function esc(s) {
   if (!s) { return ''; }
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ═══════════════════════════════════════════════════════
+// 雷达地图 - ATC Display 风格
+// ═══════════════════════════════════════════════════════
+
+(function() {
+  // ── 常量 ──
+  var EARTH_RADIUS_M = 6371182;
+  var METERS_PER_DEG = 2 * Math.PI * EARTH_RADIUS_M / 360;
+
+  // 颜色表 (对应 C# SysColor.LesColors)
+  var COLORS = [
+    [110,110,110],[200,200,200],[69,110,86],[129,145,145],[0,0,254],
+    [254,0,254],[254,0,254],[75,94,97],[104,86,0],[69,110,86],
+    [3,197,206],[0,254,210],[82,142,186],[59,249,52],[229,0,0],
+    [126,117,46],[254,180,196],[110,110,110],[159,159,159],[0,0,0],
+    [255,255,255],[254,0,0],[0,254,0],[0,0,254],[192,224,179],
+    [254,0,254],[0,254,254],[254,172,49],[149,79,143],[39,79,114],
+    [255,255,0]
+  ];
+
+  // ── GeoTransform ──
+  var geo = null;
+  var mapElements = [];
+  var isLoading = false;
+  var mapError = null;
+
+  // ── DMS 解析 ──
+  function parseDMS(s) {
+    s = s.trim().replace(/"/g,'').replace(/'/g,'');
+    var m = s.match(/^(\d+),(\d+),([\d.]+)([NSEW])$/);
+    if (!m) return null;
+    var deg = parseFloat(m[1]) + parseFloat(m[2])/60 + parseFloat(m[3])/3600;
+    if (m[4] === 'S' || m[4] === 'W') deg = -deg;
+    return deg;
+  }
+
+  function parseDMSPair(latStr, lonStr) {
+    var lat = parseDMS(latStr);
+    var lon = parseDMS(lonStr);
+    if (lat === null || lon === null) return null;
+    return {lat:lat, lon:lon};
+  }
+
+  function parseCoord(tokens, off) {
+    if (off+1 < tokens.length) {
+      return parseDMSPair(tokens[off], tokens[off+1]);
+    }
+    return null;
+  }
+
+  // ── 颜色工具 ──
+  function getColor(idx) {
+    if (idx >= 0 && idx < COLORS.length) {
+      var c = COLORS[idx];
+      return 'rgb('+c[0]+','+c[1]+','+c[2]+')';
+    }
+    return 'rgb(200,200,200)';
+  }
+
+  function getColorRGBA(idx, a) {
+    if (idx >= 0 && idx < COLORS.length) {
+      var c = COLORS[idx];
+      return 'rgba('+c[0]+','+c[1]+','+c[2]+','+a+')';
+    }
+    return 'rgba(200,200,200,'+a+')';
+  }
+
+  // ── 地图文件解析 ──
+  function parseMapFile(text) {
+    var elements = [];
+    var lines = text.replace(/\r/g,'').split('\n');
+    var i = 0;
+    while (i < lines.length) {
+      var line = lines[i].trim();
+      if (!line || line.startsWith('//')) { i++; continue; }
+      var el = parseLine(line, lines, i);
+      if (el) {
+        elements.push(el);
+        // GR/GP 需要跳过后续点行
+        if (el.type === 'GR' || el.type === 'GP') {
+          var parts = line.split(/\s+/);
+          var npts = 0;
+          if (parts.length > 4) npts = parseInt(parts[4]) || 0;
+          i += npts;
+        }
+      }
+      i++;
+    }
+    return elements;
+  }
+
+  function parseLine(line, lines, idx) {
+    var parts = line.split(/\s+/);
+    var el = null;
+
+    // GTXT
+    if (line.startsWith('GTXT')) {
+      el = {type:'TEXT', color:parseInt(parts[0].slice(4)) || 0, pts:[], labels:[], name:'', rsv1:0, rsv2:0};
+      var pt = parseCoord(parts, 1);
+      if (pt) el.pts = [pt];
+      if (parts.length > 3) el.name = parts[3].replace(/"/g,'');
+      if (parts.length > 4) el.labels.push(parts[4].replace(/"/g,''));
+      if (parts.length > 5) el.rsv1 = parseFloat(parts[5]);
+      if (parts.length > 6) el.rsv2 = parseFloat(parts[6]);
+    }
+    // GV
+    else if (line.startsWith('GV') && /^GV\d+/.test(line)) {
+      el = {type:'LINE', color:parseInt(parts[0].slice(2)) || 0, pts:[], labels:[], name:'', style:0, width:1};
+      var p1 = parseCoord(parts, 1);
+      var p2 = parseCoord(parts, 3);
+      if (p1 && p2) el.pts = [p1, p2];
+      if (parts.length > 5) el.style = parseInt(parts[5]) || 0;
+      if (parts.length > 6) el.width = parseInt(parts[6]) || 1;
+      if (parts.length > 7) el.name = parts[7];
+      if (parts.length > 9) { el.labels.push(parts[8]); el.labels.push(parts[9]); }
+    }
+    // GST
+    else if (line.startsWith('GST')) {
+      el = {type:'FIX', color:parseInt(parts[0].slice(3)) || 0, pts:[], labels:[], name:'', style:0};
+      var pt = parseCoord(parts, 1);
+      if (pt) el.pts = [pt];
+      if (parts.length > 3) el.name = parts[3].replace(/"/g,'');
+      if (parts.length > 4) el.labels.push(parts[4].replace(/"/g,''));
+      if (parts.length > 5) el.style = parseInt(parts[5]) || 0;
+    }
+    // GC
+    else if (line.startsWith('GC') && /^GC\d+/.test(line)) {
+      el = {type:'CIRCLE', color:parseInt(parts[0].slice(2)) || 0, pts:[], labels:[], name:'', style:0, width:1, fill:0};
+      var p1 = parseCoord(parts, 1);
+      var p2 = parseCoord(parts, 3);
+      if (p1 && p2) el.pts = [p1, p2];
+      if (parts.length > 5) el.style = parseInt(parts[5]) || 0;
+      if (parts.length > 6) el.width = parseInt(parts[6]) || 1;
+      if (parts.length > 10) el.fill = parseInt(parts[10]) || 0;
+    }
+    // GA (三点定弧)
+    else if (line.startsWith('GA') && /^GA\d+/.test(line)) {
+      el = {type:'ARC1', color:parseInt(parts[0].slice(2)) || 0, pts:[], labels:[], name:'', style:0, width:1, fill:0};
+      if (parts.length >= 7) {
+        el.pts = [
+          parseDMSPair(parts[1], parts[2]),
+          parseDMSPair(parts[3], parts[4]),
+          parseDMSPair(parts[5], parts[6]),
+        ];
+        el.pts = el.pts.filter(function(p){ return p !== null; });
+      }
+      if (parts.length > 7) el.style = parseInt(parts[7]) || 0;
+      if (parts.length > 8) el.width = parseInt(parts[8]) || 1;
+      if (parts.length > 13) el.fill = parseInt(parts[13]) || 0;
+    }
+    // GAR (圆心+半径+角度)
+    else if (line.startsWith('GAR')) {
+      el = {type:'ARC2', color:parseInt(parts[0].slice(3)) || 0, pts:[], labels:[], name:'', style:0, width:1, radius:0, startAngle:0, endAngle:0};
+      var pt = parseCoord(parts, 1);
+      if (pt) el.pts = [pt];
+      if (parts.length > 3) el.radius = parseFloat(parts[3]) * 100;
+      if (parts.length > 4) el.startAngle = parseFloat(parts[4]);
+      if (parts.length > 5) el.endAngle = parseFloat(parts[5]);
+      if (parts.length > 6) el.style = parseInt(parts[6]) || 0;
+      if (parts.length > 10) el.width = parseInt(parts[10]) || 1;
+    }
+    // GR (航路-多点连线)
+    else if (line.startsWith('GR')) {
+      el = {type:'ROUTE', color:parseInt(parts[0].slice(2)) || 0, pts:[], labels:[], name:'', style:0, width:1};
+      if (parts.length > 1) el.name = parts[1];
+      if (parts.length > 2) el.style = parseInt(parts[2]) || 0;
+      if (parts.length > 3) el.width = parseInt(parts[3]) || 1;
+      var npts = parts.length > 4 ? parseInt(parts[4]) : 0;
+      for (var j = 0; j < npts && idx+1+j < lines.length; j++) {
+        var ptl = lines[idx+1+j].trim();
+        if (!ptl) continue;
+        var tp = ptl.split(/\s+/);
+        var p = parseCoord(tp, 1);
+        if (p) el.pts.push(p);
+        if (tp.length > 3) el.labels.push(tp[3]);
+      }
+    }
+    // GP (多边形)
+    else if (line.startsWith('GP') && /^GP\d+/.test(line)) {
+      el = {type:'POLYGON', color:parseInt(parts[0].slice(2)) || 0, pts:[], labels:[], name:'', style:0, width:1, fill:0};
+      if (parts.length > 1) el.name = parts[1];
+      if (parts.length > 2) el.style = parseInt(parts[2]) || 0;
+      if (parts.length > 3) el.fill = parseFloat(parts[3]) || 0;
+      var npts = parts.length > 4 ? parseInt(parts[4]) : 0;
+      if (parts.length > 5) el.width = parseInt(parts[5]) || 1;
+      for (var k = 0; k < npts && idx+1+k < lines.length; k++) {
+        var pl = lines[idx+1+k].trim();
+        if (!pl) continue;
+        var tp = pl.split(/\s+/);
+        var p = parseCoord(tp, 1);
+        if (p) el.pts.push(p);
+        if (tp.length > 3) el.labels.push(tp[3]);
+      }
+    }
+    return el;
+  }
+
+  // ── 线型工具 ──
+  function setLineStyle(ctx, style, width) {
+    ctx.lineWidth = width || 1;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    var patterns = {
+      0: [],
+      1: [8, 6],
+      2: [3, 5],
+      3: [8, 6, 3, 6],
+      4: [8, 6, 3, 6, 3, 6],
+    };
+    var p = patterns[style] || [];
+    if (p.length > 0) {
+      ctx.setLineDash(p);
+      ctx.lineDashOffset = 0;
+    } else {
+      ctx.setLineDash([]);
+    }
+  }
+
+  // ── 绘制引擎 ──
+  function drawElement(ctx, el) {
+    if (!el || !el.pts || el.pts.length === 0) return;
+    var color = getColor(el.color);
+
+    switch (el.type) {
+      case 'TEXT': {
+        var p = geo.realToPixel(el.pts[0]);
+        var text = el.labels.length > 0 ? el.labels[0] : el.name;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        if (el.rsv1) ctx.rotate(el.rsv1 * Math.PI / 180);
+        ctx.fillStyle = color;
+        ctx.font = '12px "Microsoft YaHei", "PingFang SC", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText(text, 0, 0);
+        ctx.restore();
+        break;
+      }
+
+      case 'LINE': {
+        if (el.pts.length < 2) break;
+        var p1 = geo.realToPixel(el.pts[0]);
+        var p2 = geo.realToPixel(el.pts[1]);
+        ctx.strokeStyle = color;
+        setLineStyle(ctx, el.style, el.width);
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        break;
+      }
+
+      case 'FIX': {
+        var p = geo.realToPixel(el.pts[0]);
+        var ix = Math.round(p.x), iy = Math.round(p.y);
+        var st = el.style;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+
+        if (st === 0) {
+          // 实心正方形
+          ctx.fillRect(ix-2, iy-2, 5, 5);
+        } else if (st === 2 || st === 101) {
+          // 实心三角形
+          ctx.beginPath();
+          ctx.moveTo(ix, iy-6);
+          ctx.lineTo(ix-5, iy+5);
+          ctx.lineTo(ix+5, iy+5);
+          ctx.closePath();
+          ctx.fill();
+        } else if (st === 107) {
+          // 直升机场 - 圆+十字
+          ctx.beginPath();
+          ctx.arc(ix, iy, 12, 0, Math.PI*2);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(ix-12, iy); ctx.lineTo(ix+12, iy);
+          ctx.moveTo(ix, iy-12); ctx.lineTo(ix, iy+12);
+          ctx.stroke();
+        } else if (st === 105) {
+          // 圆+中心点
+          ctx.beginPath(); ctx.arc(ix, iy, 8, 0, Math.PI*2); ctx.stroke();
+          ctx.fillRect(ix-1, iy-1, 3, 3);
+        } else if (st === 109) {
+          // 圆+十字
+          ctx.beginPath(); ctx.arc(ix, iy, 10, 0, Math.PI*2); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(ix-10, iy); ctx.lineTo(ix+10, iy);
+          ctx.moveTo(ix, iy-10); ctx.lineTo(ix, iy+10); ctx.stroke();
+        } else if (st === 112) {
+          // X形十字
+          ctx.beginPath();
+          ctx.moveTo(ix-5, iy-5); ctx.lineTo(ix+5, iy+5);
+          ctx.moveTo(ix+5, iy-5); ctx.lineTo(ix-5, iy+5);
+          ctx.stroke();
+        } else {
+          // 默认: 小圆点
+          ctx.beginPath(); ctx.arc(ix, iy, 3, 0, Math.PI*2); ctx.fill();
+        }
+
+        // 标签
+        if (el.labels.length > 0 || el.name) {
+          var label = el.labels[0] || el.name;
+          ctx.fillStyle = color;
+          ctx.font = '11px "Microsoft YaHei", "PingFang SC", sans-serif';
+          ctx.textBaseline = 'bottom';
+          ctx.textAlign = 'left';
+          ctx.fillText(label, ix + 6, iy - 4);
+        }
+        break;
+      }
+
+      case 'CIRCLE': {
+        if (el.pts.length < 2) break;
+        var center = el.pts[0];
+        var edge = el.pts[1];
+        if (el.fill) {
+          // 填充圆 (C# 用两个点确定直径)
+          var cp = geo.realToPixel(center);
+          var ep = geo.realToPixel(edge);
+          var r = Math.sqrt(Math.pow(ep.x-cp.x,2) + Math.pow(ep.y-cp.y,2));
+          ctx.fillStyle = getColorRGBA(el.color, 0.3);
+          ctx.strokeStyle = color;
+          setLineStyle(ctx, el.style, el.width);
+          ctx.beginPath(); ctx.arc(cp.x, cp.y, r, 0, Math.PI*2);
+          ctx.fill();
+          ctx.stroke();
+        } else {
+          var cp = geo.realToPixel(center);
+          var ep = geo.realToPixel(edge);
+          var r = Math.sqrt(Math.pow(ep.x-cp.x,2) + Math.pow(ep.y-cp.y,2));
+          ctx.strokeStyle = color;
+          setLineStyle(ctx, el.style, el.width);
+          ctx.beginPath(); ctx.arc(cp.x, cp.y, r, 0, Math.PI*2);
+          ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        break;
+      }
+
+      case 'ARC1': {
+        if (el.pts.length < 3) break;
+        var a = geo.realToPixel(el.pts[0]);
+        var b = geo.realToPixel(el.pts[1]);
+        var c = geo.realToPixel(el.pts[2]);
+        drawArc3Pts(ctx, a, b, c, color, el);
+        break;
+      }
+
+      case 'ARC2': {
+        if (el.pts.length < 1) break;
+        var cp = geo.realToPixel(el.pts[0]);
+        var r = el.radius * (geo.degreePerPixel / METERS_PER_DEG) * 100; // approximate
+        // Actually compute from scale:
+        // el.radius is in centi-degrees (from _parse_gar: val * 100)
+        var rDeg = el.radius / 100;
+        var rPx = rDeg / geo.degreePerPixel;
+        var sa = el.startAngle;
+        var ea = el.endAngle;
+        ctx.strokeStyle = color;
+        setLineStyle(ctx, el.style, el.width);
+        ctx.beginPath();
+        // Canvas arc uses radians; angles from C# are geographic (N=0, CW)
+        // Convert: canvas 0=right, clockwise; geo 0=up, clockwise
+        // canvasAngle = 90 - geoAngle (in degrees)
+        var startRad = (90 - sa) * Math.PI / 180;
+        var endRad = (90 - ea) * Math.PI / 180;
+        ctx.arc(cp.x, cp.y, rPx, Math.min(startRad, endRad), Math.max(startRad, endRad));
+        ctx.stroke();
+        ctx.setLineDash([]);
+        break;
+      }
+
+      case 'ROUTE':
+      case 'POLYGON': {
+        if (el.pts.length < 2) break;
+        var pixels = el.pts.map(function(pt){ return geo.realToPixel(pt); });
+        var first = pixels[0];
+        ctx.beginPath();
+        ctx.moveTo(first.x, first.y);
+        for (var i = 1; i < pixels.length; i++) {
+          ctx.lineTo(pixels[i].x, pixels[i].y);
+        }
+        if (el.type === 'POLYGON') {
+          ctx.closePath();
+          if (el.fill) {
+            ctx.fillStyle = getColorRGBA(el.color, el.fill);
+            ctx.fill();
+          }
+        }
+        ctx.strokeStyle = color;
+        setLineStyle(ctx, el.style, el.width);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        break;
+      }
+    }
+  }
+
+  // ── 三点定弧 ──
+  function drawArc3Pts(ctx, a, b, c, color, el) {
+    // 通过三点计算圆心和半径
+    var d = 2 * (a.x*(b.y-c.y) + b.x*(c.y-a.y) + c.x*(a.y-b.y));
+    if (Math.abs(d) < 0.0001) {
+      // 近似直线
+      ctx.strokeStyle = color;
+      setLineStyle(ctx, el.style, el.width);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); ctx.stroke();
+      ctx.setLineDash([]);
+      return;
+    }
+    var ux = ((a.x*a.x+a.y*a.y)*(b.y-c.y) + (b.x*b.x+b.y*b.y)*(c.y-a.y) + (c.x*c.x+c.y*c.y)*(a.y-b.y)) / d;
+    var uy = ((a.x*a.x+a.y*a.y)*(c.x-b.x) + (b.x*b.x+b.y*b.y)*(a.x-c.x) + (c.x*c.x+c.y*c.y)*(b.x-a.x)) / d;
+    var r = Math.sqrt(Math.pow(ux-a.x,2)+Math.pow(uy-a.y,2));
+    if (r < 0.5) {
+      ctx.strokeStyle = color;
+      ctx.setLineDash([]);
+      return;
+    }
+
+    var startAngle = Math.atan2(a.y-uy, a.x-ux);
+    var endAngle = Math.atan2(c.y-uy, c.x-ux);
+    // 通过 b 确定方向
+    var midAngle = Math.atan2(b.y-uy, b.x-ux);
+    var ccw = false;
+    // 检查 b 是否在 a->c 的弧上
+    // 标准化角度
+    function normAng(a) { while(a < 0) a += 2*Math.PI; while(a >= 2*Math.PI) a -= 2*Math.PI; return a; }
+    var sa = normAng(startAngle);
+    var ea = normAng(endAngle);
+    var ma = normAng(midAngle);
+    if (sa < ea) {
+      ccw = !(ma > sa && ma < ea);
+    } else {
+      ccw = (ma > ea && ma < sa);
+    }
+    var counterclockwise = ccw;
+
+    ctx.strokeStyle = color;
+    setLineStyle(ctx, el.style, el.width);
+    ctx.beginPath();
+    ctx.arc(ux, uy, r, startAngle, endAngle, counterclockwise);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // ── 主绘制 ──
+  function drawMap() {
+    var canvas = document.getElementById('radarMap');
+    if (!canvas || !canvas.getContext) return;
+
+    var container = canvas.parentElement;
+    // 首次加载时取地图数据（按 maplist.txt 定义的文件名）
+    if (!isLoading && mapElements.length === 0 && !mapError) {
+      isLoading = true;
+      fetch('/api/maplist')
+        .then(function(r) {
+          if (!r.ok) throw new Error('maplist HTTP '+r.status);
+          return r.json();
+        })
+        .then(function(fileList) {
+          if (fileList.length === 0) {
+            mapElements = [];
+            isLoading = false;
+            drawMap();
+            return;
+          }
+          var promises = fileList.map(function(name) {
+            return fetch('/api/map_file/' + encodeURIComponent(name))
+              .then(function(r) {
+                if (!r.ok) return '';
+                return r.text();
+              });
+          });
+          return Promise.all(promises).then(function(texts) {
+            var all = [];
+            for (var i = 0; i < texts.length; i++) {
+              if (texts[i]) {
+                var parsed = parseMapFile(texts[i]);
+                all = all.concat(parsed);
+              }
+            }
+            mapElements = all;
+            isLoading = false;
+            drawMap();
+          });
+        })
+        .catch(function(err) {
+          mapError = err.message;
+          isLoading = false;
+          drawMap();
+        });
+      return;
+    }
+
+    var dpr = window.devicePixelRatio || 1;
+    var cw = container.clientWidth - 2;
+    if (cw < 100) cw = 800;
+    var displayW = cw;
+    var displayH = Math.min(Math.round(cw * 0.7), window.innerHeight - 160);
+
+    // 初始化 GeoTransform
+    if (!geo) {
+      geo = new GeoTransform(
+        {lat: 22.7, lon: 113.9},  // 中心 (珠三角)
+        200,  // 200 m/pixel
+        displayW, displayH
+      );
+    }
+    geo.updateScreen(displayW, displayH);
+
+    canvas.width = displayW * dpr;
+    canvas.height = displayH * dpr;
+    canvas.style.width = displayW + 'px';
+    canvas.style.height = displayH + 'px';
+
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    // ── 背景 ──
+    ctx.fillStyle = '#0a1628';
+    ctx.fillRect(0, 0, displayW, displayH);
+
+    // ── 边框 ──
+    ctx.strokeStyle = '#1e3a5f';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([]);
+    ctx.strokeRect(0, 0, displayW, displayH);
+
+    // ── 地图元素 ──
+    for (var i = 0; i < mapElements.length; i++) {
+      drawElement(ctx, mapElements[i]);
+    }
+
+    // ── 航迹标牌 ──
+    if (window._radarTracks && window._radarTracks.length > 0 && !mapError) {
+      for (var ti = 0; ti < window._radarTracks.length; ti++) {
+        var trk = window._radarTracks[ti];
+        var lat = parseFloat(trk.latitude);
+        var lon = parseFloat(trk.longitude);
+        if (!lat && !lon) continue;
+        var sp = geo.realToPixel({lat:lat, lon:lon});
+        if (sp.x < -80 || sp.x > displayW+80 || sp.y < -80 || sp.y > displayH+80) continue;
+
+        // 是否已相关（有起降地）
+        var associated = !!(trk.adep && trk.adest);
+        var dotColor = associated ? '#34d399' : '#64748b';
+        var labelColor = associated ? '#34d399' : '#94a3b8';
+
+        // ── 尾迹点 (2px, 透明70%) ──
+        var trail = trk.trail;
+        if (trail && trail.length > 0) {
+          ctx.fillStyle = dotColor;
+          ctx.globalAlpha = 0.7;
+          for (var trli = 0; trli < trail.length; trli++) {
+            var tpt = trail[trli];
+            var tl = parseFloat(tpt[0]);
+            var tn = parseFloat(tpt[1]);
+            if (!tl && !tn) continue;
+            var tp = geo.realToPixel({lat:tl, lon:tn});
+            ctx.fillRect(tp.x - 1, tp.y - 1, 3, 3);
+          }
+          ctx.globalAlpha = 1.0;
+        }
+
+        // ── 实心圆 ──
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = dotColor;
+        ctx.setLineDash([]);
+        ctx.fill();
+
+        // ── 高度(4位, 单位10m) ──
+        var alt10m = 0;
+        if (trk.flight_level) {
+          alt10m = Math.round(parseFloat(trk.flight_level) / 10);
+        }
+        var altStr = ('0000' + Math.abs(alt10m)).slice(-4);
+
+        // ── 航班号 + 高度标签 ──
+        ctx.fillStyle = labelColor;
+        ctx.font = 'bold 11px Consolas, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        var label = (trk.callsign || trk.ssr || '').trim();
+        if (label) {
+          ctx.fillText(label, sp.x + 8, sp.y - 6);
+          ctx.font = '10px Consolas, monospace';
+          ctx.fillStyle = associated ? '#94a3b8' : '#64748b';
+          ctx.fillText(altStr, sp.x + 8, sp.y + 6);
+        }
+      }
+    }
+
+    // ── 加载/错误提示 ──
+    if (mapError) {
+      ctx.fillStyle = '#f87171';
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('地图加载失败: '+mapError, displayW/2, displayH/2);
+    } else if (isLoading) {
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('加载地图数据...', displayW/2, displayH/2);
+    }
+
+    // ── 坐标栏 ──
+    var coordBar = document.getElementById('coordBar');
+    if (coordBar) {
+      var scaleStr = geo.scale >= 1000 ? (geo.scale/1000).toFixed(1)+'km/px' : parseInt(geo.scale)+'m/px';
+      coordBar.textContent = '比例: '+scaleStr;
+    }
+  }
+
+  // ── GeoTransform ──
+  function GeoTransform(center, scale, w, h) {
+    this.center = center;
+    this.scale = scale;
+    this.screenW = w;
+    this.screenH = h;
+    this.screenCx = w / 2;
+    this.screenCy = h / 2;
+    this.degreePerPixel = scale / METERS_PER_DEG;
+  }
+
+  GeoTransform.prototype.updateScreen = function(w, h) {
+    this.screenW = w;
+    this.screenH = h;
+    this.screenCx = w / 2;
+    this.screenCy = h / 2;
+  };
+
+  GeoTransform.prototype.setCenter = function(c) {
+    this.center = c;
+  };
+
+  GeoTransform.prototype.setScale = function(s) {
+    this.scale = Math.max(10, Math.min(50000, s));
+    this.degreePerPixel = this.scale / METERS_PER_DEG;
+  };
+
+  GeoTransform.prototype.realToPixel = function(pt) {
+    var dy = (pt.lat - this.center.lat) / this.degreePerPixel;
+    var dx = ((pt.lon - this.center.lon) / this.degreePerPixel) *
+             Math.cos(this.center.lat * Math.PI / 180);
+    return {x: this.screenCx + dx, y: this.screenCy - dy};
+  };
+
+  GeoTransform.prototype.pixelToReal = function(px, py) {
+    var dy = (py - this.screenCy) * this.degreePerPixel;
+    var dx = ((px - this.screenCx) * this.degreePerPixel) /
+             Math.cos(this.center.lat * Math.PI / 180);
+    return {lat: this.center.lat - dy, lon: this.center.lon + dx};
+  };
+
+  GeoTransform.prototype.getExtent = function() {
+    var tl = this.pixelToReal(0, 0);
+    var br = this.pixelToReal(this.screenW, this.screenH);
+    return {top: tl.lat, bottom: br.lat, left: tl.lon, right: br.lon};
+  };
+
+  // ── 航迹点击信息窗 ──
+  var _hoveredTrack = null;      // 当前悬停的航迹对象
+  var TRACK_HIT_RADIUS = 8;      // 点击/悬停判定半径
+
+  function showTrackPopup(trk) {
+    // 关闭已有弹窗
+    closeTrackPopup();
+
+    // 查询完整飞行计划信息
+    var params = new URLSearchParams({callsign: trk.callsign || ''});
+    if (trk.adep) params.set('adep', trk.adep);
+    if (trk.adest) params.set('adest', trk.adest);
+
+    fetch('/api/flight_info?' + params.toString())
+      .then(function(r) {
+        if (!r.ok) throw new Error('未找到飞行计划');
+        return r.json();
+      })
+      .then(function(data) {
+        var popup = document.createElement('div');
+        popup.id = 'track-popup';
+        popup.style.cssText =
+          'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);'
+          + 'background:#0f1a2e;border:1px solid #1e3a5f;border-radius:10px;'
+          + 'padding:20px 24px;z-index:2000;min-width:340px;max-width:420px;'
+          + 'box-shadow:0 8px 32px rgba(0,0,0,.6);color:#e2e8f0;font-size:13px;line-height:1.7;';
+
+        popup.innerHTML = '' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+          + '<span style="font-size:16px;font-weight:700;color:#34d399;">' + esc(data.callsign || '-') + '</span>'
+          + '<button onclick="closeTrackPopup()" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;">&times;</button>'
+          + '</div>'
+          + '<table style="width:100%;border-collapse:collapse;">'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">起飞地</td><td style="padding:2px 0;">' + esc(data.adep || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">目的地</td><td style="padding:2px 0;">' + esc(data.adest || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">机型</td><td style="padding:2px 0;">' + esc(data.aircraft_type || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">SSR</td><td style="padding:2px 0;">' + esc(data.ssr || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">ETD</td><td style="padding:2px 0;">' + esc(data.etd || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">ATD</td><td style="padding:2px 0;">' + esc(data.atd || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">EET</td><td style="padding:2px 0;">' + esc(data.eet || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">跑道</td><td style="padding:2px 0;color:' + (data.runway === 'ERROR' ? '#f87171' : '#e2e8f0') + ';">' + esc(data.runway || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">飞行程序</td><td style="padding:2px 0;color:' + (data.flight_procedure === 'ERROR' ? '#f87171' : '#e2e8f0') + ';">' + esc(data.flight_procedure || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">移交点</td><td style="padding:2px 0;">' + esc(data.handover_pt || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;vertical-align:top;">航路</td><td style="padding:2px 0;word-break:break-all;font-size:12px;">' + esc(data.route || '-') + '</td></tr>'
+          + '</table>';
+
+        // 背景遮罩
+        var overlay = document.createElement('div');
+        overlay.id = 'track-popup-overlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:1999;';
+        overlay.onclick = closeTrackPopup;
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(popup);
+      })
+      .catch(function(err) {
+        // 无飞行计划时回退显示雷达数据
+        var popup = document.createElement('div');
+        popup.id = 'track-popup';
+        popup.style.cssText =
+          'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);'
+          + 'background:#0f1a2e;border:1px solid #1e3a5f;border-radius:10px;'
+          + 'padding:20px 24px;z-index:2000;min-width:300px;'
+          + 'box-shadow:0 8px 32px rgba(0,0,0,.6);color:#e2e8f0;font-size:13px;line-height:1.7;';
+        popup.innerHTML = '' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+          + '<span style="font-size:16px;font-weight:700;color:#34d399;">' + esc(trk.callsign || trk.ssr || '-') + '</span>'
+          + '<button onclick="closeTrackPopup()" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;">&times;</button>'
+          + '</div>'
+          + '<div style="color:#94a3b8;">无飞行计划记录</div>'
+          + '<table style="width:100%;border-collapse:collapse;margin-top:10px;">'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">纬度</td><td style="padding:2px 0;">' + (typeof trk.latitude !== 'undefined' ? parseFloat(trk.latitude).toFixed(4) : '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">经度</td><td style="padding:2px 0;">' + (typeof trk.longitude !== 'undefined' ? parseFloat(trk.longitude).toFixed(4) : '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">高度</td><td style="padding:2px 0;">' + (trk.flight_level ? Math.round(parseFloat(trk.flight_level)) + ' m' : '-') + '</td></tr>'
+          + '</table>';
+
+        var overlay = document.createElement('div');
+        overlay.id = 'track-popup-overlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:1999;';
+        overlay.onclick = closeTrackPopup;
+        document.body.appendChild(overlay);
+        document.body.appendChild(popup);
+      });
+  }
+
+  function closeTrackPopup() {
+    var popup = document.getElementById('track-popup');
+    var overlay = document.getElementById('track-popup-overlay');
+    if (popup) { popup.remove(); }
+    if (overlay) { overlay.remove(); }
+  }
+
+  // ── 缩放与拖动 + 悬停检测 ──
+  var isDragging = false;
+  var dragStartX, dragStartY;
+  var dragCenterLat, dragCenterLon;
+
+  function findTrackAt(canvas, clientX, clientY) {
+    if (!window._radarTracks || !geo) return null;
+    var rect = canvas.getBoundingClientRect();
+    var sx = geo.screenW / rect.width;
+    var sy = geo.screenH / rect.height;
+    var px = (clientX - rect.left) * sx;
+    var py = (clientY - rect.top) * sy;
+
+    var tracks = window._radarTracks;
+    for (var i = tracks.length - 1; i >= 0; i--) {
+      var trk = tracks[i];
+      var lat = parseFloat(trk.latitude);
+      var lon = parseFloat(trk.longitude);
+      if (!lat && !lon) continue;
+      var sp = geo.realToPixel({lat:lat, lon:lon});
+      var dx = sp.x - px;
+      var dy = sp.y - py;
+      if (dx*dx + dy*dy <= TRACK_HIT_RADIUS * TRACK_HIT_RADIUS) {
+        return trk;
+      }
+    }
+    return null;
+  }
+
+  function setupInteraction() {
+    var canvas = document.getElementById('radarMap');
+    if (!canvas) return;
+
+    // 滚轮缩放
+    canvas.addEventListener('wheel', function(e) {
+      e.preventDefault();
+      if (!geo) return;
+      var delta = e.deltaY > 0 ? 1.1 : 1/1.1;
+      geo.setScale(geo.scale * delta);
+      drawMap();
+    }, {passive: false});
+
+    // 鼠标按下：航迹点击优先，否则开始拖拽
+    canvas.addEventListener('mousedown', function(e) {
+      if (e.button !== 0) return;
+      // 检查是否点在航迹上
+      var hit = findTrackAt(canvas, e.clientX, e.clientY);
+      if (hit) {
+        e.preventDefault();
+        showTrackPopup(hit);
+        return;
+      }
+      isDragging = true;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      if (geo) {
+        dragCenterLat = geo.center.lat;
+        dragCenterLon = geo.center.lon;
+      }
+      canvas.style.cursor = 'grabbing';
+    });
+
+    // 鼠标移动：悬停检测 + 拖拽
+    canvas.addEventListener('mousemove', function(e) {
+      if (isDragging && geo) {
+        var rect = canvas.getBoundingClientRect();
+        var sx = geo.screenW / rect.width;
+        var sy = geo.screenH / rect.height;
+        var dx = (e.clientX - dragStartX) * sx;
+        var dy = (e.clientY - dragStartY) * sy;
+
+        var lonDelta = -dx * geo.degreePerPixel / Math.cos(geo.center.lat * Math.PI / 180);
+        var latDelta = dy * geo.degreePerPixel;
+        geo.setCenter({lat: dragCenterLat + latDelta, lon: dragCenterLon + lonDelta});
+        drawMap();
+        return;
+      }
+
+      // 悬停检测
+      var hit = findTrackAt(canvas, e.clientX, e.clientY);
+      if (hit && !_hoveredTrack) {
+        // 刚进入航迹区域
+        _hoveredTrack = hit;
+        canvas.style.cursor = 'crosshair';
+      } else if (!hit && _hoveredTrack) {
+        // 刚离开航迹区域
+        _hoveredTrack = null;
+        canvas.style.cursor = 'grab';
+      }
+    });
+
+    // 鼠标释放
+    window.addEventListener('mouseup', function() {
+      if (isDragging) {
+        isDragging = false;
+        if (canvas) canvas.style.cursor = 'grab';
+        _hoveredTrack = null;
+      }
+    });
+
+    canvas.style.cursor = 'grab';
+  }
+
+  // ── 初始化 ──
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() { setupInteraction(); drawMap(); });
+  } else {
+    setTimeout(function() { setupInteraction(); drawMap(); }, 50);
+  }
+
+  // ── 航迹定期刷新 ──
+  var trackTimer = null;
+  function fetchTracks() {
+    fetch('/api/radar_tracks')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        window._radarTracks = data;
+        // 如果当前在地图 tab，重绘
+        var activeTab = document.querySelector('.tab-btn.active');
+        if (activeTab && activeTab.textContent.trim() === '雷达地图') {
+          drawMap();
+        }
+      })
+      .catch(function() { /* 静默 */ });
+  }
+  function startTrackRefresh() {
+    if (trackTimer) return;
+    fetchTracks();
+    trackTimer = setInterval(fetchTracks, 4000);
+  }
+  startTrackRefresh();
+
+  // tab 切换时重绘
+  var _origSwitch = window.switchTab;
+  window.switchTab = function(n) {
+    _origSwitch(n);
+    if (n === 'map') { setTimeout(drawMap, 100); startTrackRefresh(); }
+  };
+})();
 
 </script>
 </body>

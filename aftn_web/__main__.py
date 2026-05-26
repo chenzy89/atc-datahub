@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import signal
 import sys
+import time
 from argparse import ArgumentParser
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -12,6 +13,7 @@ from threading import Thread
 
 from .config import load_config
 from .database import Database, _fmt_dt, _pick_closest_datetime
+from .fdr_store import FDRStore, PROCESS_INTERVAL_SECONDS
 from .radar_receiver import RadarReceiver, parse_datagram
 import json
 
@@ -79,23 +81,18 @@ def main(argv: list[str] | None = None) -> int:
     # AFTN 解析器
     parser_aftn = AftnParser()
 
+    # 停止标志 — 用于信号处理与线程协调
+    stop_requested = [False]
+
     # 雷达 CAT062 接收器（可选）
+    fdr_store: FDRStore | None = None
+    radar_receiver: RadarReceiver | None = None
     if config.radar.enabled:
+        fdr_store = FDRStore()
+
         def on_radar_data(parsed: dict, addr: str, port: int, received_at: datetime) -> None:
-            callsign = parsed.get("callsign", "").strip()
-            runway = parsed.get("runway", "").strip()
-            flight_procedure = parsed.get("flight_procedure", "").strip()
-            ssr = parsed.get("ssr", "").strip()
-            adep = parsed.get("adep", "").strip()
-            adest = parsed.get("adest", "").strip()
-            if not callsign and not ssr:
-                return
-            if not runway and not flight_procedure:
-                return
-            if callsign:
-                db.update_radar_data(callsign, runway, flight_procedure, adep=adep, adest=adest)
-            elif ssr:
-                db.update_radar_data_by_ssr(ssr, runway, flight_procedure)
+            # 只更新内存 FDR，不做 DB 写入
+            fdr_store.update_from_radar(parsed)
 
         radar_receiver = RadarReceiver(
             multicast_group=config.radar.multicast_group,
@@ -108,8 +105,32 @@ def main(argv: list[str] | None = None) -> int:
             "radar receiver: %s:%d (enabled)",
             config.radar.multicast_group, config.radar.port,
         )
+
+        # FDR 定期处理线程（每 4 秒一次）
+        _checkpoint_counter = [0]
+
+        def fdr_processor() -> None:
+            while not stop_requested[0]:
+                time.sleep(PROCESS_INTERVAL_SECONDS)
+                try:
+                    fdr_store.process_updates(db)
+                except Exception:
+                    logger.exception("FDR processor error")
+                # 定期 WAL checkpoint 防止 WAL 文件过大
+                _checkpoint_counter[0] += 1
+                if _checkpoint_counter[0] >= 125:  # ~每 500 秒一次
+                    _checkpoint_counter[0] = 0
+                    try:
+                        c = db._get_conn()
+                        c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        logger.info("[FDR] WAL checkpoint 完成")
+                    except Exception:
+                        pass
+
+        fdr_thread = Thread(target=fdr_processor, daemon=True, name="fdr-processor")
+        fdr_thread.start()
+        logger.info("FDR processor started (interval=%ds)", PROCESS_INTERVAL_SECONDS)
     else:
-        radar_receiver = None
         logger.info("radar receiver: disabled")
 
     # UDP 接收器
@@ -353,7 +374,7 @@ def main(argv: list[str] | None = None) -> int:
     receiver.start()
 
     # Flask web 服务
-    app = create_app(config, db)
+    app = create_app(config, db, fdr_store=fdr_store)
     web_host = config.web.host
     web_port = config.web.port
 
@@ -365,8 +386,6 @@ def main(argv: list[str] | None = None) -> int:
     web_thread.start()
 
     # 信号处理
-    stop_requested = [False]
-
     def signal_handler(signum: int, _frame: object) -> None:
         if stop_requested[0]:
             logger.warning("forced exit")
@@ -392,7 +411,6 @@ def main(argv: list[str] | None = None) -> int:
     # 保持主线程
     try:
         while not stop_requested[0]:
-            import time
             time.sleep(1)
     except KeyboardInterrupt:
         pass

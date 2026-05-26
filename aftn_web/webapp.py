@@ -11,12 +11,14 @@ from flask import Flask, jsonify, render_template, request
 
 from .config import AppConfig
 from .database import Database
+from .fdr_store import FDRStore
 from .models import FlightPlan
 
 logger = logging.getLogger("aftn_web.webapp")
 
 
-def create_app(config: AppConfig, db: Database) -> Flask:
+def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = None) -> Flask:
+    _RADAR_MAP_VERSION = "v0.1"
     app = Flask(
         __name__,
         template_folder=str(Path(__file__).parent / "templates"),
@@ -27,6 +29,111 @@ def create_app(config: AppConfig, db: Database) -> Flask:
     @app.route("/")
     def index():
         return render_template("index.html")
+
+    @app.route("/api/maplist")
+    def api_maplist():
+        """返回 maplist.txt 中定义的地图文件列表"""
+        map_dir = Path("/home/share/atc_aftn_web/map")
+        lst = map_dir / "maplist.txt"
+        files: list[str] = []
+        if lst.exists():
+            for line in lst.read_text("utf-8").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    files.append(line)
+        return jsonify(files)
+
+    @app.route("/api/map_file/<name>")
+    def api_map_file(name: str):
+        """读取 /home/share/atc_aftn_web/map/<name>.txt 地图文件"""
+        import os
+        safe = os.path.basename(name)
+        filepath = Path("/home/share/atc_aftn_web/map") / f"{safe}.txt"
+        if not filepath.exists():
+            return jsonify({"error": "file not found"}), 404
+        for enc in ("utf-8-sig", "gbk", "utf-8"):
+            try:
+                with open(filepath, "r", encoding=enc) as f:
+                    text = f.read()
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            return jsonify({"error": "decode failed"}), 500
+        return text, 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+    # ── 雷达 FDR ──────────────────────────────────────────────
+
+    @app.route("/api/radar_tracks")
+    def api_radar_tracks():
+        """返回当前 FDR 航迹列表（含位置）"""
+        if fdr_store is None:
+            return jsonify([])
+        return jsonify(fdr_store.get_tracks())
+
+    @app.route("/api/flight_info")
+    def api_flight_info():
+        """根据呼号+起降地查询完整飞行计划信息（雷达图弹出用）"""
+        callsign = _req_str("callsign")
+        adep = _req_str("adep")
+        adest = _req_str("adest")
+        if not callsign:
+            return jsonify({"error": "callsign required"}), 400
+
+        records = db.query_flight_plans(
+            callsign=callsign,
+            adep=adep,
+            adest=adest,
+            limit=5,
+            offset=0,
+        )
+        if not records:
+            # 降级：仅用呼号再查一次
+            records = db.query_flight_plans(callsign=callsign, limit=5, offset=0)
+        if not records:
+            return jsonify({"error": "not found"}), 404
+
+        # 选最新的（按 last_message_time）
+        best = max(records, key=lambda r: r.get("last_message_time") or "")
+
+        # 计算 EET
+        eet_str = ""
+        try:
+            from datetime import datetime as _dt
+            etd = best.get("etd")
+            eta = best.get("eta")
+            if etd and eta:
+                if isinstance(etd, str): etd = _dt.fromisoformat(etd)
+                if isinstance(eta, str): eta = _dt.fromisoformat(eta)
+                minutes = int((eta - etd).total_seconds() / 60)
+                eet_str = f"{minutes // 60:02d}:{minutes % 60:02d}"
+        except Exception:
+            pass
+
+        return jsonify({
+            "id": best["id"],
+            "callsign": best.get("callsign", ""),
+            "adep": best.get("adep", ""),
+            "adest": best.get("adest", ""),
+            "etd": _safe_dt(best.get("etd")),
+            "atd": _safe_dt(best.get("atd")),
+            "eta": _safe_dt(best.get("eta")),
+            "ata": _safe_dt(best.get("ata")),
+            "eet": eet_str,
+            "aircraft_type": best.get("aircraft_type", ""),
+            "route": best.get("route", ""),
+            "handover_pt": best.get("handover_pt", ""),
+            "runway": best.get("runway", ""),
+            "flight_procedure": best.get("flight_procedure", ""),
+            "ssr": best.get("ssr", ""),
+        })
+
+    @app.route("/api/fdr_stats")
+    def api_fdr_stats():
+        if fdr_store is None:
+            return jsonify({"enabled": False, "total": 0, "associated": 0})
+        stats = fdr_store.get_stats()
+        return jsonify({"enabled": True, **stats})
 
     # ── 统计 ──────────────────────────────────────────────────
 

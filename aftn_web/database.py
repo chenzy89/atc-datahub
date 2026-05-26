@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,7 @@ class Database:
 
     def _get_conn(self) -> sqlite3.Connection:
         if not hasattr(self._local, "conn") or self._local.conn is None:
-            self._local.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self._local.conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=5)
             self._local.conn.row_factory = sqlite3.Row
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
@@ -601,6 +602,22 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
+    @staticmethod
+    def _validate_radar_field(field: str, value: str) -> str:
+        """校验雷达数据字段，非法值返回 'ERROR'"""
+        raw = value.strip()
+        if not raw:
+            return raw
+        if field == "runway":
+            # 去掉 null 字节，跑道有效长度 2~3: "16", "34L", "07R"
+            cleaned = raw.replace("\x00", "")
+            return cleaned if 2 <= len(cleaned) <= 3 else "ERROR"
+        if field == "flight_procedure":
+            # 去掉 null 字节，程序有效长度 6~7: "SAREX31", "OVGOT3"
+            cleaned = raw.replace("\x00", "")
+            return cleaned if 6 <= len(cleaned) <= 7 else "ERROR"
+        return raw
+
     def update_radar_data(self, callsign: str, runway: str, flight_procedure: str,
                            adep: str = "", adest: str = "") -> int:
         """按航班号更新使用跑道和飞行程序（来自雷达 CAT062）
@@ -617,21 +634,37 @@ class Database:
         match = self._match_radar_record(callsign, adep, adest)
         if match is None:
             return 0
-        conn = self._get_conn()
+
+        # 字段校验：不合法就标 ERROR
+        runway = self._validate_radar_field("runway", runway)
+        flight_procedure = self._validate_radar_field("flight_procedure", flight_procedure)
+
         now = _fmt_dt(datetime.utcnow())
-        cur = conn.execute(
-            "UPDATE flight_plans SET runway=?, flight_procedure=?, updated_at=? "
-            "WHERE id=? AND (runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')",
-            (runway, flight_procedure, now, match["id"], runway, flight_procedure),
-        )
-        conn.commit()
-        affected = cur.rowcount
-        if affected > 0:
-            loc = f"{adep}->{adest}" if adep and adest else ""
-            logger.info("[RADAR] %s%s (id=%d) 更新 跑道=%s 程序=%s",
-                        callsign, f" {loc}" if loc else "",
-                        match["id"], runway or '-', flight_procedure or '-')
-        return affected
+        for retry in range(10):
+            try:
+                conn = self._get_conn()
+                cur = conn.execute(
+                    "UPDATE flight_plans SET runway=?, flight_procedure=?, updated_at=? "
+                    "WHERE id=? AND (runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')",
+                    (runway, flight_procedure, now, match["id"], runway, flight_procedure),
+                )
+                conn.commit()
+                affected = cur.rowcount
+                if affected > 0:
+                    loc = f"{adep}->{adest}" if adep and adest else ""
+                    logger.info("[RADAR] %s%s (id=%d) 更新 跑道=%s 程序=%s",
+                                callsign, f" {loc}" if loc else "",
+                                match["id"], runway or '-', flight_procedure or '-')
+                return affected
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and retry < 9:
+                    delay = min(0.5 * (2 ** retry), 4.0)
+                    logger.debug("[RADAR] %s 写锁争用，第 %d 次重试 (delay=%.1fs)",
+                                 callsign, retry + 1, delay)
+                    time.sleep(delay)
+                    continue
+                logger.warning("[RADAR] %s 写锁争用，放弃更新", callsign)
+                return 0
 
     def update_radar_data_by_ssr(self, ssr: str, runway: str, flight_procedure: str) -> int:
         """按 SSR 码更新使用跑道和飞行程序（来自雷达 CAT062，无呼号时备用）
@@ -639,33 +672,50 @@ class Database:
         """
         if not ssr:
             return 0
-        conn = self._get_conn()
+
+        # 字段校验：不合法就标 ERROR
+        runway = self._validate_radar_field("runway", runway)
+        flight_procedure = self._validate_radar_field("flight_procedure", flight_procedure)
+
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
-        row = conn.execute(
-            "SELECT id, dof FROM flight_plans "
-            "WHERE ssr=? AND dof=? ORDER BY updated_at DESC LIMIT 1",
-            (ssr, today_str),
-        ).fetchone()
-        if not row:
-            row = conn.execute(
-                "SELECT id, dof FROM flight_plans "
-                "WHERE ssr=? ORDER BY last_message_time DESC, updated_at DESC LIMIT 1",
-                (ssr,),
-            ).fetchone()
-        if not row:
-            return 0
-        now = _fmt_dt(datetime.utcnow())
-        cur = conn.execute(
-            "UPDATE flight_plans SET runway=?, flight_procedure=?, updated_at=? "
-            "WHERE id=? AND (runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')",
-            (runway, flight_procedure, now, row["id"], runway, flight_procedure),
-        )
-        conn.commit()
-        affected = cur.rowcount
-        if affected > 0:
-            logger.info("[RADAR] SSR=%s (id=%d) 更新 跑道=%s 程序=%s",
-                        ssr, row["id"], runway or '-', flight_procedure or '-')
-        return affected
+        for retry in range(10):
+            try:
+                conn = self._get_conn()
+                row = conn.execute(
+                    "SELECT id, dof FROM flight_plans "
+                    "WHERE ssr=? AND dof=? ORDER BY updated_at DESC LIMIT 1",
+                    (ssr, today_str),
+                ).fetchone()
+                if not row:
+                    row = conn.execute(
+                        "SELECT id, dof FROM flight_plans "
+                        "WHERE ssr=? ORDER BY last_message_time DESC, updated_at DESC LIMIT 1",
+                        (ssr,),
+                    ).fetchone()
+                if not row:
+                    return 0
+                now = _fmt_dt(datetime.utcnow())
+                cur = conn.execute(
+                    "UPDATE flight_plans SET runway=?, flight_procedure=?, updated_at=? "
+                    "WHERE id=? AND (runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')",
+                    (runway, flight_procedure, now, row["id"], runway, flight_procedure),
+                )
+                conn.commit()
+                affected = cur.rowcount
+                if affected > 0:
+                    logger.info("[RADAR] SSR=%s (id=%d) 更新 跑道=%s 程序=%s",
+                                ssr, row["id"], runway or '-', flight_procedure or '-')
+                return affected
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and retry < 9:
+                    delay = min(0.5 * (2 ** retry), 4.0)
+                    logger.debug("[RADAR] SSR=%s 写锁争用，第 %d 次重试 (delay=%.1fs)",
+                                 ssr, retry + 1, delay)
+                    time.sleep(delay)
+                    continue
+                logger.warning("[RADAR] SSR=%s 写锁争用，放弃更新", ssr)
+                return 0
+                raise
 
     def update_chg_route(self, callsign: str, adep: str, adest: str,
                           dof: date, route: str) -> bool:
