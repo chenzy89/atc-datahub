@@ -1925,8 +1925,9 @@ function esc(s) {
     fetch('/api/radar_tracks')
       .then(function(r) { return r.json(); })
       .then(function(data) {
+        // 回放开始后忽略迟到的实时数据
+        if (window._replayActive) return;
         window._radarTracks = data;
-        // 如果当前在地图 tab，重绘
         var activeTab = document.querySelector('.tab-btn.active');
         if (activeTab && activeTab.textContent.trim() === '雷达地图') {
           drawMap();
@@ -1934,6 +1935,7 @@ function esc(s) {
       })
       .catch(function() { /* 静默 */ });
   }
+  window.fetchTracks = fetchTracks;
   function startTrackRefresh() {
     if (trackTimer) return;
     fetchTracks();
@@ -2056,6 +2058,10 @@ function esc(s) {
   // ── 开始回放 ──
   function startReplay() {
     if (state !== STATE.LIVE) stopReplay();
+    // 立即标记为回放，防止途中实时数据覆盖
+    window._replayActive = true;
+    state = STATE.PAUSED;
+    updateUI();
 
     replaySpeed = parseInt(el.speed.value) || 4;
     // 用户选择的是北京时 → 转 UTC
@@ -2093,6 +2099,8 @@ function esc(s) {
         state = STATE.PLAYING;
         updateUI();
 
+        // 清除可能的实时尾迹
+        window._radarTracks = [];
         // 显示第一帧
         updateReplayFrame(replayCurrentTime);
         startPlaybackClock();
@@ -2237,7 +2245,9 @@ function esc(s) {
     updateUI();
     el.progress.style.width = '0%';
     // 恢复实时
-    setTimeout(function() { fetchTracks(); }, 100);
+    setTimeout(function() {
+      if (typeof window.fetchTracks === 'function') window.fetchTracks();
+    }, 200);
   }
 
   function rewindToStart() {
