@@ -144,6 +144,118 @@ canvas#radarMap {
   .stat-card { min-width: 60px; padding: 6px 10px; }
   .stat-card .num { font-size: 16px; }
 }
+
+/* ── 地图时间标签 ── */
+.map-time-label {
+  position: absolute;
+  top: 8px;
+  right: 100px;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-family: 'Consolas', monospace;
+  background: rgba(15,23,42,0.85);
+  padding: 3px 10px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 10;
+  border: 1px solid #1e3a5f;
+}
+
+/* ── 回放控制栏 ── */
+.playback-bar {
+  margin: 0 12px 12px 12px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.playback-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.playback-row .label {
+  font-size: 12px;
+  color: #8b949e;
+  white-space: nowrap;
+}
+.pb-time-sel {
+  padding: 4px 8px;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  font-size: 13px;
+  background: #0d1117;
+  color: #e6edf3;
+  outline: none;
+  width: 60px;
+  text-align: center;
+}
+.pb-time-sel:focus { border-color: #58a6ff; }
+.pb-date-sel {
+  padding: 4px 8px;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  font-size: 13px;
+  background: #0d1117;
+  color: #e6edf3;
+  outline: none;
+}
+.pb-date-sel:focus { border-color: #58a6ff; }
+.pb-btn {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  background: #21262d;
+  color: #e6edf3;
+  font-size: 16px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: .15s;
+}
+.pb-btn:hover { background: #30363d; border-color: #58a6ff; }
+.pb-btn.active { background: #1c3a5f; border-color: #58a6ff; color: #58a6ff; }
+.pb-btn:disabled { opacity: .4; cursor: not-allowed; }
+.pb-speed {
+  padding: 4px 8px;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  font-size: 12px;
+  background: #0d1117;
+  color: #e6edf3;
+  outline: none;
+  cursor: pointer;
+}
+.pb-speed:focus { border-color: #58a6ff; }
+.pb-status {
+  font-size: 12px;
+  color: #8b949e;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.pb-status.replay { color: #58a6ff; }
+.pb-status.live { color: #3fb950; }
+.pb-progress {
+  flex: 1;
+  min-width: 80px;
+  height: 4px;
+  background: #21262d;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.pb-progress-fill {
+  height: 100%;
+  background: #58a6ff;
+  border-radius: 2px;
+  transition: width .3s;
+  width: 0%;
+}
 </style>
 </head>
 <body>
@@ -373,6 +485,37 @@ canvas#radarMap {
 <div class="panel" id="panel-map">
   <div class="map-container">
     <canvas id="radarMap"></canvas>
+    <div class="map-time-label" id="mapTimeLabel">--:--:--</div>
+    <div class="coord-bar" id="coordBar"></div>
+  </div>
+  <div class="playback-bar" id="playbackBar">
+    <div class="playback-row">
+      <span class="label">回放时间</span>
+      <input type="date" class="pb-date-sel" id="pbDate">
+      <select class="pb-time-sel" id="pbHour"></select>
+      <span style="color:#8b949e;font-size:14px;">:</span>
+      <select class="pb-time-sel" id="pbMin"></select>
+      <span style="color:#8b949e;font-size:14px;">:</span>
+      <select class="pb-time-sel" id="pbSec"></select>
+    </div>
+    <div class="playback-row">
+      <button class="pb-btn" id="pbRewind" title="跳至最早">⏮</button>
+      <button class="pb-btn" id="pbStepBack" title="后退10秒">⏪</button>
+      <button class="pb-btn" id="pbPlayPause" title="播放/暂停">▶</button>
+      <button class="pb-btn" id="pbStop" title="停止">⏹</button>
+      <button class="pb-btn" id="pbStepFwd" title="快进10秒">⏩</button>
+      <button class="pb-btn" id="pbSkipEnd" title="跳至实时">⏭</button>
+      <span class="label" style="margin-left:8px;">速度</span>
+      <select class="pb-speed" id="pbSpeed">
+        <option value="1">1×</option>
+        <option value="4" selected>4×</option>
+        <option value="8">8×</option>
+        <option value="12">12×</option>
+        <option value="20">20×</option>
+      </select>
+      <div class="pb-progress" id="pbProgress"><div class="pb-progress-fill" id="pbProgressFill"></div></div>
+      <span class="pb-status live" id="pbStatus">● 实时</span>
+    </div>
   </div>
 </div>
 
@@ -1768,7 +1911,9 @@ function esc(s) {
 
   // ── 航迹定期刷新 ──
   var trackTimer = null;
+  window._replayActive = false;
   function fetchTracks() {
+    if (window._replayActive) return;
     fetch('/api/radar_tracks')
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -1784,7 +1929,7 @@ function esc(s) {
   function startTrackRefresh() {
     if (trackTimer) return;
     fetchTracks();
-    trackTimer = setInterval(fetchTracks, 4000);
+    trackTimer = setInterval(fetchTracks, 1000);
   }
   startTrackRefresh();
 
@@ -1802,6 +1947,344 @@ function esc(s) {
       drawMap();
     }
   });
+})();
+
+// ══════════════════════════════════════════════════════════════
+// 地图时间标签（实时时钟）
+// ══════════════════════════════════════════════════════════════
+(function() {
+  function pad(n) { return String(n).padStart(2,'0'); }
+  function updateTimeLabel() {
+    // 如果在回放模式，由回放引擎更新标签
+    if (window._replayActive) return;
+    var el = document.getElementById('mapTimeLabel');
+    if (!el) return;
+    var now = new Date();
+    el.textContent = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate())
+      + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+  }
+  updateTimeLabel();
+  setInterval(updateTimeLabel, 1000);
+})();
+
+// ══════════════════════════════════════════════════════════════
+// 航迹回放状态机
+// ══════════════════════════════════════════════════════════════
+(function() {
+  var STATE = { LIVE: 0, PLAYING: 1, PAUSED: 2 };
+  var state = STATE.LIVE;
+
+  // 回放数据
+  var historyPoints = [];
+  var replayTracks = {};    // { callsign: [sorted points] }
+  var replayStartTime = null;
+  var replayCurrentTime = null;
+  var replayEndTime = null;
+  var replayTimer = null;
+  var replaySpeed = 4;
+
+  // DOM refs
+  var el = {
+    playPause: document.getElementById('pbPlayPause'),
+    stop: document.getElementById('pbStop'),
+    rewind: document.getElementById('pbRewind'),
+    stepBack: document.getElementById('pbStepBack'),
+    stepFwd: document.getElementById('pbStepFwd'),
+    skipEnd: document.getElementById('pbSkipEnd'),
+    status: document.getElementById('pbStatus'),
+    date: document.getElementById('pbDate'),
+    hour: document.getElementById('pbHour'),
+    min: document.getElementById('pbMin'),
+    sec: document.getElementById('pbSec'),
+    speed: document.getElementById('pbSpeed'),
+    progress: document.getElementById('pbProgressFill'),
+  };
+
+  // ── 初始化时间选择器 ──
+  function initSelects() {
+    for (var h = 0; h < 24; h++) {
+      var opt = document.createElement('option');
+      opt.value = pad2(h);
+      opt.textContent = pad2(h);
+      el.hour.appendChild(opt);
+    }
+    for (var m = 0; m < 60; m++) {
+      var opt = document.createElement('option');
+      opt.value = pad2(m);
+      opt.textContent = pad2(m);
+      el.min.appendChild(opt);
+      var opt2 = document.createElement('option');
+      opt2.value = pad2(m);
+      opt2.textContent = pad2(m);
+      el.sec.appendChild(opt2);
+    }
+    // 默认选当前时间（整秒）
+    var now = new Date();
+    el.date.value = now.getFullYear() + '-' + pad2(now.getMonth()+1) + '-' + pad2(now.getDate());
+    el.hour.value = pad2(now.getHours());
+    el.min.value = pad2(now.getMinutes());
+    el.sec.value = '00';
+  }
+
+  function pad2(n) { return String(n).padStart(2,'0'); }
+
+  // ── UI 更新 ──
+  function updateUI() {
+    var isReplay = state !== STATE.LIVE;
+    var isPlaying = state === STATE.PLAYING;
+    el.playPause.textContent = isPlaying ? '⏸' : '▶';
+    el.playPause.className = 'pb-btn' + (isPlaying ? ' active' : '');
+    el.status.textContent = isReplay ? '● 回放' : '● 实时';
+    el.status.className = 'pb-status ' + (isReplay ? 'replay' : 'live');
+    window._replayActive = isReplay;
+
+    [el.rewind, el.stepBack, el.stepFwd, el.skipEnd].forEach(function(b) { b.disabled = !isReplay; });
+    el.date.disabled = isReplay;
+    el.hour.disabled = isReplay;
+    el.min.disabled = isReplay;
+    el.sec.disabled = isReplay;
+  }
+
+  // ── 开始回放 ──
+  function startReplay() {
+    if (state !== STATE.LIVE) stopReplay();
+
+    replaySpeed = parseInt(el.speed.value) || 4;
+    var startTS = el.date.value + 'T' + el.hour.value + ':' + el.min.value + ':' + el.sec.value + '.000Z';
+    var startMs = new Date(startTS).getTime();
+    var endMs = startMs + 30 * 60 * 1000;  // 加载30分钟窗口
+    var endTS = new Date(endMs).toISOString();
+
+    replayStartTime = startTS;
+    replayCurrentTime = startTS;
+    replayEndTime = endTS;
+
+    var url = '/api/radar_history?from=' + encodeURIComponent(startTS) + '&to=' + encodeURIComponent(endTS);
+    fetch(url)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        historyPoints = data;
+        // 按呼号分组排序
+        var byCs = {};
+        for (var i = 0; i < historyPoints.length; i++) {
+          var pt = historyPoints[i];
+          var cs = pt.cs || pt.ss || '?';
+          if (!byCs[cs]) byCs[cs] = [];
+          byCs[cs].push(pt);
+        }
+        for (var cs in byCs) {
+          byCs[cs].sort(function(a,b) { return a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0; });
+        }
+        replayTracks = byCs;
+        state = STATE.PLAYING;
+        updateUI();
+
+        // 显示第一帧
+        updateReplayFrame(replayCurrentTime);
+        startPlaybackClock();
+      })
+      .catch(function(err) {
+        console.error('Replay load failed:', err);
+        state = STATE.LIVE;
+        updateUI();
+      });
+  }
+
+  function startPlaybackClock() {
+    if (replayTimer) clearInterval(replayTimer);
+    replayTimer = setInterval(advanceReplay, 100);  // 每100ms步进
+  }
+
+  function advanceReplay() {
+    if (state !== STATE.PLAYING) return;
+    if (!replayCurrentTime) return;
+
+    var stepMs = replaySpeed * 100;  // 速度×0.1秒
+    var current = new Date(replayCurrentTime);
+    var next = new Date(current.getTime() + stepMs);
+    var nextTS = next.toISOString();
+
+    if (replayEndTime && nextTS > replayEndTime) {
+      pauseReplay();
+      return;
+    }
+
+    replayCurrentTime = nextTS;
+    updateReplayFrame(nextTS);
+
+    // 如果接近窗口末尾（<10秒），加载下一段
+    var remaining = new Date(replayEndTime).getTime() - next.getTime();
+    if (remaining < 10000) {
+      loadMoreHistory();
+    }
+  }
+
+  function loadMoreHistory() {
+    if (!replayEndTime) return;
+    var newEndMs = new Date(replayEndTime).getTime() + 15 * 60 * 1000;
+    var newEndTS = new Date(newEndMs).toISOString();
+    var url = '/api/radar_history?from=' + encodeURIComponent(replayEndTime) + '&to=' + encodeURIComponent(newEndTS);
+    replayEndTime = newEndTS;
+    fetch(url)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        for (var i = 0; i < data.length; i++) {
+          var pt = data[i];
+          var cs = pt.cs || pt.ss || '?';
+          if (!replayTracks[cs]) replayTracks[cs] = [];
+          replayTracks[cs].push(pt);
+        }
+        for (var cs in replayTracks) {
+          replayTracks[cs].sort(function(a,b) { return a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0; });
+        }
+        historyPoints = historyPoints.concat(data);
+      })
+      .catch(function() {});
+  }
+
+  function updateReplayFrame(ts) {
+    var tracks = [];
+    for (var cs in replayTracks) {
+      var pts = replayTracks[cs];
+      var best = null;
+      for (var i = 0; i < pts.length; i++) {
+        if (pts[i].ts <= ts) {
+          best = pts[i];
+        } else {
+          break;
+        }
+      }
+      if (best) {
+        tracks.push({
+          callsign: best.cs,
+          ssr: best.ss,
+          latitude: best.lt,
+          longitude: best.ln,
+          heading: best.hd,
+          flight_level: best.fl,
+          speed: best.sp,
+          adep: best.ap,
+          adest: best.ad,
+          runway: best.rw,
+          flight_procedure: best.fp,
+          trail: [],
+          level_trend: 'm',
+        });
+      }
+    }
+    window._radarTracks = tracks;
+
+    // 更新时间标签
+    updateTimeLabel(ts);
+    updateProgress();
+
+    // 重绘
+    var activeTab = document.querySelector('.tab-btn.active');
+    if (activeTab && activeTab.textContent.trim() === '雷达地图') {
+      drawMap();
+    }
+  }
+
+  function updateTimeLabel(ts) {
+    var el2 = document.getElementById('mapTimeLabel');
+    if (!el2) return;
+    if (ts) {
+      var d = new Date(ts);
+      el2.textContent = d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate())
+        + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+    }
+  }
+
+  function updateProgress() {
+    if (!replayStartTime || !replayEndTime || !replayCurrentTime) return;
+    var start = new Date(replayStartTime).getTime();
+    var end = new Date(replayEndTime).getTime();
+    var cur = new Date(replayCurrentTime).getTime();
+    var pct = ((cur - start) / (end - start)) * 100;
+    el.progress.style.width = Math.min(100, Math.max(0, pct)) + '%';
+  }
+
+  function pauseReplay() {
+    if (state !== STATE.PLAYING) return;
+    state = STATE.PAUSED;
+    updateUI();
+    if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+  }
+
+  function stopReplay() {
+    if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+    state = STATE.LIVE;
+    historyPoints = [];
+    replayTracks = {};
+    replayStartTime = null;
+    replayCurrentTime = null;
+    replayEndTime = null;
+    window._replayActive = false;
+    updateUI();
+    el.progress.style.width = '0%';
+    // 恢复实时
+    setTimeout(function() { fetchTracks(); }, 100);
+  }
+
+  function rewindToStart() {
+    if (state === STATE.LIVE || !replayStartTime) return;
+    var wasPlaying = state === STATE.PLAYING;
+    if (wasPlaying) pauseReplay();
+    replayCurrentTime = replayStartTime;
+    updateReplayFrame(replayCurrentTime);
+    if (wasPlaying) { state = STATE.PLAYING; updateUI(); startPlaybackClock(); }
+  }
+
+  function stepBack10s() {
+    if (state === STATE.LIVE || !replayCurrentTime) return;
+    var wasPlaying = state === STATE.PLAYING;
+    if (wasPlaying) pauseReplay();
+    var cur = new Date(replayCurrentTime);
+    var prev = new Date(cur.getTime() - 10000);
+    replayCurrentTime = replayStartTime && prev.toISOString() < replayStartTime ? replayStartTime : prev.toISOString();
+    updateReplayFrame(replayCurrentTime);
+    if (wasPlaying) { state = STATE.PLAYING; updateUI(); startPlaybackClock(); }
+  }
+
+  function stepFwd10s() {
+    if (state === STATE.LIVE || !replayCurrentTime) return;
+    var wasPlaying = state === STATE.PLAYING;
+    if (wasPlaying) pauseReplay();
+    var cur = new Date(replayCurrentTime);
+    var next = new Date(cur.getTime() + 10000);
+    replayCurrentTime = replayEndTime && next.toISOString() > replayEndTime ? replayEndTime : next.toISOString();
+    updateReplayFrame(replayCurrentTime);
+    if (wasPlaying) { state = STATE.PLAYING; updateUI(); startPlaybackClock(); }
+  }
+
+  function skipToLive() { stopReplay(); }
+
+  // ── 绑定事件 ──
+  initSelects();
+
+  el.playPause.addEventListener('click', function() {
+    if (state === STATE.LIVE) {
+      startReplay();
+    } else if (state === STATE.PLAYING) {
+      pauseReplay();
+    } else {
+      state = STATE.PLAYING;
+      updateUI();
+      startPlaybackClock();
+    }
+  });
+
+  el.stop.addEventListener('click', stopReplay);
+  el.rewind.addEventListener('click', rewindToStart);
+  el.stepBack.addEventListener('click', stepBack10s);
+  el.stepFwd.addEventListener('click', stepFwd10s);
+  el.skipEnd.addEventListener('click', skipToLive);
+
+  el.speed.addEventListener('change', function() {
+    replaySpeed = parseInt(el.speed.value) || 4;
+  });
+
+  updateUI();
 })();
 
 </script>

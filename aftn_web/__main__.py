@@ -14,6 +14,7 @@ from threading import Thread
 from .config import load_config
 from .database import Database, _fmt_dt, _pick_closest_datetime
 from .fdr_store import FDRStore, PROCESS_INTERVAL_SECONDS
+from .radar_history import RadarHistoryStore
 from .radar_receiver import RadarReceiver, parse_datagram
 import json
 
@@ -86,13 +87,19 @@ def main(argv: list[str] | None = None) -> int:
 
     # 雷达 CAT062 接收器（可选）
     fdr_store: FDRStore | None = None
+    radar_history_store: RadarHistoryStore | None = None
     radar_receiver: RadarReceiver | None = None
     if config.radar.enabled:
         fdr_store = FDRStore()
+        radar_history_store = RadarHistoryStore(
+            Path(config.db_path).parent / "radar_history",
+            retention_days=90,
+        )
 
         def on_radar_data(parsed: dict, addr: str, port: int, received_at: datetime) -> None:
-            # 只更新内存 FDR，不做 DB 写入
+            # 更新内存 FDR + 写入历史存储
             fdr_store.update_from_radar(parsed)
+            radar_history_store.record(parsed, received_at)
 
         radar_receiver = RadarReceiver(
             multicast_group=config.radar.multicast_group,
@@ -374,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
     receiver.start()
 
     # Flask web 服务
-    app = create_app(config, db, fdr_store=fdr_store)
+    app = create_app(config, db, fdr_store=fdr_store, radar_history_store=radar_history_store)
     web_host = config.web.host
     web_port = config.web.port
 

@@ -17,7 +17,9 @@ from .models import FlightPlan
 logger = logging.getLogger("aftn_web.webapp")
 
 
-def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = None) -> Flask:
+from .radar_history import RadarHistoryStore
+
+def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = None, radar_history_store: RadarHistoryStore | None = None) -> Flask:
     _RADAR_MAP_VERSION = "v0.1"
     app = Flask(
         __name__,
@@ -127,6 +129,28 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             "flight_procedure": best.get("flight_procedure", ""),
             "ssr": best.get("ssr", ""),
         })
+
+    # ── 雷达历史回放 ──────────────────────────────────────────
+
+    @app.route("/api/radar_history")
+    def api_radar_history():
+        """返回时间范围内的历史航迹点"""
+        if radar_history_store is None:
+            return jsonify([])
+        ts_from = _req_str("from")
+        ts_to = _req_str("to")
+        callsign = _req_str("callsign")
+        if not ts_from or not ts_to:
+            return jsonify({"error": "from and to required"}), 400
+        return jsonify(radar_history_store.query(ts_from, ts_to, callsign))
+
+    @app.route("/api/radar_time_range")
+    def api_radar_time_range():
+        """返回历史数据的时间范围"""
+        if radar_history_store is None:
+            return jsonify({"start": None, "end": None})
+        start, end = radar_history_store.get_time_range()
+        return jsonify({"start": start, "end": end})
 
     @app.route("/api/fdr_stats")
     def api_fdr_stats():
