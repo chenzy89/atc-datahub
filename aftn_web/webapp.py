@@ -152,6 +152,21 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         start, end = radar_history_store.get_time_range()
         return jsonify({"start": start, "end": end})
 
+    @app.route("/api/flight_trail")
+    def api_flight_trail():
+        """返回指定航班号当天的全部历史航迹点（用于飞行计划页的轨迹图）"""
+        if radar_history_store is None:
+            return jsonify([])
+        callsign = _req_str("callsign")
+        if not callsign:
+            return jsonify({"error": "callsign required"}), 400
+        date_str = _req_str("date") or datetime.utcnow().strftime("%Y-%m-%d")
+        ts_from = f"{date_str}T00:00:00.000Z"
+        ts_to = f"{date_str}T23:59:59.000Z"
+        pts = radar_history_store.query(ts_from, ts_to, callsign)
+        pts.sort(key=lambda p: p.get("ts", ""))
+        return jsonify(pts)
+
     @app.route("/api/fdr_stats")
     def api_fdr_stats():
         if fdr_store is None:

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.26</title>
+<title>ATC AFTN WebHub v26.5.27</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -267,7 +267,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.26</span>
+  <span class="badge">v26.5.27</span>
 </div>
 
 <div class="tabs">
@@ -557,6 +557,20 @@ canvas#radarMap {
       <tbody id="tbl-fpl-msg"><tr><td colspan="5" class="loading">查询中...</td></tr></tbody>
     </table>
     <div id="fpl-msg-empty" style="display:none;text-align:center;padding:30px;color:var(--text-muted);font-size:14px;">未找到关联报文</div>
+  </div>
+</div>
+
+<!-- ── 航班历史轨迹弹窗 ── -->
+<div id="modal-trail" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.8);z-index:1500;align-items:center;justify-content:center;" onclick="if(event.target===this)closeTrailPopup()">
+  <div style="background:#0d1117;border:1px solid var(--border);border-radius:10px;width:92%;max-width:1000px;height:85vh;display:flex;flex-direction:column;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);flex-shrink:0;">
+      <h2 id="trail-title" style="font-size:15px;font-weight:600;color:var(--accent-green);">历史轨迹</h2>
+      <button onclick="closeTrailPopup()" style="background:none;border:none;color:var(--text-muted);font-size:22px;cursor:pointer;line-height:1;">&times;</button>
+    </div>
+    <div style="flex:1;position:relative;overflow:hidden;">
+      <canvas id="trailCanvas"></canvas>
+      <div id="trail-loading" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--text-muted);font-size:14px;">加载中...</div>
+    </div>
   </div>
 </div>
 
@@ -854,7 +868,7 @@ function renderPlans(rs) {
       msgTagsHtml += '<span class="tag ' + mtc + '" style="cursor:pointer;margin-right:3px;" onclick="showFplMsg(\'' + esc(r.callsign||'') + '\',\'' + dofStr + '\')" title="查看该计划的两天内所有报文">' + mt + '</span>';
     }
     h += '<tr>' +
-      '<td class="callsign">' + (r.callsign||'-') + '</td>' +
+      '<td class="callsign"><a href="javascript:void(0)" onclick="showFlightTrail(\'' + esc(r.callsign||'') + '\',\'' + (r.dof||'').slice(0,10) + '\')" style="color:var(--accent-green);text-decoration:none;cursor:pointer;" title="查看历史轨迹">' + (r.callsign||'-') + '</a></td>' +
       '<td>' + (r.flight_rule||'-') + '</td>' +
       '<td>' + (r.handover_pt||'-') + '</td>' +
       '<td>' + (r.aircraft_type||'-') + '</td>' +
@@ -1805,6 +1819,237 @@ function esc(s) {
     var overlay = document.getElementById('track-popup-overlay');
     if (popup) { popup.remove(); }
     if (overlay) { overlay.remove(); }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 飞行计划页 — 航班历史轨迹弹窗（maplist 背景 + 轨迹线）
+  // ══════════════════════════════════════════════════════════════
+  var _trailMapElements = [];
+  var _trailGeo = null;
+
+  function showFlightTrail(callsign, dateStr) {
+    if (!callsign) return;
+    var modal = document.getElementById('modal-trail');
+    var canvas = document.getElementById('trailCanvas');
+    var loading = document.getElementById('trail-loading');
+    var title = document.getElementById('trail-title');
+    if (!modal || !canvas) return;
+
+    title.textContent = callsign + ' 历史轨迹';
+    modal.style.display = 'flex';
+    loading.style.display = 'block';
+
+    // 并行请求：地图背景 + 轨迹数据
+    var trailPromise = fetch('/api/flight_trail?callsign=' + encodeURIComponent(callsign) + '&date=' + encodeURIComponent(dateStr || ''))
+      .then(function(r) { return r.json(); });
+
+    var mapPromise = fetch('/api/maplist')
+      .then(function(r) { return r.json(); })
+      .then(function(fileList) {
+        if (fileList.length === 0) return [];
+        var promises = fileList.map(function(name) {
+          return fetch('/api/map_file/' + encodeURIComponent(name))
+            .then(function(r) { return r.ok ? r.text() : ''; });
+        });
+        return Promise.all(promises).then(function(texts) {
+          var all = [];
+          for (var i = 0; i < texts.length; i++) {
+            if (texts[i]) {
+              var parsed = parseMapFile(texts[i]);
+              all = all.concat(parsed);
+            }
+          }
+          return all;
+        });
+      });
+
+    Promise.all([trailPromise, mapPromise])
+      .then(function(results) {
+        var trailPoints = results[0];
+        _trailMapElements = results[1];
+        loading.style.display = 'none';
+        if (!trailPoints || trailPoints.length === 0) {
+          drawTrailEmpty(canvas, '航班 ' + callsign + ' 无历史航迹数据');
+          return;
+        }
+        drawFlightTrail(canvas, callsign, trailPoints);
+      })
+      .catch(function(err) {
+        loading.style.display = 'none';
+        drawTrailEmpty(canvas, '查询失败: ' + err.message);
+      });
+  }
+
+  function closeTrailPopup() {
+    document.getElementById('modal-trail').style.display = 'none';
+    _trailMapElements = [];
+    _trailGeo = null;
+  }
+
+  function drawTrailEmpty(canvas, msg) {
+    var container = canvas.parentElement;
+    var w = container.clientWidth;
+    var h = container.clientHeight;
+    if (w < 100) w = 800;
+    if (h < 100) h = 500;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = '#0a1628';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#64748b';
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(msg, w/2, h/2);
+  }
+
+  function drawFlightTrail(canvas, callsign, points) {
+    var container = canvas.parentElement;
+    var w = container.clientWidth;
+    var h = container.clientHeight;
+    if (w < 100) w = 800;
+    if (h < 100) h = 500;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    // 计算轨迹点包围盒
+    var minLat = Infinity, maxLat = -Infinity;
+    var minLon = Infinity, maxLon = -Infinity;
+    for (var i = 0; i < points.length; i++) {
+      var lt = parseFloat(points[i].lt);
+      var ln = parseFloat(points[i].ln);
+      if (!isNaN(lt) && !isNaN(ln)) {
+        if (lt < minLat) minLat = lt;
+        if (lt > maxLat) maxLat = lt;
+        if (ln < minLon) minLon = ln;
+        if (ln > maxLon) maxLon = ln;
+      }
+    }
+
+    if (!isFinite(minLat)) {
+      drawTrailEmpty(canvas, '航班 ' + callsign + ' 无有效位置数据');
+      return;
+    }
+
+    // 计算中心点和缩放
+    var centerLat = (minLat + maxLat) / 2;
+    var centerLon = (minLon + maxLon) / 2;
+    var margin = 0.1;  // 10% 边距
+    var latSpan = (maxLat - minLat) * (1 + margin) || 0.05;
+    var lonSpan = (maxLon - minLon) * (1 + margin) || 0.05;
+    var paddingPx = 60;
+    var scaleLat = (latSpan * METERS_PER_DEG) / (h - paddingPx * 2);
+    var cosCenter = Math.cos(centerLat * Math.PI / 180);
+    var scaleLon = (lonSpan * METERS_PER_DEG * cosCenter) / (w - paddingPx * 2);
+    var scale = Math.max(scaleLat, scaleLon, 1);
+
+    _trailGeo = new GeoTransform({lat: centerLat, lon: centerLon}, scale, w, h);
+
+    // 绘制背景
+    ctx.fillStyle = '#0a1628';
+    ctx.fillRect(0, 0, w, h);
+
+    // 临时替换全局 geo，让 drawElement 使用轨迹地图的坐标变换
+    var _savedGeo = window.geo || null;
+    window.geo = _trailGeo;
+    try {
+      for (var i = 0; i < _trailMapElements.length; i++) {
+        drawElement(ctx, _trailMapElements[i]);
+      }
+    } finally {
+      window.geo = _savedGeo;
+    }
+
+    // 收集有效像素点
+    var pixelPts = [];
+    for (var i = 0; i < points.length; i++) {
+      var lt = parseFloat(points[i].lt);
+      var ln = parseFloat(points[i].ln);
+      if (isNaN(lt) || isNaN(ln)) continue;
+      var sp = _trailGeo.realToPixel({lat: lt, lon: ln});
+      pixelPts.push(sp);
+    }
+
+    if (pixelPts.length < 2) {
+      drawTrailEmpty(canvas, '航班 ' + callsign + ' 轨迹点不足');
+      return;
+    }
+
+    // ── 轨迹线 ──
+    ctx.beginPath();
+    ctx.moveTo(pixelPts[0].x, pixelPts[0].y);
+    for (var i = 1; i < pixelPts.length; i++) {
+      ctx.lineTo(pixelPts[i].x, pixelPts[i].y);
+    }
+    ctx.strokeStyle = '#fbbf24';  // 亮黄色
+    ctx.lineWidth = 3;
+    ctx.setLineDash([]);
+    ctx.stroke();
+
+    // ── 小点标记每个位置 ──
+    ctx.fillStyle = '#fbbf24';
+    ctx.globalAlpha = 0.6;
+    for (var i = 0; i < pixelPts.length; i++) {
+      ctx.beginPath();
+      ctx.arc(pixelPts[i].x, pixelPts[i].y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1.0;
+
+    // ── 起点（绿色圆） ──
+    ctx.beginPath();
+    ctx.arc(pixelPts[0].x, pixelPts[0].y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = '#34d399';
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('起', pixelPts[0].x, pixelPts[0].y - 8);
+
+    // ── 终点（红色圆） ──
+    var last = pixelPts[pixelPts.length - 1];
+    ctx.beginPath();
+    ctx.arc(last.x, last.y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = '#f87171';
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('终', last.x, last.y + 8);
+
+    // ── 航班号标签 ──
+    ctx.fillStyle = '#fbbf24';
+    ctx.font = 'bold 13px Consolas, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(callsign, 12, h - 12);
+
+    // ── 点数和时间范围 ──
+    var firstTs = (points[0].ts || '').slice(0, 19).replace('T', ' ');
+    var lastTs = (points[points.length-1].ts || '').slice(0, 19).replace('T', ' ');
+    ctx.fillStyle = '#64748b';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(points.length + ' 个点  |  ' + firstTs + ' ~ ' + lastTs, 12, 12);
   }
 
   // ── 缩放与拖动 + 悬停检测 ──
