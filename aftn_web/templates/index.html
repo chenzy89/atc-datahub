@@ -1936,6 +1936,7 @@ function esc(s) {
       .catch(function() { /* 静默 */ });
   }
   window.fetchTracks = fetchTracks;
+  window.drawMap = drawMap;
   function startTrackRefresh() {
     if (trackTimer) return;
     fetchTracks();
@@ -2057,11 +2058,13 @@ function esc(s) {
 
   // ── 开始回放 ──
   function startReplay() {
+    try {
     if (state !== STATE.LIVE) stopReplay();
     // 立即标记为回放，防止途中实时数据覆盖
     window._replayActive = true;
     state = STATE.PAUSED;
     updateUI();
+    console.log('[REPLAY] startReplay, _replayActive=', window._replayActive);
 
     replaySpeed = parseInt(el.speed.value) || 4;
     // 用户选择的是北京时 → 转 UTC
@@ -2096,6 +2099,7 @@ function esc(s) {
           byCs[cs].sort(function(a,b) { return a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0; });
         }
         replayTracks = byCs;
+        console.log('[REPLAY] data loaded, points=', historyPoints.length, 'tracks=', Object.keys(byCs).length);
         state = STATE.PLAYING;
         updateUI();
 
@@ -2106,10 +2110,12 @@ function esc(s) {
         startPlaybackClock();
       })
       .catch(function(err) {
-        console.error('Replay load failed:', err);
+        console.error('[REPLAY] Load failed:', err);
+        window._replayActive = false;
         state = STATE.LIVE;
         updateUI();
       });
+    } catch(e) { console.error('[REPLAY] startReplay error:', e); }
   }
 
   function startPlaybackClock() {
@@ -2118,27 +2124,30 @@ function esc(s) {
   }
 
   function advanceReplay() {
-    if (state !== STATE.PLAYING) return;
+    try {
+    if (state !== STATE.PLAYING) { console.log('[REPLAY] advance skipped, state=', state); return; }
     if (!replayCurrentTime) return;
 
-    var stepMs = replaySpeed * 100;  // 速度×0.1秒
+    var stepMs = replaySpeed * 100;
     var current = new Date(replayCurrentTime);
     var next = new Date(current.getTime() + stepMs);
     var nextTS = next.toISOString();
 
     if (replayEndTime && nextTS > replayEndTime) {
+      console.log('[REPLAY] end of window reached');
       pauseReplay();
       return;
     }
 
     replayCurrentTime = nextTS;
     updateReplayFrame(nextTS);
+    console.log('[REPLAY] advanced to', replayCurrentTime, 'tracks=', (window._radarTracks||[]).length);
 
-    // 如果接近窗口末尾（<10秒），加载下一段
     var remaining = new Date(replayEndTime).getTime() - next.getTime();
     if (remaining < 10000) {
       loadMoreHistory();
     }
+    } catch(e) { console.error('[REPLAY] advanceReplay error:', e); }
   }
 
   function loadMoreHistory() {
@@ -2165,6 +2174,7 @@ function esc(s) {
   }
 
   function updateReplayFrame(ts) {
+    try {
     var tracks = [];
     for (var cs in replayTracks) {
       var pts = replayTracks[cs];
@@ -2195,6 +2205,7 @@ function esc(s) {
       }
     }
     window._radarTracks = tracks;
+    console.log('[REPLAY] frame ts=', ts, 'tracks=', tracks.length);
 
     // 更新时间标签
     updateTimeLabel(ts);
@@ -2203,8 +2214,9 @@ function esc(s) {
     // 重绘
     var activeTab = document.querySelector('.tab-btn.active');
     if (activeTab && activeTab.textContent.trim() === '雷达地图') {
-      drawMap();
+      if (typeof window.drawMap === 'function') window.drawMap();
     }
+    } catch(e) { console.error('[REPLAY] updateReplayFrame error:', e); }
   }
 
   function updateTimeLabel(ts) {
