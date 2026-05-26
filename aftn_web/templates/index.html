@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v26.5.27</title>
+<title>ATC AFTN WebHub v26.5.28</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -267,7 +267,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v26.5.27</span>
+  <span class="badge">v26.5.28</span>
 </div>
 
 <div class="tabs">
@@ -2051,6 +2051,10 @@ function esc(s) {
     ctx.textBaseline = 'top';
     ctx.fillText(points.length + ' 个点  |  ' + firstTs + ' ~ ' + lastTs, 12, 12);
   }
+
+  // 暴露给 HTML onclick（函数定义在 IIFE 内，需要挂到 window）
+  window.showFlightTrail = showFlightTrail;
+  window.closeTrailPopup = closeTrailPopup;
 
   // ── 缩放与拖动 + 悬停检测 ──
   var isDragging = false;
