@@ -134,46 +134,7 @@ canvas#radarMap {
   width: 100%;
   height: auto;
 }
-.coord-bar {
-  position: absolute;
-  bottom: 8px;
-  left: 8px;
-  color: #64748b;
-  font-size: 11px;
-  font-family: 'Consolas', monospace;
-  background: rgba(15,23,42,0.8);
-  padding: 2px 8px;
-  border-radius: 4px;
-  pointer-events: none;
-}
-.legend {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  font-size: 11px;
-  pointer-events: none;
-}
-.legend-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 3px;
-  color: #94a3b8;
-}
-.legend-item .swatch {
-  display: inline-block;
-  width: 14px;
-  height: 3px;
-  border-radius: 2px;
-}
-.legend-item .dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  border: 1px solid currentColor;
-  background: currentColor;
-}
+
 
 /* ── responsive ── */
 @media (max-width: 768px) {
@@ -412,12 +373,6 @@ canvas#radarMap {
 <div class="panel" id="panel-map">
   <div class="map-container">
     <canvas id="radarMap"></canvas>
-    <div class="coord-bar" id="coordBar"></div>
-    <div class="legend">
-      <div class="legend-item"><span class="swatch" style="background:#34d399;"></span> 边界线 (BORDER)</div>
-    <div class="legend-item"><span class="dot" style="border-color:#34d399;background:#34d399;"></span> 已相关 (4s)</div>
-    <div class="legend-item"><span class="dot" style="border-color:#64748b;background:#64748b;"></span> 未相关 (4s)</div>
-    </div>
   </div>
 </div>
 
@@ -1445,7 +1400,11 @@ function esc(s) {
     var cw = container.clientWidth - 2;
     if (cw < 100) cw = 800;
     var displayW = cw;
-    var displayH = Math.min(Math.round(cw * 0.7), window.innerHeight - 160);
+    // 计算可用高度：浏览器可视高度 - 画布顶部到视口顶部的距离 - 底部留白
+    var mapPanel = document.getElementById('panel-map');
+    var mapRect = mapPanel.getBoundingClientRect();
+    var availableH = window.innerHeight - mapRect.top - 70;
+    var displayH = Math.max(200, availableH);
 
     // 初始化 GeoTransform
     if (!geo) {
@@ -1555,12 +1514,7 @@ function esc(s) {
       ctx.fillText('加载地图数据...', displayW/2, displayH/2);
     }
 
-    // ── 坐标栏 ──
-    var coordBar = document.getElementById('coordBar');
-    if (coordBar) {
-      var scaleStr = geo.scale >= 1000 ? (geo.scale/1000).toFixed(1)+'km/px' : parseInt(geo.scale)+'m/px';
-      coordBar.textContent = '比例: '+scaleStr;
-    }
+
   }
 
   // ── GeoTransform ──
@@ -1840,6 +1794,14 @@ function esc(s) {
     _origSwitch(n);
     if (n === 'map') { setTimeout(drawMap, 100); startTrackRefresh(); }
   };
+
+  // 窗口大小变化时重绘
+  window.addEventListener('resize', function() {
+    var activeTab = document.querySelector('.tab-btn.active');
+    if (activeTab && activeTab.textContent.trim() === '雷达地图') {
+      drawMap();
+    }
+  });
 })();
 
 </script>
