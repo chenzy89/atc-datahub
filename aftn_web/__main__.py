@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
 
         def on_radar_data(parsed: dict, addr: str, port: int, received_at: datetime) -> None:
             # 更新内存 FDR + 写入历史存储
-            fdr_store.update_from_radar(parsed)
+            fdr_store.update_from_radar(parsed, received_at)
             radar_history_store.record(parsed, received_at)
 
         radar_receiver = RadarReceiver(

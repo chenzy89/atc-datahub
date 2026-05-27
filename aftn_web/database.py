@@ -727,13 +727,23 @@ class Database:
 
                 now = _fmt_dt(datetime.utcnow())
                 cur = conn.execute(
-                    "UPDATE flight_plans SET entry_time=?, exit_time=?,"
-                    " terminal_flight_time=?, updated_at=? "
-                    "WHERE id=? "
-                    "AND (entry_time != ? OR exit_time != ? OR terminal_flight_time != ? "
-                    "     OR entry_time='' OR exit_time='' OR terminal_flight_time=0)",
-                    (entry_time, exit_time, terminal_flight_time, now,
-                     match["id"], entry_time, exit_time, terminal_flight_time),
+                    "UPDATE flight_plans SET"
+                    " entry_time=CASE WHEN entry_time='' OR (?!='' AND ?<entry_time) THEN ? ELSE entry_time END,"
+                    " exit_time=CASE WHEN exit_time='' OR (?!='' AND ?>exit_time) THEN ? ELSE exit_time END,"
+                    " terminal_flight_time=?,"
+                    " updated_at=?"
+                    " WHERE id=?"
+                    " AND (entry_time='' OR exit_time='' OR terminal_flight_time=0"
+                    "      OR (?!='' AND ?<entry_time)"
+                    "      OR (?!='' AND ?>exit_time)"
+                    "      OR terminal_flight_time!=?)",
+                    (entry_time, entry_time, entry_time,  # CASE entry_time
+                     exit_time, exit_time, exit_time,  # CASE exit_time
+                     terminal_flight_time, now,
+                     match["id"],
+                     entry_time, entry_time,  # WHERE: entry_time 只允许提前
+                     exit_time, exit_time,  # WHERE: exit_time 只允许推后
+                     terminal_flight_time),  # WHERE: 飞行时间有变化
                 )
                 conn.commit()
                 affected = cur.rowcount

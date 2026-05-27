@@ -147,7 +147,8 @@ class FDRStore:
 
     # ── 公开接口 ──────────────────────────────────────────
 
-    def update_from_radar(self, parsed: dict[str, Any]) -> None:
+    def update_from_radar(self, parsed: dict[str, Any],
+                             received_at: datetime | None = None) -> None:
         """从 CAT062 解析结果更新或插入一条 FDR"""
         callsign = parsed.get("callsign", "").strip()
         ssr = parsed.get("ssr", "").strip()
@@ -156,8 +157,7 @@ class FDRStore:
             return
 
         now = time.monotonic()
-        # 解析雷达数据包的时间戳
-        utc_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        utc_iso = (received_at or datetime.utcnow()).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         with self._lock:
             rec = self._records.get(key)
