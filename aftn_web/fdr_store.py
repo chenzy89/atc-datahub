@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
-from .terminal_area import is_in_terminal
+from .terminal_area import is_in_terminal, load_terminal_config
 
 logger = logging.getLogger("aftn_web.fdr")
 
@@ -82,6 +82,7 @@ class FDRRecord:
     terminal_exit_lon: float = 0.0          # 出终端经度
     terminal_accum_seconds: int = 0         # 终端内累计飞行秒数
     _last_terminal_check_time: float = 0.0  # 上次终端检查的 monotonic 时间
+    _landed: bool = False  # 是否已落地（高度低于终端区下限），落地后停止终端检测
 
     @property
     def is_associated(self) -> bool:
@@ -90,7 +91,23 @@ class FDRRecord:
 
     def check_terminal_transition(self, lat: float, lon: float, alt_m: float,
                                    check_time: float, utc_iso: str) -> None:
-        """检查终端区进出变化并更新状态"""
+        """检查终端区进出变化并更新状态
+
+        已落地航班（_landed=True）直接标记不在终端区并跳过一切检测，
+        避免落地后高度噪声导致再次误判进终端。
+        """
+        if self._landed:
+            self.in_terminal = False
+            return
+
+        # 检测是否落地：高度低于终端区底部，标记为已落地
+        cfg = load_terminal_config()
+        if alt_m > 0 and alt_m < cfg["floor_m"]:
+            self._landed = True
+            self.in_terminal = False
+            logger.debug("[TERM] %s 已落地，停止终端检测", self.callsign)
+            return
+
         prev = self.in_terminal
         now_in = is_in_terminal(lat, lon, alt_m)
         self.in_terminal = now_in

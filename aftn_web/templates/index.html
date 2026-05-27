@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.6</title>
+<title>ATC AFTN WebHub v2.0.7</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -267,7 +267,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.6</span>
+  <span class="badge">v2.0.7</span>
 </div>
 
 <div class="tabs">
@@ -1865,6 +1865,8 @@ function esc(s) {
     modal.style.display = 'flex';
     loading.style.display = 'block';
     if (termInfo) termInfo.style.display = 'none';
+    // 清空旧图
+    clearCanvas(canvas);
 
     // 并行请求：地图背景 + 轨迹数据 + 终端区配置
     var trailPromise = fetch('/api/flight_trail?callsign=' + encodeURIComponent(callsign) + '&date=' + encodeURIComponent(dateStr || ''))
@@ -1916,6 +1918,23 @@ function esc(s) {
     document.getElementById('modal-trail').style.display = 'none';
     _trailMapElements = [];
     _trailGeo = null;
+  }
+
+  function clearCanvas(canvas) {
+    var container = canvas.parentElement;
+    var w = container.clientWidth;
+    var h = container.clientHeight;
+    if (w < 100) w = 800;
+    if (h < 100) h = 500;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = '#0a1628';
+    ctx.fillRect(0, 0, w, h);
   }
 
   function drawTrailEmpty(canvas, msg) {
@@ -2053,44 +2072,55 @@ function esc(s) {
 
 
     // ── 终端区进出检测 ──────────────────────────────────
-    var entryPt = null;  // {index, lat, lon, ts, alt}
+    var entryPt = null;
     var exitPt = null;
-    var prevInTerm = false;
     var termDuration = 0;
+    var landed = false;
 
     if (termVertices.length > 2) {
-      // 估算点间时间间隔
-      var totalTimeSpan = 0;
-      var firstGoodTs = null, lastGoodTs = null;
+      // 第一遍：检测进出终端点（落地后停止检测）
+      var prevInTerm1 = false;
       for (var ti = 0; ti < points.length; ti++) {
         var tlt = parseFloat(points[ti].lt);
         var tln = parseFloat(points[ti].ln);
         var tfl = parseFloat(points[ti].fl) || 0;
         if (isNaN(tlt) || isNaN(tln)) continue;
-        if (firstGoodTs === null) firstGoodTs = points[ti].ts;
-        lastGoodTs = points[ti].ts;
+
+        // 一旦高度低于终端区底部，标记为已落地，后续不再检测
+        if (tfl > 0 && tfl < termFloor) {
+          landed = true;
+          prevInTerm1 = false;
+          continue;
+        }
 
         var inTerm = pointInPolygon(tlt, tln, termVertices) &&
                      tfl >= termFloor && tfl <= termCeiling;
 
-        if (inTerm && !prevInTerm) {
-          // 进终端
+        if (inTerm && !prevInTerm1) {
           entryPt = {lat: tlt, lon: tln, ts: points[ti].ts, alt: tfl};
-        } else if (!inTerm && prevInTerm && exitPt === null) {
-          // 出终端
+        } else if (!inTerm && prevInTerm1 && exitPt === null) {
           exitPt = {lat: tlt, lon: tln, ts: points[ti].ts, alt: tfl};
         }
-        prevInTerm = inTerm;
+        prevInTerm1 = inTerm;
+        if (landed) prevInTerm1 = false;
       }
 
-      // 计算终端内飞行时间（从头到尾扫描，累加相邻点间时间差）
-      prevInTerm = false;
+      // 第二遍：计算终端内飞行时间（落地后停止累加）
+      landed = false;
       var termEntryTs = null;
       for (var ti = 0; ti < points.length; ti++) {
         var tlt = parseFloat(points[ti].lt);
         var tln = parseFloat(points[ti].ln);
         var tfl = parseFloat(points[ti].fl) || 0;
         if (isNaN(tlt) || isNaN(tln)) continue;
+
+        if (tfl > 0 && tfl < termFloor) {
+          landed = true;
+          termEntryTs = null;
+          continue;
+        }
+        if (landed) continue;
+
         var inTerm = pointInPolygon(tlt, tln, termVertices) &&
                      tfl >= termFloor && tfl <= termCeiling;
         if (inTerm) {
