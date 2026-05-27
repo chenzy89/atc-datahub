@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.3</title>
+<title>ATC AFTN WebHub v2.0.4</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -267,7 +267,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.3</span>
+  <span class="badge">v2.0.4</span>
 </div>
 
 <div class="tabs">
@@ -409,7 +409,7 @@ canvas#radarMap {
         <th>规则</th><th>移交点</th><th>机型</th><th>DOF</th>
         <th>起飞地</th><th onclick="sortFpl('etd')" style="cursor:pointer;user-select:none;">ETD<span id="sort-arrow-etd" style="margin-left:3px;color:var(--accent);"></span></th>
         <th>ATD</th>
-        <th>目的地</th><th>ETA</th><th>ATA</th><th>跑道</th><th>飞行程序</th>
+        <th>目的地</th><th>ETA</th><th>ATA</th><th>跑道</th><th>飞行程序</th><th>进终端</th><th>出终端</th><th>终端时长</th>
         <th>航路</th><th>报文</th>
       </tr></thead>
       <tbody id="tbl-fpl"><tr><td colspan="15" class="loading">输入条件后按查询</td></tr></tbody>
@@ -881,6 +881,9 @@ function renderPlans(rs) {
       '<td>' + ft(r.ata) + '</td>' +
       '<td>' + (r.runway||'-') + '</td>' +
       '<td>' + (r.flight_procedure||'-') + '</td>' +
+      '<td>' + ((r.entry_time||'').slice(11,19)||'-') + '</td>' +
+      '<td>' + ((r.exit_time||'').slice(11,19)||'-') + '</td>' +
+      '<td>' + (r.terminal_flight_time ? Math.floor(r.terminal_flight_time/60) + 'm' + (r.terminal_flight_time%60) + 's' : '-') + '</td>'
       '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary)" title="' + esc(r.route||'') + '">' + rt + '</td>' +
       '<td>' + msgTagsHtml + '</td>' +
       '</tr>';
@@ -1772,6 +1775,9 @@ function esc(s) {
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">EET</td><td style="padding:2px 0;">' + esc(data.eet || '-') + '</td></tr>'
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">跑道</td><td style="padding:2px 0;color:' + (data.runway === 'ERROR' ? '#f87171' : '#e2e8f0') + ';">' + esc(data.runway || '-') + '</td></tr>'
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">飞行程序</td><td style="padding:2px 0;color:' + (data.flight_procedure === 'ERROR' ? '#f87171' : '#e2e8f0') + ';">' + esc(data.flight_procedure || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">进终端</td><td style="padding:2px 0;">' + esc(data.entry_time || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">出终端</td><td style="padding:2px 0;">' + esc(data.exit_time || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">终端时长</td><td style="padding:2px 0;">' + (data.terminal_flight_time ? Math.floor(data.terminal_flight_time/60) + '分' + (data.terminal_flight_time%60) + '秒' : '-') + '</td></tr>'
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">移交点</td><td style="padding:2px 0;">' + esc(data.handover_pt || '-') + '</td></tr>'
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;vertical-align:top;">航路</td><td style="padding:2px 0;word-break:break-all;font-size:12px;">' + esc(data.route || '-') + '</td></tr>'
           + '</table>';
