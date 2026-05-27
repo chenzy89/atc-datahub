@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.5</title>
+<title>ATC AFTN WebHub v2.0.6</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -267,7 +267,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.5</span>
+  <span class="badge">v2.0.6</span>
 </div>
 
 <div class="tabs">
@@ -2129,14 +2129,14 @@ function esc(s) {
       ctx.font = 'bold 11px monospace';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
-      ctx.fillText(label + ' ' + tsLocal, sp.x + 10, sp.y - 3);
+      ctx.fillText(tsLocal, sp.x + 10, sp.y - 3);
     }
 
     if (entryPt) {
-      drawTermMarker(entryPt, '⏹ 进', '#22c55e');  // 绿色
+      drawTermMarker(entryPt, '', '#22c55e');  // 绿色
     }
     if (exitPt) {
-      drawTermMarker(exitPt, '⏹ 出', '#ef4444');  // 红色
+      drawTermMarker(exitPt, '', '#ef4444');  // 红色
     }
 
     // ── 终端区信息栏 ──
