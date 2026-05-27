@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.9</title>
+<title>ATC AFTN WebHub v2.0.10</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -196,11 +196,16 @@ canvas#radarMap {
   overflow: hidden;
 }
 #replay-loading .rl-bar-fill {
-  width: 0%;
+  width: 100%;
   height: 100%;
-  background: linear-gradient(90deg, #58a6ff, #3fb950);
+  background: linear-gradient(90deg, #1e3a5f 0%, #58a6ff 40%, #3fb950 60%, #1e3a5f 100%);
+  background-size: 200% 100%;
   border-radius: 3px;
-  transition: width .25s ease;
+  animation: rl-shimmer 1.6s ease-in-out infinite;
+}
+@keyframes rl-shimmer {
+   0% { background-position: 200% 0; }
+ 100% { background-position: -200% 0; }
 }
 #replay-loading .rl-pct {
   font-size: 12px;
@@ -315,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.9</span>
+  <span class="badge">v2.0.10</span>
 </div>
 
 <div class="tabs">
@@ -542,7 +547,6 @@ canvas#radarMap {
       <div class="spinner"></div>
       <div class="rl-text">正在加载历史数据...</div>
       <div class="rl-bar-bg"><div class="rl-bar-fill" id="rlBarFill"></div></div>
-      <div class="rl-pct" id="rlPct">0%</div>
     </div>
     <div class="map-time-label" id="mapTimeLabel">--:--:--</div>
     <div class="coord-bar" id="coordBar"></div>
@@ -2520,14 +2524,10 @@ function esc(s) {
   }
 
   // ── 显示/隐藏回放加载遮罩 ──
-  function showReplayLoading(pct) {
+  function showReplayLoading() {
     var el2 = document.getElementById('replay-loading');
     if (!el2) return;
     el2.style.display = 'flex';
-    var bar = document.getElementById('rlBarFill');
-    var pctEl = document.getElementById('rlPct');
-    if (bar) bar.style.width = Math.min(100, Math.max(0, pct||0)) + '%';
-    if (pctEl) pctEl.textContent = (pct||0) + '%';
   }
   function hideReplayLoading() {
     var el2 = document.getElementById('replay-loading');
@@ -2547,7 +2547,7 @@ function esc(s) {
     // 清空画布并显示加载遮罩
     window._radarTracks = [];
     if (typeof window.drawMap === 'function') window.drawMap();
-    showReplayLoading(0);
+    showReplayLoading();
 
     replaySpeed = parseInt(el.speed.value) || 4;
     // 用户选择的是北京时 → 转 UTC
