@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.8</title>
+<title>ATC AFTN WebHub v2.0.9</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -161,6 +161,54 @@ canvas#radarMap {
   border: 1px solid #1e3a5f;
 }
 
+/* ── 回放加载遮罩 ── */
+#replay-loading {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(10,22,40,.88);
+  z-index: 100;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  user-select: none;
+}
+#replay-loading .spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #1e3a5f;
+  border-top-color: #58a6ff;
+  border-radius: 50%;
+  animation: rl-spin .8s linear infinite;
+  margin-bottom: 16px;
+}
+@keyframes rl-spin { to { transform: rotate(360deg); } }
+#replay-loading .rl-text {
+  font-size: 15px;
+  color: #94a3b8;
+  margin-bottom: 14px;
+}
+#replay-loading .rl-bar-bg {
+  width: 200px;
+  height: 5px;
+  background: #1e293b;
+  border-radius: 3px;
+  overflow: hidden;
+}
+#replay-loading .rl-bar-fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #58a6ff, #3fb950);
+  border-radius: 3px;
+  transition: width .25s ease;
+}
+#replay-loading .rl-pct {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 8px;
+  font-family: Consolas, monospace;
+}
+
 /* ── 回放控制栏 ── */
 .playback-bar {
   margin: 0 12px 12px 12px;
@@ -267,7 +315,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.8</span>
+  <span class="badge">v2.0.9</span>
 </div>
 
 <div class="tabs">
@@ -490,6 +538,12 @@ canvas#radarMap {
 <div class="panel" id="panel-map">
   <div class="map-container">
     <canvas id="radarMap"></canvas>
+    <div id="replay-loading">
+      <div class="spinner"></div>
+      <div class="rl-text">正在加载历史数据...</div>
+      <div class="rl-bar-bg"><div class="rl-bar-fill" id="rlBarFill"></div></div>
+      <div class="rl-pct" id="rlPct">0%</div>
+    </div>
     <div class="map-time-label" id="mapTimeLabel">--:--:--</div>
     <div class="coord-bar" id="coordBar"></div>
   </div>
@@ -519,6 +573,7 @@ canvas#radarMap {
         <option value="8">8×</option>
         <option value="12">12×</option>
         <option value="20">20×</option>
+        <option value="40">40×</option>
       </select>
 
       <div class="pb-progress" id="pbProgress"><div class="pb-progress-fill" id="pbProgressFill"></div></div>
@@ -2464,6 +2519,21 @@ function esc(s) {
     el.sec.disabled = isReplay;
   }
 
+  // ── 显示/隐藏回放加载遮罩 ──
+  function showReplayLoading(pct) {
+    var el2 = document.getElementById('replay-loading');
+    if (!el2) return;
+    el2.style.display = 'flex';
+    var bar = document.getElementById('rlBarFill');
+    var pctEl = document.getElementById('rlPct');
+    if (bar) bar.style.width = Math.min(100, Math.max(0, pct||0)) + '%';
+    if (pctEl) pctEl.textContent = (pct||0) + '%';
+  }
+  function hideReplayLoading() {
+    var el2 = document.getElementById('replay-loading');
+    if (el2) el2.style.display = 'none';
+  }
+
   // ── 开始回放 ──
   function startReplay() {
     try {
@@ -2473,6 +2543,11 @@ function esc(s) {
     state = STATE.PAUSED;
     updateUI();
     console.log('[REPLAY] startReplay, _replayActive=', window._replayActive);
+
+    // 清空画布并显示加载遮罩
+    window._radarTracks = [];
+    if (typeof window.drawMap === 'function') window.drawMap();
+    showReplayLoading(0);
 
     replaySpeed = parseInt(el.speed.value) || 4;
     // 用户选择的是北京时 → 转 UTC
@@ -2490,40 +2565,58 @@ function esc(s) {
     replayCurrentTime = startTS;
     replayEndTime = endTS;
 
+    // 用 XHR 替代 fetch 以跟踪加载进度
     var url = '/api/radar_history?from=' + encodeURIComponent(startTS) + '&to=' + encodeURIComponent(endTS);
-    fetch(url)
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        historyPoints = data;
-        // 按呼号分组排序
-        var byCs = {};
-        for (var i = 0; i < historyPoints.length; i++) {
-          var pt = historyPoints[i];
-          var cs = pt.cs || pt.ss || '?';
-          if (!byCs[cs]) byCs[cs] = [];
-          byCs[cs].push(pt);
-        }
-        for (var cs in byCs) {
-          byCs[cs].sort(function(a,b) { return a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0; });
-        }
-        replayTracks = byCs;
-        console.log('[REPLAY] data loaded, points=', historyPoints.length, 'tracks=', Object.keys(byCs).length);
-        state = STATE.PLAYING;
-        updateUI();
-
-        // 清除可能的实时尾迹
-        window._radarTracks = [];
-        // 显示第一帧
-        updateReplayFrame(replayCurrentTime);
-        startPlaybackClock();
-      })
-      .catch(function(err) {
-        console.error('[REPLAY] Load failed:', err);
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', url);
+    xhr.responseType = 'json';
+    xhr.onprogress = function(e) {
+      if (e.lengthComputable) {
+        var pct = Math.round(e.loaded / e.total * 100);
+        showReplayLoading(pct);
+      }
+    };
+    xhr.onload = function() {
+      hideReplayLoading();
+      var data = xhr.response;
+      if (!data || !Array.isArray(data)) {
+        console.error('[REPLAY] invalid response');
         window._replayActive = false;
         state = STATE.LIVE;
         updateUI();
-      });
-    } catch(e) { console.error('[REPLAY] startReplay error:', e); }
+        return;
+      }
+      historyPoints = data;
+      // 按呼号分组排序
+      var byCs = {};
+      for (var i = 0; i < historyPoints.length; i++) {
+        var pt = historyPoints[i];
+        var cs = pt.cs || pt.ss || '?';
+        if (!byCs[cs]) byCs[cs] = [];
+        byCs[cs].push(pt);
+      }
+      for (var cs in byCs) {
+        byCs[cs].sort(function(a,b) { return a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0; });
+      }
+      replayTracks = byCs;
+      console.log('[REPLAY] data loaded, points=', historyPoints.length, 'tracks=', Object.keys(byCs).length);
+      state = STATE.PLAYING;
+      updateUI();
+
+      // 清除可能的实时尾迹并显示第一帧
+      window._radarTracks = [];
+      updateReplayFrame(replayCurrentTime);
+      startPlaybackClock();
+    };
+    xhr.onerror = xhr.onabort = function() {
+      hideReplayLoading();
+      console.error('[REPLAY] Load failed');
+      window._replayActive = false;
+      state = STATE.LIVE;
+      updateUI();
+    };
+    xhr.send();
+    } catch(e) { console.error('[REPLAY] startReplay error:', e); hideReplayLoading(); }
   }
 
   function startPlaybackClock() {
