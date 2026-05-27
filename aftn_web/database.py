@@ -434,8 +434,8 @@ class Database:
                     _fmt_dt(plan.etd), _fmt_dt(plan.atd),
                     plan.adest,
                     _fmt_dt(plan.eta), _fmt_dt(plan.ata),
-                    plan.route, handover_pt,
                     plan.runway, plan.flight_procedure,
+                    plan.route, handover_pt,
                     plan.source_message_type,
                     _fmt_dt(plan.last_message_time),
                     plan.raw_message_text or "",
@@ -609,13 +609,19 @@ class Database:
         if not raw:
             return raw
         if field == "runway":
-            # 去掉 null 字节，跑道有效长度 2~3: "16", "34L", "07R"
+            # 跑道格式：两位数字 + 可选 L/C/R，拒绝航路点/三字码
+            import re
             cleaned = raw.replace("\x00", "")
-            return cleaned if 2 <= len(cleaned) <= 3 else "ERROR"
+            if re.match(r'^\d{2}[LCR]?$', cleaned):
+                return cleaned
+            return "ERROR"
         if field == "flight_procedure":
-            # 去掉 null 字节，程序有效长度 6~7: "SAREX31", "OVGOT3"
+            # 程序格式：6~7 位大写字母数字，如 SAREX31、OVGOT3
+            import re
             cleaned = raw.replace("\x00", "")
-            return cleaned if 6 <= len(cleaned) <= 7 else "ERROR"
+            if re.match(r'^[A-Z0-9]{6,7}$', cleaned):
+                return cleaned
+            return "ERROR"
         return raw
 
     def update_radar_data(self, callsign: str, runway: str, flight_procedure: str,

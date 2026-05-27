@@ -33,24 +33,36 @@ _FP_LEN_MIN = 6
 _FP_LEN_MAX = 7
 
 
+import re
+
+_RUNWAY_PATTERN = re.compile(r'^\d{2}[LCR]?$')
+
 def _validate_runway(val: str) -> str:
     """校验跑道值，不合法返回 'ERROR'
     - 去掉 null 字节和不可见字符
-    - 长度 2~3（如 "16", "34L", "07R"）
+    - 格式为两位数字 + 可选 L/C/R（如 "16", "34L", "07R"）
+    - 拒绝航路点、三字码等非跑道字符串
     """
     val = val.strip().replace("\x00", "")
-    if val and _RUNWAY_LEN_MIN <= len(val) <= _RUNWAY_LEN_MAX:
+    if not val:
+        return val
+    if _RUNWAY_PATTERN.match(val):
         return val
     return "ERROR"
 
 
+_FP_PATTERN = re.compile(r'^[A-Z0-9]{6,7}$')
+
 def _validate_flight_procedure(val: str) -> str:
     """校验飞行程序值，不合法返回 'ERROR'
     - 去掉 null 字节和不可见字符
-    - 长度 6~7（如 "SAREX31", "OVGOT3"）
+    - 格式为 6~7 位大写字母数字（如 "SAREX31", "OVGOT3"）
+    - 拒绝移交点等非程序字符串
     """
     val = val.strip().replace("\x00", "")
-    if val and _FP_LEN_MIN <= len(val) <= _FP_LEN_MAX:
+    if not val:
+        return val
+    if _FP_PATTERN.match(val):
         return val
     return "ERROR"
 
