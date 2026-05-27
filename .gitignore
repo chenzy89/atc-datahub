@@ -18,3 +18,4 @@ logs/*.log
 aftn_web/data.db
 data/radar_history/*.jsonl.gz
 data/*.lock
+data/db.sqlite
