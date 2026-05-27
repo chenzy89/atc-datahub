@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.4</title>
+<title>ATC AFTN WebHub v2.0.5</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -267,7 +267,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.4</span>
+  <span class="badge">v2.0.5</span>
 </div>
 
 <div class="tabs">
@@ -883,7 +883,7 @@ function renderPlans(rs) {
       '<td>' + (r.flight_procedure||'-') + '</td>' +
       '<td>' + ((r.entry_time||'').slice(11,19)||'-') + '</td>' +
       '<td>' + ((r.exit_time||'').slice(11,19)||'-') + '</td>' +
-      '<td>' + (r.terminal_flight_time ? Math.floor(r.terminal_flight_time/60) + 'm' + (r.terminal_flight_time%60) + 's' : '-') + '</td>'
+      '<td>' + (r.terminal_flight_time ? Math.floor(r.terminal_flight_time/60) + 'm' + (r.terminal_flight_time%60) + 's' : '-') + '</td>' +
       '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary)" title="' + esc(r.route||'') + '">' + rt + '</td>' +
       '<td>' + msgTagsHtml + '</td>' +
       '</tr>';
