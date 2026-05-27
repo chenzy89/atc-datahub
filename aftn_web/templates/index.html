@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.2</title>
+<title>ATC AFTN WebHub v2.0.3</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -267,7 +267,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.2</span>
+  <span class="badge">v2.0.3</span>
 </div>
 
 <div class="tabs">
@@ -1828,19 +1828,39 @@ function esc(s) {
   var _trailMapElements = [];
   var _trailGeo = null;
 
+  // ── 射线法判断点是否在多边形内 ─────────────────────────
+  function pointInPolygon(lat, lon, vertices) {
+    var inside = false;
+    var n = vertices.length;
+    if (n < 3) return false;
+    var j = n - 1;
+    for (var i = 0; i < n; i++) {
+      var yi = vertices[i][0], xi = vertices[i][1];
+      var yj = vertices[j][0], xj = vertices[j][1];
+      if ((yi > lat) !== (yj > lat) &&
+          lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) {
+        inside = !inside;
+      }
+      j = i;
+    }
+    return inside;
+  }
+
   function showFlightTrail(callsign, dateStr) {
     if (!callsign) return;
     var modal = document.getElementById('modal-trail');
     var canvas = document.getElementById('trailCanvas');
     var loading = document.getElementById('trail-loading');
     var title = document.getElementById('trail-title');
+    var termInfo = document.getElementById('trail-terminal-info');
     if (!modal || !canvas) return;
 
     title.textContent = callsign + ' 历史轨迹';
     modal.style.display = 'flex';
     loading.style.display = 'block';
+    if (termInfo) termInfo.style.display = 'none';
 
-    // 并行请求：地图背景 + 轨迹数据
+    // 并行请求：地图背景 + 轨迹数据 + 终端区配置
     var trailPromise = fetch('/api/flight_trail?callsign=' + encodeURIComponent(callsign) + '&date=' + encodeURIComponent(dateStr || ''))
       .then(function(r) { return r.json(); });
 
@@ -1866,19 +1886,19 @@ function esc(s) {
 
     var termPromise = fetch('/api/config/terminal_airports')
       .then(function(r) { return r.json(); })
-      .catch(function() { return []; });
+      .catch(function() { return {}; });
 
     Promise.all([trailPromise, mapPromise, termPromise])
       .then(function(results) {
         var trailPoints = results[0];
         _trailMapElements = results[1];
-        var terminalAirports = results[2];
+        var terminalConfig = results[2];
         loading.style.display = 'none';
         if (!trailPoints || trailPoints.length === 0) {
           drawTrailEmpty(canvas, '航班 ' + callsign + ' 无历史航迹数据');
           return;
         }
-        drawFlightTrail(canvas, callsign, trailPoints, terminalAirports);
+        drawFlightTrail(canvas, callsign, trailPoints, terminalConfig);
       })
       .catch(function(err) {
         loading.style.display = 'none';
@@ -1914,7 +1934,7 @@ function esc(s) {
     ctx.fillText(msg, w/2, h/2);
   }
 
-  function drawFlightTrail(canvas, callsign, points, terminalAirports) {
+  function drawFlightTrail(canvas, callsign, points, terminalConfig) {
     var container = canvas.parentElement;
     var w = container.clientWidth;
     var h = container.clientHeight;
@@ -1947,12 +1967,18 @@ function esc(s) {
       return;
     }
 
+    // 终端区配置
+    var termAirports = (terminalConfig && terminalConfig.airports) ? terminalConfig.airports : [];
+    var termVertices = (terminalConfig && terminalConfig.vertices) ? terminalConfig.vertices : [];
+    var termCeiling = (terminalConfig && terminalConfig.ceiling_m) || 99999;
+    var termFloor = (terminalConfig && terminalConfig.floor_m) || 0;
+
     // 判断进港/出港：扫描尾迹点的起降地信息
-    var isArrival = false;   // 进港 → 黄色；出港 → 天蓝
+    var isArrival = false;
     var terminalSet = {};
-    if (terminalAirports && terminalAirports.length) {
-      for (var ti = 0; ti < terminalAirports.length; ti++) {
-        terminalSet[terminalAirports[ti]] = true;
+    if (termAirports.length) {
+      for (var ti = 0; ti < termAirports.length; ti++) {
+        terminalSet[termAirports[ti]] = true;
       }
       for (var ti = 0; ti < points.length; ti++) {
         var adest = (points[ti].ad || '').toUpperCase().trim();
@@ -2020,14 +2046,126 @@ function esc(s) {
 
 
 
-    // ── 航班号标签 ──
+    // ── 终端区进出检测 ──────────────────────────────────
+    var entryPt = null;  // {index, lat, lon, ts, alt}
+    var exitPt = null;
+    var prevInTerm = false;
+    var termDuration = 0;
+
+    if (termVertices.length > 2) {
+      // 估算点间时间间隔
+      var totalTimeSpan = 0;
+      var firstGoodTs = null, lastGoodTs = null;
+      for (var ti = 0; ti < points.length; ti++) {
+        var tlt = parseFloat(points[ti].lt);
+        var tln = parseFloat(points[ti].ln);
+        var tfl = parseFloat(points[ti].fl) || 0;
+        if (isNaN(tlt) || isNaN(tln)) continue;
+        if (firstGoodTs === null) firstGoodTs = points[ti].ts;
+        lastGoodTs = points[ti].ts;
+
+        var inTerm = pointInPolygon(tlt, tln, termVertices) &&
+                     tfl >= termFloor && tfl <= termCeiling;
+
+        if (inTerm && !prevInTerm) {
+          // 进终端
+          entryPt = {lat: tlt, lon: tln, ts: points[ti].ts, alt: tfl};
+        } else if (!inTerm && prevInTerm && exitPt === null) {
+          // 出终端
+          exitPt = {lat: tlt, lon: tln, ts: points[ti].ts, alt: tfl};
+        }
+        prevInTerm = inTerm;
+      }
+
+      // 计算终端内飞行时间（从头到尾扫描，累加相邻点间时间差）
+      prevInTerm = false;
+      var termEntryTs = null;
+      for (var ti = 0; ti < points.length; ti++) {
+        var tlt = parseFloat(points[ti].lt);
+        var tln = parseFloat(points[ti].ln);
+        var tfl = parseFloat(points[ti].fl) || 0;
+        if (isNaN(tlt) || isNaN(tln)) continue;
+        var inTerm = pointInPolygon(tlt, tln, termVertices) &&
+                     tfl >= termFloor && tfl <= termCeiling;
+        if (inTerm) {
+          if (!prevInTerm) {
+            termEntryTs = new Date(points[ti].ts);
+          } else if (termEntryTs && points[ti].ts) {
+            var curTs = new Date(points[ti].ts);
+            termDuration += (curTs - termEntryTs) / 1000;
+            termEntryTs = curTs;
+          }
+        }
+        prevInTerm = inTerm;
+      }
+    }
+
+    // ── 绘制进出终端标记 ──────────────────────────────
+    var markerColor = '#22d3ee'; // 青色
+    var markerLabelColor = '#e2e8f0';
+
+    function drawTermMarker(pt, label, color) {
+      var sp = _trailGeo.realToPixel({lat: pt.lat, lon: pt.lon});
+      if (!sp || isNaN(sp.x) || isNaN(sp.y)) return;
+      // 外圈
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 7, 0, 2 * Math.PI);
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.9;
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      // 标签
+      var tsLocal = (pt.ts || '').slice(11, 19);
+      ctx.fillStyle = markerLabelColor;
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(label + ' ' + tsLocal, sp.x + 10, sp.y - 3);
+    }
+
+    if (entryPt) {
+      drawTermMarker(entryPt, '⏹ 进', '#22c55e');  // 绿色
+    }
+    if (exitPt) {
+      drawTermMarker(exitPt, '⏹ 出', '#ef4444');  // 红色
+    }
+
+    // ── 终端区信息栏 ──
+    var bottomY = h - 12;
+    var lineH = 18;
+
+    // 航班号标签
     ctx.fillStyle = trailColor;
     ctx.font = 'bold 13px Consolas, monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
-    ctx.fillText(callsign + ' ' + trailLabel, 12, h - 12);
+    ctx.fillText(callsign + ' ' + trailLabel, 12, bottomY);
 
-    // ── 点数和时间范围 ──
+    // 终端区时间
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#94a3b8';
+    var termText = '';
+    if (entryPt && exitPt) {
+      var eTs = (entryPt.ts || '').slice(11, 19);
+      var xTs = (exitPt.ts || '').slice(11, 19);
+      termText = '终端 ' + eTs + ' → ' + xTs + ' (' + Math.round(termDuration) + 's)';
+    } else if (entryPt) {
+      var eTs = (entryPt.ts || '').slice(11, 19);
+      termText = '进终端 ' + eTs;
+    } else if (exitPt) {
+      var xTs = (exitPt.ts || '').slice(11, 19);
+      termText = '出终端 ' + xTs;
+    }
+    if (termText) {
+      ctx.textBaseline = 'bottom';
+      ctx.textAlign = 'right';
+      ctx.fillText(termText, w - 12, bottomY);
+    }
+
+    // ── 点数和时间范围（右上角） ──
     var firstTs = (points[0].ts || '').slice(0, 19).replace('T', ' ');
     var lastTs = (points[points.length-1].ts || '').slice(0, 19).replace('T', ' ');
     ctx.fillStyle = '#64748b';

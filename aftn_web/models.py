@@ -46,6 +46,9 @@ class FlightPlan:
     ata: datetime | None = None
     runway: str = ""          # 使用跑道（来自雷达 CAT062）
     flight_procedure: str = "" # 飞行程序 SID/STAR（来自雷达 CAT062）
+    entry_time: str = ""       # 进终端区时间（UTC ISO格式，来自雷达轨迹）
+    exit_time: str = ""        # 出终端区时间（UTC ISO格式，来自雷达轨迹）
+    terminal_flight_time: int = 0  # 终端飞行时间（秒）
     route: str = ""
     handover_pt: str = ""   # 移交点，从航路自动解析
     source_message_type: str = ""
@@ -71,6 +74,9 @@ class FlightPlan:
             "ata": self.ata.isoformat() if self.ata else None,
             "runway": self.runway,
             "flight_procedure": self.flight_procedure,
+            "entry_time": self.entry_time,
+            "exit_time": self.exit_time,
+            "terminal_flight_time": self.terminal_flight_time,
             "route": self.route,
             "handover_pt": self.handover_pt,
             "source_message_type": self.source_message_type,

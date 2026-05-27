@@ -107,6 +107,24 @@ class Database:
             conn.commit()
         except sqlite3.OperationalError:
             pass  # 列已存在
+        # 迁移：新增 entry_time 列（v2.0.2），终端区进入时间
+        try:
+            conn.execute("ALTER TABLE flight_plans ADD COLUMN entry_time TEXT NOT NULL DEFAULT ''")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+        # 迁移：新增 exit_time 列（v2.0.2），终端区离开时间
+        try:
+            conn.execute("ALTER TABLE flight_plans ADD COLUMN exit_time TEXT NOT NULL DEFAULT ''")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+        # 迁移：新增 terminal_flight_time 列（v2.0.2），终端区内飞行时间（秒）
+        try:
+            conn.execute("ALTER TABLE flight_plans ADD COLUMN terminal_flight_time INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
 
     # ── AFTN 报文 ──────────────────────────────────────────────
@@ -425,9 +443,10 @@ class Database:
                 """INSERT INTO flight_plans
                    (callsign, ssr, aircraft_type, dof, adep, etd, atd,
                     adest, eta, ata, runway, flight_procedure, route, handover_pt,
+                    entry_time, exit_time, terminal_flight_time,
                     source_message_type, last_message_time, raw_message_text,
                     flight_rule, message_types, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     plan.callsign, plan.ssr, plan.aircraft_type,
                     _fmt_date(plan.dof), plan.adep,
@@ -436,6 +455,7 @@ class Database:
                     _fmt_dt(plan.eta), _fmt_dt(plan.ata),
                     plan.runway, plan.flight_procedure,
                     plan.route, handover_pt,
+                    plan.entry_time or "", plan.exit_time or "", plan.terminal_flight_time or 0,
                     plan.source_message_type,
                     _fmt_dt(plan.last_message_time),
                     plan.raw_message_text or "",
@@ -670,6 +690,68 @@ class Database:
                     time.sleep(delay)
                     continue
                 logger.warning("[RADAR] %s 写锁争用，放弃更新", callsign)
+                return 0
+
+    def update_terminal_data(self, callsign: str, entry_time: str, exit_time: str,
+                               terminal_flight_time: int,
+                               adep: str = "", adest: str = "") -> int:
+        """更新终端区进出时间和终端飞行时间（来自 FDR 实时检测）
+
+        优先匹配：callsign + adep + adest + 今日 DOF
+        降级匹配：callsign + 今日 DOF
+        """
+        if not callsign:
+            return 0
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+
+        for retry in range(10):
+            try:
+                conn = self._get_conn()
+                match = None
+                if adep and adest:
+                    match = conn.execute(
+                        "SELECT id FROM flight_plans "
+                        "WHERE callsign=? AND adep=? AND adest=? AND dof=? "
+                        "ORDER BY updated_at DESC LIMIT 1",
+                        (callsign, adep, adest, today_str),
+                    ).fetchone()
+                if not match:
+                    match = conn.execute(
+                        "SELECT id FROM flight_plans "
+                        "WHERE callsign=? AND dof=? "
+                        "ORDER BY updated_at DESC LIMIT 1",
+                        (callsign, today_str),
+                    ).fetchone()
+                if not match:
+                    return 0
+
+                now = _fmt_dt(datetime.utcnow())
+                cur = conn.execute(
+                    "UPDATE flight_plans SET entry_time=?, exit_time=?,"
+                    " terminal_flight_time=?, updated_at=? "
+                    "WHERE id=? "
+                    "AND (entry_time != ? OR exit_time != ? OR terminal_flight_time != ? "
+                    "     OR entry_time='' OR exit_time='' OR terminal_flight_time=0)",
+                    (entry_time, exit_time, terminal_flight_time, now,
+                     match["id"], entry_time, exit_time, terminal_flight_time),
+                )
+                conn.commit()
+                affected = cur.rowcount
+                if affected > 0:
+                    loc = f"{adep}->{adest}" if adep and adest else ""
+                    logger.info("[TERM] %s%s (id=%d) 进=%s 出=%s 时长=%ds",
+                                callsign, f" {loc}" if loc else "",
+                                match["id"], entry_time or '-', exit_time or '-',
+                                terminal_flight_time)
+                return affected
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and retry < 9:
+                    delay = min(0.5 * (2 ** retry), 4.0)
+                    logger.debug("[TERM] %s 写锁争用，第 %d 次重试 (delay=%.1fs)",
+                                 callsign, retry + 1, delay)
+                    time.sleep(delay)
+                    continue
+                logger.warning("[TERM] %s 写锁争用，放弃更新", callsign)
                 return 0
 
     def update_radar_data_by_ssr(self, ssr: str, runway: str, flight_procedure: str) -> int:
@@ -986,10 +1068,11 @@ class Database:
         conn.execute(
             """INSERT INTO flight_plans
                (callsign, ssr, aircraft_type, dof, adep, etd, atd,
-                adest, eta, ata, runway, flight_procedure, route, handover_pt, source_message_type,
+                adest, eta, ata, runway, flight_procedure, route, handover_pt,
+                entry_time, exit_time, terminal_flight_time, source_message_type,
                 last_message_time, raw_message_text,
                 flight_rule, message_types, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 plan.callsign, plan.ssr, plan.aircraft_type,
                 _fmt_date(plan.dof), plan.adep,
@@ -998,6 +1081,7 @@ class Database:
                 _fmt_dt(plan.eta), _fmt_dt(plan.ata),
                 plan.runway, plan.flight_procedure,
                 plan.route, handover_pt,
+                plan.entry_time or "", plan.exit_time or "", plan.terminal_flight_time or 0,
                 plan.source_message_type or "MANUAL",
                 _fmt_dt(plan.last_message_time),
                 plan.raw_message_text or "",
@@ -1024,6 +1108,7 @@ class Database:
                callsign=?, ssr=?, aircraft_type=?, dof=?, adep=?,
                etd=?, atd=?, adest=?, eta=?, ata=?, route=?, handover_pt=?,
                runway=?, flight_procedure=?,
+               entry_time=?, exit_time=?, terminal_flight_time=?,
                source_message_type=?, last_message_time=?,
                raw_message_text=?, flight_rule=?, message_types=?, updated_at=?
                WHERE id=?""",
@@ -1035,6 +1120,7 @@ class Database:
                 _fmt_dt(plan.eta), _fmt_dt(plan.ata),
                 plan.route, handover_pt,
                 plan.runway, plan.flight_procedure,
+                plan.entry_time or "", plan.exit_time or "", plan.terminal_flight_time or 0,
                 plan.source_message_type or "MANUAL",
                 _fmt_dt(plan.last_message_time),
                 plan.raw_message_text or "",
