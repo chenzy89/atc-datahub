@@ -620,6 +620,21 @@ canvas#radarMap {
       <!-- JS 动态生成 -->
     </div>
 
+    <!-- ── 通话时长折线图 ── -->
+    <div class="voice-chart-section">
+      <div class="voice-chart-toolbar">
+        <h3>通话时长统计</h3>
+        <div class="voice-chart-controls">
+          <label><span>日期</span><input type="date" id="voiceChartDate"></label>
+          <label><span>通道</span><select id="voiceChartChannel"><option value="-1">— 选择通道 —</option></select></label>
+          <button class="btn btn-primary btn-sm" onclick="voiceLoadChart()">📊 查询</button>
+        </div>
+      </div>
+      <div class="voice-chart-wrap">
+        <canvas id="voiceChart" height="300"></canvas>
+        <div class="voice-chart-empty" id="voiceChartEmpty">点击通道卡片或选择通道后点「查询」</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -629,6 +644,15 @@ canvas#radarMap {
 .voice-status-bar .voice-info { color:var(--text-muted); font-size:12px; }
 .voice-controls { padding:16px; }
 .voice-channels { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px,1fr)); gap:10px; margin-bottom:20px; }
+.voice-chart-section { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:16px; }
+.voice-chart-toolbar { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
+.voice-chart-toolbar h3 { font-size:14px; font-weight:600; color:var(--text-primary); margin:0; }
+.voice-chart-controls { display:flex; align-items:center; gap:10px; }
+.voice-chart-controls label { display:flex; align-items:center; gap:4px; font-size:12px; color:var(--text-secondary); }
+.voice-chart-controls input[type=date], .voice-chart-controls select { background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:4px; padding:5px 8px; font-size:13px; }
+.voice-chart-wrap { position:relative; }
+.voice-chart-wrap canvas { width:100%; height:300px; display:block; border-radius:4px; }
+.voice-chart-empty { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); color:var(--text-muted); font-size:14px; text-align:center; }
 .voice-channel-card { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:12px 14px; transition:.15s; cursor:pointer; }
 .voice-channel-card:hover { border-color:var(--accent); background:var(--bg-hover); }
 .voice-channel-card.selected { border-color:var(--accent); box-shadow:0 0 8px rgba(88,166,255,.3); }
@@ -641,6 +665,7 @@ canvas#radarMap {
 .voice-channel-card .vc-dot.inactive { background:#2d333b; }
 .voice-channel-card .vc-dot.active { background:var(--accent-green); box-shadow:0 0 10px rgba(63,185,80,.6); animation:pulse-dot 1s ease-in-out infinite; }
 .voice-channel-card .vc-stats { font-size:11px; color:var(--text-muted); margin-top:6px; }
+.voice-channel-card .vc-dur { font-size:10px; color:var(--accent-orange); margin-top:1px; }
 @keyframes pulse-dot {
   0%, 100% { opacity:1; transform:scale(1); }
   50% { opacity:.6; transform:scale(1.3); }
@@ -3084,12 +3109,45 @@ function voiceRenderChannels(channels, playing) {
       + '<div class="vc-freq">' + c.frequency + ' MHz</div>'
       + '<div class="vc-ch">内话通道 #' + c.channel_id + '</div>'
       + '<div class="vc-stats">已接收 ' + bytesStr + '</div>'
+      + '<div class="vc-dur">' + c.sector_code + '</div>'
       + '</div>';
   }
   container.innerHTML = html;
+
+  // 同步时间段选择器中的通道列表
+  voiceSyncChartSelect(channels);
+}
+
+function voiceSyncChartSelect(channels) {
+  var sel = document.getElementById('voiceChartChannel');
+  if (!sel) return;
+  var currentVal = sel.value;
+  sel.innerHTML = '<option value="-1">— 选择通道 —</option>';
+  var order = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
+  for (var oi = 0; oi < order.length; oi++) {
+    for (var ci = 0; ci < channels.length; ci++) {
+      if (channels[ci].sector_code === order[oi]) {
+        var opt = document.createElement('option');
+        opt.value = channels[ci].channel_id;
+        opt.textContent = order[oi] + ' (' + channels[ci].sector_name + ') CH' + channels[ci].channel_id;
+        if (String(channels[ci].channel_id) === currentVal) opt.selected = true;
+        sel.appendChild(opt);
+        break;
+      }
+    }
+  }
 }
 
 function voiceSelectFromCard(channelId) {
+  // 设置日期为今天、通道选择器
+  var dateInput = document.getElementById('voiceChartDate');
+  if (dateInput && !dateInput.value) {
+    var d = new Date();
+    dateInput.value = d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate());
+  }
+  var sel = document.getElementById('voiceChartChannel');
+  if (sel) sel.value = channelId;
+
   // 先获取当前播放状态
   fetch('/api/voice/status')
     .then(function(r) { return r.json(); })
@@ -3108,7 +3166,138 @@ function voiceSelectFromCard(channelId) {
       }
     })
     .catch(function(){})
-    .then(function() { voicePollStatus(); });
+    .then(function() {
+      voicePollStatus();
+      voiceLoadChart();
+    });
+}
+
+// ═══════════════════════════════════════════════════════
+// 通话时长折线图
+// ═══════════════════════════════════════════════════════
+
+function voiceLoadChart() {
+  var dateInput = document.getElementById('voiceChartDate');
+  var chSel = document.getElementById('voiceChartChannel');
+  var dateStr = dateInput ? dateInput.value : '';
+  var ch = chSel ? parseInt(chSel.value) : -1;
+
+  if (!dateStr || ch < 0) {
+    document.getElementById('voiceChartEmpty').style.display = 'block';
+    document.getElementById('voiceChartEmpty').textContent = '请选择日期和通道';
+    return;
+  }
+
+  document.getElementById('voiceChartEmpty').textContent = '加载中...';
+  document.getElementById('voiceChartEmpty').style.display = 'block';
+
+  fetch('/api/voice/duration?date=' + encodeURIComponent(dateStr) + '&channel=' + ch)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      document.getElementById('voiceChartEmpty').style.display = 'none';
+      voiceDrawChart(data.data, dateStr, ch);
+    })
+    .catch(function() {
+      document.getElementById('voiceChartEmpty').textContent = '查询失败';
+    });
+}
+
+function voiceDrawChart(data, dateStr, channelId) {
+  var canvas = document.getElementById('voiceChart');
+  if (!canvas || !data || !data.length) return;
+
+  var ctx = canvas.getContext('2d');
+  var W = canvas.parentElement.clientWidth || 800;
+  var H = 300;
+  canvas.width = W * (window.devicePixelRatio || 1);
+  canvas.height = H * (window.devicePixelRatio || 1);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+
+  var PAD = {top: 30, bottom: 40, left: 55, right: 20};
+  var plotW = W - PAD.left - PAD.right;
+  var plotH = H - PAD.top - PAD.bottom;
+
+  // 清空
+  ctx.clearRect(0, 0, W, H);
+
+  var maxVal = 600; // Y 轴最大值固定 600 秒
+  var numPoints = data.length; // 144
+  var xStep = plotW / (numPoints - 1);
+
+  // 画网格
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  for (var y = 0; y <= 6; y++) {
+    var yy = PAD.top + plotH - (y / 6) * plotH;
+    ctx.beginPath();
+    ctx.moveTo(PAD.left, yy);
+    ctx.lineTo(W - PAD.right, yy);
+    ctx.stroke();
+    // 标签
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(Math.round(y * 100), PAD.left - 8, yy + 4);
+  }
+
+  // 画 X 轴时间标签 (每 2 小时 = 12 个区间)
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  for (var h = 0; h <= 24; h += 2) {
+    var xx = PAD.left + (h * 6 / 24) * plotW;
+    ctx.fillText(h + '时', xx, H - 8);
+  }
+
+  // 画折线
+  ctx.beginPath();
+  ctx.strokeStyle = '#58a6ff';
+  ctx.lineWidth = 2;
+  var first = true;
+  for (var i = 0; i < numPoints; i++) {
+    var x = PAD.left + (i / (numPoints - 1)) * plotW;
+    var val = Math.min(data[i] || 0, maxVal);
+    var y = PAD.top + plotH - (val / maxVal) * plotH;
+    if (first) {
+      ctx.moveTo(x, y);
+      first = false;
+    } else {
+      ctx.lineTo(x, y);
+    }
+  }
+  ctx.stroke();
+
+  // 填充面积
+  ctx.lineTo(W - PAD.right, PAD.top + plotH);
+  ctx.lineTo(PAD.left, PAD.top + plotH);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(88,166,255,0.1)';
+  ctx.fill();
+
+  // 标题
+  ctx.fillStyle = '#e6edf3';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'left';
+  var label = '通道 CH' + channelId + ' - ' + dateStr;
+  ctx.fillText(label, PAD.left, 16);
+
+  // Y 轴标签
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.save();
+  ctx.translate(14, PAD.top + plotH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('通话时长 (秒)', 0, 0);
+  ctx.restore();
+
+  // 最大值标注
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('max 600s', W - PAD.right - 60, PAD.top - 2);
 }
 
 // 启动轮询

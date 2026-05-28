@@ -9,6 +9,7 @@ import struct
 import sys
 import threading
 import time
+from datetime import datetime
 
 # 尝试从 online_auio 虚拟环境导入 pygame
 _VENV_PYGAME = "/home/share/online_auio/venv/lib/python3.8/site-packages"
@@ -185,6 +186,18 @@ class VoiceReceiver:
         # 最近 3 秒内各通道的活跃标记（用于 Active 判定）
         self._activity_window: dict[int, list[float]] = {}
 
+        # ── 通话时长统计 ──
+        # _duration_buckets[date_str][channel_id] = [0.0]*144  (10-min intervals)
+        self._duration_buckets: dict[str, dict[int, list[float]]] = {}
+        # 突发通话起始时间 (wall clock time.time)
+        self._burst_start: dict[int, float] = {}
+        # 上次收到数据的时间 (用于检测通话结束)
+        self._last_data_time: dict[int, float] = {}
+        self._silence_threshold = 3.0  # 3 秒无数据视为通话结束
+        self._today_date = datetime.now().strftime("%Y-%m-%d")
+        # 定期清理线程
+        self._duration_lock = threading.Lock()
+
     def start(self) -> None:
         if self._running:
             return
@@ -265,7 +278,14 @@ class VoiceReceiver:
             st.active = len(recent) > 0
             st.selected = (self._playing_channel == ch_id)
             result.append(st.to_dict())
+        self._flush_stale_bursts()
         return result
+
+    def get_channel_duration(self, date_str: str, channel_id: int) -> list[float]:
+        """返回指定日期指定通道的 144 个 10 分钟时段的通话秒数"""
+        with self._duration_lock:
+            day_data = self._duration_buckets.get(date_str, {})
+            return day_data.get(channel_id, [0.0] * 144)
 
     def get_playing_channel(self) -> Optional[int]:
         return self._playing_channel
@@ -343,10 +363,11 @@ class VoiceReceiver:
                 continue
 
             # 记录活跃时间
-            now = time.monotonic()
+            clock_now = time.time()
+            mono_now = time.monotonic()
             if channel not in self._activity_window:
                 self._activity_window[channel] = []
-            self._activity_window[channel].append(now)
+            self._activity_window[channel].append(mono_now)
             # 限制数量防内存泄漏
             if len(self._activity_window[channel]) > 500:
                 self._activity_window[channel] = self._activity_window[channel][-250:]
@@ -354,8 +375,11 @@ class VoiceReceiver:
             # 更新状态
             st = self._status.get(sector_code)
             if st:
-                st.last_activity = now
+                st.last_activity = mono_now
                 st.bytes_received += len(data)
+
+            # ── 通话时长统计 ──
+            self._track_duration(channel, clock_now)
 
             # 提取 ADPCM 数据 (跳过前 2 字节通道号, 去掉末尾 8 字节)
             adpcm_data = data[2 : len(data) - 8]
@@ -378,6 +402,63 @@ class VoiceReceiver:
                         self._play_pcm(pcm_data)
                 finally:
                     self._play_lock.release()
+
+    def _track_duration(self, channel: int, clock_now: float) -> None:
+        """追踪通话突发时长，计入对应 10 分钟 bucket"""
+        with self._duration_lock:
+            last_data = self._last_data_time.get(channel, 0.0)
+            self._last_data_time[channel] = clock_now
+
+            # 检查日期是否变化（跨天重置）
+            today = datetime.now().strftime("%Y-%m-%d")
+            if today != self._today_date:
+                self._today_date = today
+
+            # 确保今日 bucket 存在
+            date_key = today
+            if date_key not in self._duration_buckets:
+                new_day: dict[int, list[float]] = {}
+                for ch in SECTOR_CHANNELS.values():
+                    new_day[ch] = [0.0] * 144
+                self._duration_buckets[date_key] = new_day
+            day_buckets = self._duration_buckets[date_key]
+            if channel not in day_buckets:
+                day_buckets[channel] = [0.0] * 144
+
+            # 安静超过阈值 → 结束之前的突发
+            if last_data > 0 and (clock_now - last_data) > self._silence_threshold:
+                burst_start = self._burst_start.pop(channel, None)
+                if burst_start is not None:
+                    duration = last_data - burst_start  # 突发结束 = 最后一次数据时间
+                    if duration > 0.5:  # 只统计 >0.5 秒的有效通话
+                        # 计算突发开始时间所属的 10 分钟 slot
+                        dt = datetime.fromtimestamp(burst_start)
+                        slot = (dt.hour * 60 + dt.minute) // 10
+                        if 0 <= slot < 144:
+                            day_buckets[channel][slot] += duration
+
+            # 如果此通道没有活跃突发 → 开始一个新的
+            if channel not in self._burst_start:
+                self._burst_start[channel] = clock_now
+
+    def _flush_stale_bursts(self) -> None:
+        """清理超过静默阈值的突发通话（在 get_status 调用时执行）"""
+        now = time.time()
+        with self._duration_lock:
+            for channel in list(self._burst_start.keys()):
+                last_data = self._last_data_time.get(channel, 0.0)
+                if last_data > 0 and (now - last_data) > self._silence_threshold:
+                    burst_start = self._burst_start.pop(channel, None)
+                    if burst_start is not None:
+                        duration = last_data - burst_start
+                        if duration > 0.5:
+                            today = datetime.now().strftime("%Y-%m-%d")
+                            day_buckets = self._duration_buckets.get(today, {})
+                            if channel in day_buckets:
+                                dt = datetime.fromtimestamp(burst_start)
+                                slot = (dt.hour * 60 + dt.minute) // 10
+                                if 0 <= slot < 144:
+                                    day_buckets[channel][slot] += duration
 
     def _play_pcm(self, pcm_data: bytes) -> None:
         """通过 pygame 播放 PCM16 数据"""

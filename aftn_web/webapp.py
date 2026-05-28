@@ -647,6 +647,20 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             return jsonify({"error": "invalid channel"}), 400
         return jsonify({"ok": True, "channel": channel})
 
+    @app.route("/api/voice/duration")
+    def api_voice_duration():
+        """返回指定通道在指定日期的 144 个通话时长数据点"""
+        if voice_receiver is None:
+            return jsonify({"error": "voice not enabled"}), 400
+        date_str = request.args.get("date", datetime.utcnow().strftime("%Y-%m-%d"))
+        channel_str = request.args.get("channel", "38")
+        try:
+            channel_id = int(channel_str)
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid channel"}), 400
+        data = voice_receiver.get_channel_duration(date_str, channel_id)
+        return jsonify({"date": date_str, "channel": channel_id, "data": data})
+
     @app.route("/api/voice/stop", methods=["POST"])
     def api_voice_stop():
         """停止播放"""
