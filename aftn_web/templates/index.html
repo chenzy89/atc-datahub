@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.15</title>
+<title>ATC AFTN WebHub v2.0.16</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -315,12 +315,13 @@ canvas#radarMap {
   width: 0%;
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.15</span>
+  <span class="badge">v2.0.16</span>
 </div>
 
 <div class="tabs">
@@ -487,11 +488,11 @@ canvas#radarMap {
       <label><span>机场（勾选）</span>
         <div class="st-apt-group">
           <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGSZ" checked><span>ZGSZ 深圳</span></label>
-          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGSD" checked><span>ZGSD 珠海</span></label>
-          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="VMMC" checked><span>VMMC 澳门</span></label>
-          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGNT" checked><span>ZGNT 南头</span></label>
-          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGUH" checked><span>ZGUH 九洲</span></label>
-          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGHZ" checked><span>ZGHZ 惠州</span></label>
+          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGSD"><span>ZGSD 珠海</span></label>
+          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="VMMC"><span>VMMC 澳门</span></label>
+          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGNT"><span>ZGNT 南头</span></label>
+          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGUH"><span>ZGUH 九洲</span></label>
+          <label class="st-apt-tag"><input type="checkbox" class="st-airport" value="ZGHZ"><span>ZGHZ 惠州</span></label>
         </div>
       </label>
     </div>
@@ -501,6 +502,7 @@ canvas#radarMap {
     </div>
     <div class="search-actions">
       <button class="btn btn-primary" onclick="generateStats()">🔍 查询</button>
+      <button class="btn btn-secondary" onclick="exportStatsXlsx()" style="margin-left:8px;">📊 导出</button>
       <span id="st-info" class="text-muted" style="margin-left:8px;"></span>
     </div>
   </div>
@@ -527,7 +529,7 @@ canvas#radarMap {
 
           <h3 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">进港飞行程序 (STAR)</h3>
           <table style="width:100%;border-collapse:collapse;font-size:13px;">
-            <thead><tr style="background:#1c2333;"><th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">程序</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">总架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">平均飞行时长</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">时长占比</th></tr></thead>
+            <thead><tr style="background:#1c2333;"><th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">程序</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">平均飞行时长</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">时长占比</th></tr></thead>
             <tbody id="st-arr-proc-tbl"></tbody>
           </table>
         </div>
@@ -540,7 +542,7 @@ canvas#radarMap {
 
           <h3 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">出港飞行程序 (SID)</h3>
           <table style="width:100%;border-collapse:collapse;font-size:13px;">
-            <thead><tr style="background:#1c2333;"><th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">程序</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">总架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">平均飞行时长</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">时长占比</th></tr></thead>
+            <thead><tr style="background:#1c2333;"><th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">程序</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">平均飞行时长</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">时长占比</th></tr></thead>
             <tbody id="st-dep-proc-tbl"></tbody>
           </table>
         </div>
@@ -1042,6 +1044,8 @@ function generateStats() {
   document.getElementById('st-info').textContent = '查询中...';
   var url = '/api/statistics?airports=' + aps.join(',') + '&date_from=' + df + '&date_to=' + dt;
   fetch(url).then(function(r) { return r.json(); }).then(function(d) {
+    window._statsData = d;
+    window._statsParams = {airports: aps, df: df, dt: dt};
     renderStats(d, aps, df, dt);
     document.getElementById('st-info').textContent = '✅ 统计完成';
   }).catch(function(e) {
@@ -1141,7 +1145,7 @@ function renderStats(d, aps, df, dt) {
 
   function buildProcedureRows(procedures, totalCount, totalSeconds) {
     if (!procedures || procedures.length === 0) {
-      return '<tr><td colspan="5" style="padding:12px;text-align:center;color:var(--text-muted);">暂无数据</td></tr>';
+      return '<tr><td colspan="4" style="padding:12px;text-align:center;color:var(--text-muted);">暂无数据</td></tr>';
     }
     var rows = '';
     procedures.forEach(function(p) {
@@ -1150,7 +1154,6 @@ function renderStats(d, aps, df, dt) {
       var pct = totalCount > 0 ? (p.total_seconds / totalSeconds * 100).toFixed(1) + '%' : '-';
       rows += '<tr>' +
         '<td style="padding:6px 10px;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:500;">' + esc(p.name) + '</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + p.count + '</td>' +
         '<td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + dailyCount + '</td>' +
         '<td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + fmtDuration(avgSec) + '</td>' +
         '<td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + pct + '</td>' +
@@ -1165,6 +1168,90 @@ function renderStats(d, aps, df, dt) {
   document.getElementById('st-dep-tbl').innerHTML = buildHandoverRows(d.dep_handover, depTotal);
   document.getElementById('st-arr-proc-tbl').innerHTML = buildProcedureRows(d.arr_procedures, arrTotal, arrTermSec);
   document.getElementById('st-dep-proc-tbl').innerHTML = buildProcedureRows(d.dep_procedures, depTotal, depTermSec);
+}
+
+// ── 导出 xlsx ──
+function exportStatsXlsx() {
+  var d = window._statsData;
+  var p = window._statsParams;
+  if (!d || !p) { alert('请先查询统计结果'); return; }
+  if (typeof XLSX === 'undefined') { alert('缺少 SheetJS 库'); return; }
+
+  var wb = XLSX.utils.book_new();
+  var days = d.days || 1;
+  function fmtHms(sec) {
+    if (!sec || sec <= 0) return '0m';
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = sec % 60;
+    return (h > 0 ? h + 'h' + String(m).padStart(2,'0') : m + 'm') + String(s).padStart(2,'0') + 's';
+  }
+
+  // ── 概况 ──
+  var summary = [
+    ['指标', '值'],
+    ['日期范围', p.df + ' ~ ' + p.dt],
+    ['机场', p.airports.join(', ')],
+    ['统计天数', days],
+    ['日均出港', (d.dep_count / days).toFixed(0)],
+    ['日均进港', (d.arr_count / days).toFixed(0)],
+    ['出港总飞行时长', fmtHms(d.dep_terminal_seconds || 0)],
+    ['进港总飞行时长', fmtHms(d.arr_terminal_seconds || 0)],
+    ['高峰小时', d.peak_hour + '时(' + (d.peak_hour_dep + d.peak_hour_arr) + '架次)'],
+    ['高峰日', (d.peak_day || '').replace(/^\d{4}-(\d{2})-(\d{2})$/, '$1-$2') + ' ' + (d.peak_day_count || 0) + '架次'],
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), '概况');
+
+  // ── 进港移交点 ──
+  var arrHo = [['移交点', '总架次', '日均', '占比']];
+  var ah = d.arr_handover || {};
+  Object.keys(ah).sort(function(a,b){ return ah[b]-ah[a]; }).forEach(function(k) {
+    arrHo.push([k, ah[k], (ah[k]/days).toFixed(0), (ah[k]/d.arr_count*100).toFixed(1)+'%']);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(arrHo), '进港移交点');
+
+  // ── 出港移交点 ──
+  var depHo = [['移交点', '总架次', '日均', '占比']];
+  var dh = d.dep_handover || {};
+  Object.keys(dh).sort(function(a,b){ return dh[b]-dh[a]; }).forEach(function(k) {
+    depHo.push([k, dh[k], (dh[k]/days).toFixed(0), (dh[k]/d.dep_count*100).toFixed(1)+'%']);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(depHo), '出港移交点');
+
+  // ── STAR 进港程序 ──
+  var arrTermSec = d.arr_terminal_seconds || 0;
+  var arrProc = [['程序', '日均架次', '平均飞行时长', '时长占比']];
+  (d.arr_procedures || []).forEach(function(p2) {
+    var avgSec = Math.round(p2.total_seconds / p2.count);
+    var pct = arrTermSec > 0 ? (p2.total_seconds / arrTermSec * 100).toFixed(1) + '%' : '-';
+    arrProc.push([p2.name, (p2.count/days).toFixed(1), fmtHms(avgSec), pct]);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(arrProc), '进港程序STAR');
+
+  // ── SID 出港程序 ──
+  var depTermSec = d.dep_terminal_seconds || 0;
+  var depProc = [['程序', '日均架次', '平均飞行时长', '时长占比']];
+  (d.dep_procedures || []).forEach(function(p2) {
+    var avgSec = Math.round(p2.total_seconds / p2.count);
+    var pct = depTermSec > 0 ? (p2.total_seconds / depTermSec * 100).toFixed(1) + '%' : '-';
+    depProc.push([p2.name, (p2.count/days).toFixed(1), fmtHms(avgSec), pct]);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(depProc), '出港程序SID');
+
+  // ── 24h 流量 ──
+  var depH = (d.dep_hourly || []).map(function(v){ return Math.round(v / days); });
+  var arrH = (d.arr_hourly || []).map(function(v){ return Math.round(v / days); });
+  var hourly = [['小时']].concat(depH.map(function(_,i){ return ['类型'].concat(depH.map(function(_,j){ return ''; })); }));
+  var hdr = ['小时'];
+  for (var h = 0; h < 24; h++) hdr.push(h + '时');
+  hdr = hdr.concat('日均');
+  var hData = [hdr];
+  hData.push(['进港'].concat(arrH).concat([(d.arr_count/days).toFixed(0)]));
+  hData.push(['出港'].concat(depH).concat([(d.dep_count/days).toFixed(0)]));
+  hData.push(['合计'].concat(arrH.map(function(v,i){ return v + depH[i]; })).concat([((d.arr_count+d.dep_count)/days).toFixed(0)]));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hData), '小时流量');
+
+  XLSX.writeFile(wb, '统计_' + p.df + '_' + p.dt + '.xlsx');
 }
 
 // 初始化日期选择
