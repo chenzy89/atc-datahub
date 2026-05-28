@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.19</title>
+<title>ATC AFTN WebHub v2.0.20</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.0.19</span>
+  <span class="badge">v2.0.20</span>
 </div>
 
 <div class="tabs">
@@ -664,145 +664,6 @@ canvas#radarMap {
 .voice-select { background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:6px; padding:8px 12px; font-size:14px; min-width:180px; }
 .voice-status-row { margin-top:10px; font-size:13px; }
 </style>
-
-<script>
-// ═══════════════════════════════════════════════════════
-// 语音数据 Tab
-// ═══════════════════════════════════════════════════════
-
-var voicePollTimer = null;
-
-function voiceInit() {
-  voicePollStatus();
-  if (voicePollTimer) clearInterval(voicePollTimer);
-  voicePollTimer = setInterval(voicePollStatus, 2000);
-}
-
-function voicePollStatus() {
-  fetch('/api/voice/status')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (!data.enabled) {
-        document.getElementById('voiceChannels').innerHTML =
-          '<div style="padding:40px;text-align:center;color:var(--text-muted);grid-column:1/-1;">语音数据接收未启用</div>';
-        document.getElementById('voiceRecvStatus').textContent = '● 未启用';
-        document.getElementById('voiceRecvStatus').style.color = 'var(--accent-red)';
-        return;
-      }
-      document.getElementById('voiceRecvStatus').textContent = '● 接收中';
-      document.getElementById('voiceRecvStatus').style.color = 'var(--accent-green)';
-      voiceRenderChannels(data.channels);
-      voiceUpdateSelect(data.channels, data.playing);
-      voiceUpdatePlayStatus(data.playing);
-    })
-    .catch(function() {
-      var el = document.getElementById('voiceRecvStatus');
-      if (el) { el.textContent = '× 连接错误'; el.style.color = 'var(--accent-red)'; }
-    });
-}
-
-function voiceRenderChannels(channels) {
-  var container = document.getElementById('voiceChannels');
-  if (!container || !channels || !channels.length) return;
-  var order = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
-  var sorted = order.map(function(code) { return channels.find(function(c) { return c.sector_code === code; }); }).filter(Boolean);
-
-  var html = '';
-  for (var i = 0; i < sorted.length; i++) {
-    var c = sorted[i];
-    var dotClass = c.active ? 'active' : 'inactive';
-    var selClass = c.selected ? 'selected' : '';
-    var bytesStr = c.bytes_received > 1024
-      ? (c.bytes_received / 1024).toFixed(1) + ' KB'
-      : c.bytes_received + ' B';
-    html += '<div class="voice-channel-card ' + selClass + '" onclick="voiceSelectFromCard(' + c.channel_id + ')">'
-      + '<div class="vc-top">'
-      + '  <div><div class="vc-name">' + c.sector_code + '</div>'
-      + '    <div class="vc-sector">' + c.sector_name + '</div>'
-      + '  </div>'
-      + '  <div class="vc-dot ' + dotClass + '" id="vdot-' + c.channel_id + '"></div>'
-      + '</div>'
-      + '<div class="vc-freq">' + c.frequency + ' MHz</div>'
-      + '<div class="vc-ch">内话通道 #' + c.channel_id + '</div>'
-      + '<div class="vc-stats">已接收 ' + bytesStr + '</div>'
-      + '</div>';
-  }
-  container.innerHTML = html;
-}
-
-function voiceUpdateSelect(channels, playing) {
-  var sel = document.getElementById('voiceChannelSelect');
-  if (!sel || !channels) return;
-  sel.innerHTML = '<option value="-1">— 选择通道 —</option>';
-  var order = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
-  var sorted = order.map(function(code) { return channels.find(function(c) { return c.sector_code === code; }); }).filter(Boolean);
-  for (var i = 0; i < sorted.length; i++) {
-    var c = sorted[i];
-    var opt = document.createElement('option');
-    opt.value = c.channel_id;
-    opt.textContent = c.sector_code + ' (' + c.sector_name + ') CH' + c.channel_id + ' ' + c.frequency + 'MHz';
-    if (c.channel_id === playing) opt.selected = true;
-    sel.appendChild(opt);
-  }
-}
-
-function voiceUpdatePlayStatus(playing) {
-  var el = document.getElementById('voicePlayStatus');
-  if (!el) return;
-  if (playing && playing > 0) {
-    var info = '';
-    for (var code in {'ZGJDTM01':1,'ZGJDTM02':1,'ZGJDTM03':1,'ZGJDTM04':1,'ZGJDTM05':1,'ZGJDTM06':1,'ZGJDTM07':1}) {
-      if ({'38':'ZGJDTM01','42':'ZGJDTM02','50':'ZGJDTM03','264':'ZGJDTM04','46':'ZGJDTM05','32':'ZGJDTM06','54':'ZGJDTM07'}[playing] === code) {
-        info = code + ' (CH' + playing + ')';
-        break;
-      }
-    }
-    el.textContent = '▶ 正在播放: ' + info;
-    el.style.color = 'var(--accent-green)';
-  } else {
-    el.textContent = '未播放';
-    el.style.color = 'var(--text-muted)';
-  }
-}
-
-function voiceSelectFromCard(channelId) {
-  document.getElementById('voiceChannelSelect').value = channelId;
-  voiceStartPlay();
-}
-
-function voiceStartPlay() {
-  var sel = document.getElementById('voiceChannelSelect');
-  var ch = parseInt(sel.value) || -1;
-  if (ch < 0) return;
-  fetch('/api/voice/select', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({channel: ch}),
-  }).catch(function(){});
-  voicePollStatus();
-}
-
-function voiceStopPlay() {
-  fetch('/api/voice/stop', {method:'POST'}).catch(function(){});
-  document.getElementById('voiceChannelSelect').value = '-1';
-  voicePollStatus();
-}
-
-// 当切换到 voice tab 时重新初始化
-var _origSwitchTab = switchTab;
-switchTab = function(n) {
-  _origSwitchTab(n);
-  if (n === 'voice') {
-    if (voicePollTimer) clearInterval(voicePollTimer);
-    voicePollTimer = setInterval(voicePollStatus, 2000);
-    voicePollStatus();
-  } else {
-    if (voicePollTimer) { clearInterval(voicePollTimer); voicePollTimer = null; }
-  }
-};
-
-voiceInit();
-</script>
 
 <!-- ── AFTN 报文详情弹窗 ── -->
 <div id="modal-msg" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:transparent;z-index:1100;align-items:center;justify-content:center;" onclick="if(event.target===this)closeMsg()">
@@ -3171,6 +3032,143 @@ function esc(s) {
 
   updateUI();
 })();
+
+// ═══════════════════════════════════════════════════════
+// 语音数据 — 轮询 & 播放控制
+// ═══════════════════════════════════════════════════════
+
+var voicePollTimer = null;
+
+function voiceInit() {
+  voicePollStatus();
+  if (voicePollTimer) clearInterval(voicePollTimer);
+  voicePollTimer = setInterval(voicePollStatus, 2000);
+}
+
+function voicePollStatus() {
+  fetch('/api/voice/status')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.enabled) {
+        document.getElementById('voiceChannels').innerHTML =
+          '<div style="padding:40px;text-align:center;color:var(--text-muted);grid-column:1/-1;">语音数据接收未启用</div>';
+        document.getElementById('voiceRecvStatus').textContent = '● 未启用';
+        document.getElementById('voiceRecvStatus').style.color = 'var(--accent-red)';
+        return;
+      }
+      document.getElementById('voiceRecvStatus').textContent = '● 接收中';
+      document.getElementById('voiceRecvStatus').style.color = 'var(--accent-green)';
+      voiceRenderChannels(data.channels);
+      voiceUpdateSelect(data.channels, data.playing);
+      voiceUpdatePlayStatus(data.playing);
+    })
+    .catch(function() {
+      var el = document.getElementById('voiceRecvStatus');
+      if (el) { el.textContent = '× 连接错误'; el.style.color = 'var(--accent-red)'; }
+    });
+}
+
+function voiceRenderChannels(channels) {
+  var container = document.getElementById('voiceChannels');
+  if (!container || !channels || !channels.length) return;
+  var order = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
+  var sorted = [];
+  for (var oi = 0; oi < order.length; oi++) {
+    for (var ci = 0; ci < channels.length; ci++) {
+      if (channels[ci].sector_code === order[oi]) {
+        sorted.push(channels[ci]);
+        break;
+      }
+    }
+  }
+  var html = '';
+  for (var i = 0; i < sorted.length; i++) {
+    var c = sorted[i];
+    var dotClass = c.active ? 'active' : 'inactive';
+    var selClass = c.selected ? 'selected' : '';
+    var bytesStr = c.bytes_received > 1024
+      ? (c.bytes_received / 1024).toFixed(1) + ' KB'
+      : c.bytes_received + ' B';
+    html += '<div class="voice-channel-card ' + selClass + '" onclick="voiceSelectFromCard(' + c.channel_id + ')">'
+      + '<div class="vc-top">'
+      + '  <div><div class="vc-name">' + c.sector_code + '</div>'
+      + '    <div class="vc-sector">' + c.sector_name + '</div>'
+      + '  </div>'
+      + '  <div class="vc-dot ' + dotClass + '"></div>'
+      + '</div>'
+      + '<div class="vc-freq">' + c.frequency + ' MHz</div>'
+      + '<div class="vc-ch">内话通道 #' + c.channel_id + '</div>'
+      + '<div class="vc-stats">已接收 ' + bytesStr + '</div>'
+      + '</div>';
+  }
+  container.innerHTML = html;
+}
+
+function voiceUpdateSelect(channels, playing) {
+  var sel = document.getElementById('voiceChannelSelect');
+  if (!sel || !channels) return;
+  sel.innerHTML = '<option value="-1">— 选择通道 —</option>';
+  var order = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
+  var sorted = [];
+  for (var oi = 0; oi < order.length; oi++) {
+    for (var ci = 0; ci < channels.length; ci++) {
+      if (channels[ci].sector_code === order[oi]) {
+        sorted.push(channels[ci]);
+        break;
+      }
+    }
+  }
+  for (var i = 0; i < sorted.length; i++) {
+    var c = sorted[i];
+    var opt = document.createElement('option');
+    opt.value = c.channel_id;
+    opt.textContent = c.sector_code + ' (' + c.sector_name + ') CH' + c.channel_id + ' ' + c.frequency + 'MHz';
+    if (c.channel_id === playing) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+function voiceUpdatePlayStatus(playing) {
+  var el = document.getElementById('voicePlayStatus');
+  if (!el) return;
+  if (playing && playing > 0) {
+    var chMap = {'38':'ZGJDTM01','42':'ZGJDTM02','50':'ZGJDTM03','264':'ZGJDTM04','46':'ZGJDTM05','32':'ZGJDTM06','54':'ZGJDTM07'};
+    var code = chMap[playing] || 'CH' + playing;
+    el.textContent = '▶ 正在播放: ' + code;
+    el.style.color = 'var(--accent-green)';
+  } else {
+    el.textContent = '未播放';
+    el.style.color = 'var(--text-muted)';
+  }
+}
+
+function voiceSelectFromCard(channelId) {
+  var sel = document.getElementById('voiceChannelSelect');
+  if (sel) sel.value = channelId;
+  voiceStartPlay();
+}
+
+function voiceStartPlay() {
+  var sel = document.getElementById('voiceChannelSelect');
+  if (!sel) return;
+  var ch = parseInt(sel.value) || -1;
+  if (ch < 0) return;
+  fetch('/api/voice/select', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({channel: ch}),
+  }).catch(function(){}).then(function() { voicePollStatus(); });
+}
+
+function voiceStopPlay() {
+  fetch('/api/voice/stop', {method:'POST'}).catch(function(){});
+  var sel = document.getElementById('voiceChannelSelect');
+  if (sel) sel.value = '-1';
+  voicePollStatus();
+}
+
+// 启动轮询
+voiceInit();
 
 </script>
 </body>
