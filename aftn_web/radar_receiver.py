@@ -67,6 +67,7 @@ def parse_datagram(payload: bytes) -> list[dict[str, Any]]:
             "heading": t.heading_deg,
             "flight_level": t.flight_level_m,
             "speed": t.speed_kmh,
+            "sector_index": t.sector_index,
         })
 
     return records

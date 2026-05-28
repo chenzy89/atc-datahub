@@ -196,6 +196,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         if not airports or not date_from or not date_to:
             return jsonify({"error": "机场和日期范围必填"}), 400
         result = db.query_traffic_statistics(airports, date_from, date_to)
+        result["sector_traffic"] = db.query_sector_traffic(date_from, date_to)
         return jsonify(result)
 
     @app.route("/api/statistics/export", methods=["POST"])
@@ -273,6 +274,25 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         hourly.append(["出港"] + dep_h + [round(d.get("dep_count", 0) / days, 0)])
         hourly.append(["合计"] + [arr_h[i] + dep_h[i] for i in range(24)] + [round((d.get("arr_count", 0) + d.get("dep_count", 0)) / days, 0)])
         sheets.append({"name": "小时流量", "rows": hourly})
+
+        # 扇区流量
+        st = d.get("sector_traffic", {})
+        terminal_names = {
+            "ZGJDTM01": "TM01 HN", "ZGJDTM02": "TM02 HE",
+            "ZGJDTM03": "TM03 ARW", "ZGJDTM04": "TM04 AS",
+            "ZGJDTM05": "TM05 AD", "ZGJDTM06": "TM06 ASL",
+            "ZGJDTM07": "TM07 ARE/AA",
+        }
+        order = [f"ZGJDTM{i:02d}" for i in range(1, 8)]
+        sec_hdr = ["扇区"] + [f"{h}时" for h in range(24)] + ["总计"]
+        sector_rows = [sec_hdr]
+        for code in order:
+            data = st.get(code, [0]*24)
+            daily = [round(v / days, 1) for v in data]
+            total = round(sum(data) / days, 1)
+            label = terminal_names.get(code, code)
+            sector_rows.append([label] + daily + [total])
+        sheets.append({"name": "扇区流量", "rows": sector_rows})
 
         xlsx_buf = make_xlsx(sheets)
         return send_file(

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.17</title>
+<title>ATC AFTN WebHub v2.0.18</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.17</span>
+  <span class="badge">v2.0.18</span>
 </div>
 
 <div class="tabs">
@@ -515,6 +515,14 @@ canvas#radarMap {
         <table id="st-hourly-tbl" style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px;">
           <thead><tr id="st-hourly-head"></tr></thead>
           <tbody id="st-hourly-body"></tbody>
+        </table>
+      </div>
+
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow-x:auto;margin-bottom:16px;">
+        <h3 style="font-size:14px;font-weight:600;margin:12px 12px 8px;color:var(--text-primary);">🛰 终端扇区24小时流量分布（架次）</h3>
+        <table id="st-sector-tbl" style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px;">
+          <thead><tr id="st-sector-head"></tr></thead>
+          <tbody id="st-sector-body"></tbody>
         </table>
       </div>
 
@@ -1124,6 +1132,9 @@ function renderStats(d, aps, df, dt) {
     hourlyRow('出港', depH, false) +
     hourlyRow('进出港', totalH, true);
 
+  // ── 终端扇区流量表 ──
+  renderSectorTraffic(d.sector_traffic, days);
+
   function buildHandoverRows(handoverDict, totalCount) {
     var entries = Object.entries(handoverDict || {}).sort(function(a,b){ return b[1]-a[1]; });
     var rows = '';
@@ -1167,6 +1178,53 @@ function renderStats(d, aps, df, dt) {
   document.getElementById('st-dep-tbl').innerHTML = buildHandoverRows(d.dep_handover, depTotal);
   document.getElementById('st-arr-proc-tbl').innerHTML = buildProcedureRows(d.arr_procedures, arrTotal, arrTermSec);
   document.getElementById('st-dep-proc-tbl').innerHTML = buildProcedureRows(d.dep_procedures, depTotal, depTermSec);
+}
+
+// ── 终端扇区流量表渲染 ──
+function renderSectorTraffic(sectorData, days) {
+  var terminalNames = {
+    'ZGJDTM01': 'TM01 HN',
+    'ZGJDTM02': 'TM02 HE',
+    'ZGJDTM03': 'TM03 ARW',
+    'ZGJDTM04': 'TM04 AS',
+    'ZGJDTM05': 'TM05 AD',
+    'ZGJDTM06': 'TM06 ASL',
+    'ZGJDTM07': 'TM07 ARE/AA',
+  };
+  var sectorOrder = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
+
+  var head = '<tr><th style="padding:6px 8px;background:#1c2333;color:var(--text-secondary);border-bottom:2px solid var(--border);font-weight:600;position:sticky;left:0;background:#1c2333;z-index:1;">扇区</th>';
+  for (var h = 0; h < 24; h++) {
+    head += '<th style="padding:6px 4px;text-align:center;border-bottom:2px solid var(--border);">' + h + '时</th>';
+  }
+  head += '<th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--border);background:#1c2333;color:var(--text-secondary);">总架次</th></tr>';
+  document.getElementById('st-sector-head').innerHTML = head;
+
+  var bodyEl = document.getElementById('st-sector-body');
+  bodyEl.innerHTML = '';
+  var found = false;
+
+  sectorOrder.forEach(function(code) {
+    var data = (sectorData || {})[code];
+    if (!data) {
+      data = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    }
+    var total = 0;
+    var cells = '';
+    for (var h = 0; h < 24; h++) {
+      total += (data[h] || 0);
+      var v = (data[h] / days).toFixed(1);
+      cells += '<td style="padding:5px 4px;text-align:center;border-bottom:1px solid var(--border);color:var(--text-secondary);">' + v + '</td>';
+    }
+    if (total > 0) { found = true; }
+    var label = terminalNames[code] || code;
+    var row = '<tr><td style="padding:5px 8px;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:500;position:sticky;left:0;z-index:1;">' + label + '</td>' + cells + '<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:600;">' + (total / days).toFixed(1) + '</td></tr>';
+    bodyEl.innerHTML += row;
+  });
+
+  if (!found) {
+    bodyEl.innerHTML = '<tr><td colspan="26" style="padding:16px;text-align:center;color:var(--text-muted);">暂无扇区数据（雷达数据累积中）</td></tr>';
+  }
 }
 
 // ── 导出 xlsx ──

@@ -41,6 +41,20 @@ class Database:
     def _init_db(self) -> None:
         conn = self._get_conn()
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS sector_flights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                callsign TEXT NOT NULL,
+                dof TEXT NOT NULL,
+                terminal_code TEXT NOT NULL,
+                hour INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_sector_flight_key
+                ON sector_flights(callsign, dof, terminal_code);
+            CREATE INDEX IF NOT EXISTS idx_sector_flight_stats
+                ON sector_flights(dof, terminal_code);
+
             CREATE TABLE IF NOT EXISTS aftn_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 raw_text TEXT NOT NULL DEFAULT '',
@@ -857,6 +871,54 @@ class Database:
         )
         conn.commit()
         return cur.rowcount > 0
+
+    # ── 扇区统计 ────────────────────────────────────────────────
+
+    def record_sector_flight(self, callsign: str, dof: str,
+                               terminal_code: str, hour: int) -> bool:
+        """记录航班首次出现在某扇区的记录（去重：每个callsign+dof+terminal_code只计一次）
+        返回 True 表示新插入，False 表示已存在或失败。"""
+        now = _fmt_dt(datetime.utcnow())
+        for retry in range(5):
+            try:
+                conn = self._get_conn()
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO sector_flights "
+                    "(callsign, dof, terminal_code, hour, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (callsign.upper(), dof, terminal_code, hour, now),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and retry < 4:
+                    time.sleep(0.1)
+                    continue
+                return False
+        return False
+
+    def query_sector_traffic(self, date_from: str, date_to: str) -> dict[str, list]:
+        """查询指定日期范围内各扇区各小时的飞行架次
+        返回 {终端代码: [24元数组]} 结构
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            """SELECT terminal_code, hour, COUNT(*) as cnt
+                FROM sector_flights
+                WHERE dof >= ? AND dof <= ?
+                  AND terminal_code LIKE 'ZGJDTM%'
+                GROUP BY terminal_code, hour
+                ORDER BY terminal_code, hour""",
+            (date_from, date_to),
+        ).fetchall()
+
+        result: dict[str, list[int]] = {}
+        for r in rows:
+            tc = r["terminal_code"]
+            if tc not in result:
+                result[tc] = [0] * 24
+            result[tc][r["hour"]] = r["cnt"]
+        return result
 
     def delete_by_key(self, callsign: str, adep: str, adest: str) -> bool:
         """按 callsign+adep+adest 删除飞行计划（用于 CNL 取消报）"""

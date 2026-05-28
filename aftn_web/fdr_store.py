@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
+from pathlib import Path
+
 from .terminal_area import is_in_terminal, load_terminal_config
 
 logger = logging.getLogger("aftn_web.fdr")
@@ -84,6 +86,10 @@ class FDRRecord:
     _last_terminal_check_time: float = 0.0  # 上次终端检查的 monotonic 时间
     _landed: bool = False  # 是否已落地（高度低于终端区下限），落地后停止终端检测
 
+    # ── 扇区跟踪 ──
+    sector_index: int = 0
+    _sector_recorded: set[str] = field(default_factory=set)  # 已记录的扇区代码
+
     @property
     def is_associated(self) -> bool:
         """是否已相关：有起降地信息才可能与飞行计划匹配"""
@@ -139,11 +145,50 @@ class FDRStore:
     内存 FDR 列表，线程安全
     以 callsign 为键 (无呼号时用 SSR)
     """
+    # ── 扇区映射（CAT062序号 → 扇区名 → 终端代码） ──
+    _SECTOR_MAP: list[tuple[str, str]] = []  # [(扇区名, 终端代码), ...]，索引0对应CAT062序号1
+    _SECTOR_BY_CODE: dict[str, str] = {}     # {终端代码: 扇区名}
+    _INTERESTED_TERMINALS: set[str] = set()
+
+    @classmethod
+    def load_sector_map(cls, path: str | Path = "/home/share/atc_aftn_web/config/SectorInfo.txt") -> None:
+        """从 SectorInfo.txt 加载扇区映射"""
+        cls._SECTOR_MAP.clear()
+        cls._SECTOR_BY_CODE.clear()
+        cls._INTERESTED_TERMINALS.clear()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("//"):
+                        continue
+                    # 格式：CAT062序号\t扇区名\t终端代码
+                    parts = line.split("\t")
+                    if len(parts) >= 3:
+                        idx_str, sector_name, terminal = parts[0], parts[1], parts[2]
+                        terminal = terminal.strip()
+                        if terminal.upper() == "NULL":
+                            cls._SECTOR_MAP.append((sector_name.strip(), ""))
+                        else:
+                            term = terminal.upper()
+                            cls._SECTOR_MAP.append((sector_name.strip(), term))
+                            cls._SECTOR_BY_CODE[term] = sector_name.strip()
+            # 统计需关注的对空终端
+            cls._INTERESTED_TERMINALS = {t for t in cls._SECTOR_BY_CODE
+                                         if t.startswith("ZGJDTM")}
+            logger.info("扇区映射已加载: %d 个扇区, %d 个对空终端",
+                        len(cls._SECTOR_MAP), len(cls._INTERESTED_TERMINALS))
+        except Exception as exc:
+            logger.warning("SectorInfo.txt 加载失败: %s", exc)
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._records: dict[str, FDRRecord] = {}
         self._last_process = 0.0
         self._last_cleanup = 0.0
+        # 待写入 DB 的扇区记录（callsign+dof+sector_code → hour）
+        self._pending_sectors: dict[tuple[str, str, str], int] = {}
+        self.load_sector_map()
 
     # ── 公开接口 ──────────────────────────────────────────
 
@@ -206,6 +251,11 @@ class FDRStore:
             if adest := parsed.get("adest", "").strip():
                 rec.adest = adest.upper()
 
+            # ── 扇区跟踪 ────────────────────────────────
+            sector_idx = parsed.get("sector_index", 0)
+            if sector_idx and rec.callsign and received_at:
+                self._track_sector(rec, sector_idx, received_at)
+
             # ── 终端区进出检测 ──────────────────────────
             # 有有效位置且高度 > 0 时才检查
             if lat and lon and new_fl > 0:
@@ -236,6 +286,9 @@ class FDRStore:
         radar_updated = 0
         terminal_updated = 0
         error_count = 0
+
+        # 4. 扇区记录批量刷入 DB
+        sector_flushed = self._flush_sector_records(db)
 
         for rec in candidates:
             try:
@@ -274,6 +327,8 @@ class FDRStore:
             logger.info("[FDR] 更新 %d 条跑道/程序", radar_updated)
         if terminal_updated:
             logger.info("[FDR] 更新 %d 条终端区数据", terminal_updated)
+        if sector_flushed > 0:
+            logger.debug("[SECTOR] 刷入 %d 条扇区记录", sector_flushed)
         if error_count > 10:
             logger.info("[FDR] 累计 %d 次更新失败，等待下个周期重试", error_count)
 
@@ -305,6 +360,47 @@ class FDRStore:
                     "in_terminal": rec.in_terminal,
                 })
             return tracks
+
+    # ── 扇区跟踪方法 ─────────────────────────────────────
+
+    def _track_sector(self, rec: FDRRecord, sector_idx: int,
+                       received_at: datetime) -> None:
+        """跟踪航班首次进入扇区的时间，跨时段只在首时段计数
+        注意：调用方已持有 self._lock"""
+        if sector_idx < 1 or sector_idx > len(self._SECTOR_MAP):
+            return
+        _, terminal = self._SECTOR_MAP[sector_idx - 1]
+        if not terminal or terminal not in self._INTERESTED_TERMINALS:
+            return
+
+        # 已为此航班记录过此扇区，跳过
+        if terminal in rec._sector_recorded:
+            return
+
+        dof = received_at.strftime("%Y-%m-%d")
+        hour = received_at.hour
+        key = (rec.callsign, dof, terminal)
+
+        if key not in self._pending_sectors:
+            self._pending_sectors[key] = hour
+        rec._sector_recorded.add(terminal)
+
+    def _flush_sector_records(self, db: Any) -> int:
+        with self._lock:
+            pending = dict(self._pending_sectors)
+            self._pending_sectors.clear()
+
+        if not pending:
+            return 0
+
+        flushed = 0
+        for (callsign, dof, terminal_code), hour in pending.items():
+            try:
+                if db.record_sector_flight(callsign, dof, terminal_code, hour):
+                    flushed += 1
+            except Exception:
+                logger.debug("[SECTOR] 写入失败 %s/%s/%s", callsign, dof, terminal_code)
+        return flushed
 
     def get_stats(self) -> dict[str, Any]:
         """返回当前 FDR 列表统计"""
