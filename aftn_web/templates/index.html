@@ -519,7 +519,7 @@ canvas#radarMap {
       </div>
 
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow-x:auto;margin-bottom:16px;">
-        <h3 style="font-size:14px;font-weight:600;margin:12px 12px 8px;color:var(--text-primary);">🛰 终端扇区24小时流量分布（架次）</h3>
+        <h3 style="font-size:14px;font-weight:600;margin:12px 12px 8px;color:var(--text-primary);">扇区24小时流量分布（架次）</h3>
         <table id="st-sector-tbl" style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px;">
           <thead><tr id="st-sector-head"></tr></thead>
           <tbody id="st-sector-body"></tbody>
@@ -1213,12 +1213,12 @@ function renderSectorTraffic(sectorData, days) {
     var cells = '';
     for (var h = 0; h < 24; h++) {
       total += (data[h] || 0);
-      var v = (data[h] / days).toFixed(1);
+      var v = Math.round(data[h] / days);
       cells += '<td style="padding:5px 4px;text-align:center;border-bottom:1px solid var(--border);color:var(--text-secondary);">' + v + '</td>';
     }
     if (total > 0) { found = true; }
     var label = terminalNames[code] || code;
-    var row = '<tr><td style="padding:5px 8px;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:500;position:sticky;left:0;z-index:1;">' + label + '</td>' + cells + '<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:600;">' + (total / days).toFixed(1) + '</td></tr>';
+    var row = '<tr><td style="padding:5px 8px;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:500;position:sticky;left:0;z-index:1;">' + label + '</td>' + cells + '<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:600;">' + Math.round(total / days) + '</td></tr>';
     bodyEl.innerHTML += row;
   });
 
