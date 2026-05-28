@@ -163,16 +163,19 @@ class Database:
 
         # ── 回填：从 sector_flights 填充 sector_traffic_10min ──
         try:
-            today = datetime.utcnow().strftime("%Y-%m-%d")
+            import datetime as _dt
+            bj_now = _dt.datetime.utcnow() + _dt.timedelta(hours=8)
+            today_bj = bj_now.strftime("%Y-%m-%d")
+            # created_at 是 UTC，转为北京时 (+8h) 再算 slot
             conn.executescript(
                 "INSERT OR IGNORE INTO sector_traffic_10min (date, terminal_code, slot, count) "
-                "SELECT sf.dof, sf.terminal_code, "
-                "  (CAST(strftime('%H', sf.created_at) AS INTEGER) * 60 + "
+                "SELECT '" + today_bj + "', sf.terminal_code, "
+                "  ((CAST(strftime('%H', sf.created_at) AS INTEGER) + 8) % 24 * 60 + "
                 "   CAST(strftime('%M', sf.created_at) AS INTEGER)) / 10 AS slot, "
                 "  COUNT(*) "
                 "FROM sector_flights sf "
-                "WHERE sf.dof = '" + today + "' "
-                "GROUP BY sf.dof, sf.terminal_code, slot"
+                "WHERE sf.dof = '" + today_bj + "' "
+                "GROUP BY sf.terminal_code, slot"
             )
             conn.commit()
         except Exception:

@@ -377,9 +377,12 @@ class FDRStore:
         if terminal in rec._sector_recorded:
             return
 
-        dof = received_at.strftime("%Y-%m-%d")
-        hour = received_at.hour
-        slot = (received_at.hour * 60 + received_at.minute) // 10
+        # received_at 为 UTC，折线图横轴为北京时，统一转为 UTC+8
+        from datetime import timedelta
+        bj = received_at + timedelta(hours=8)
+        dof = bj.strftime("%Y-%m-%d")
+        hour = bj.hour
+        slot = (bj.hour * 60 + bj.minute) // 10
         key = (rec.callsign, dof, terminal)
 
         if key not in self._pending_sectors:
