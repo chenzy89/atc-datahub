@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.1</title>
+<title>ATC AFTN WebHub v2.1.2</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.1</span>
+  <span class="badge">v2.1.2</span>
 </div>
 
 <div class="tabs">
@@ -3138,12 +3138,14 @@ function voiceSyncChartSelect(channels) {
   }
 }
 
+function _zp(n) { return n < 10 ? '0' + n : '' + n; }
+
 function voiceSelectFromCard(channelId) {
   // 设置日期为今天、通道选择器
   var dateInput = document.getElementById('voiceChartDate');
   if (dateInput && !dateInput.value) {
     var d = new Date();
-    dateInput.value = d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate());
+    dateInput.value = d.getFullYear() + '-' + _zp(d.getMonth()+1) + '-' + _zp(d.getDate());
   }
   var sel = document.getElementById('voiceChartChannel');
   if (sel) sel.value = channelId;
