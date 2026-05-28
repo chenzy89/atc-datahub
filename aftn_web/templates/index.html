@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.11</title>
+<title>ATC AFTN WebHub v2.0.12</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.11</span>
+  <span class="badge">v2.0.12</span>
 </div>
 
 <div class="tabs">
@@ -548,12 +548,12 @@ canvas#radarMap {
       <div class="rl-text">正在加载历史数据...</div>
       <div class="rl-bar-bg"><div class="rl-bar-fill" id="rlBarFill"></div></div>
     </div>
-    <div class="map-time-label" id="mapTimeLabel">--:--:--</div>
+    <div class="map-time-label" id="mapTimeLabel">--:--:-- UTC</div>
     <div class="coord-bar" id="coordBar"></div>
   </div>
   <div class="playback-bar" id="playbackBar">
     <div class="playback-row">
-      <span class="label">回放时间</span>
+      <span class="label">回放时间 (UTC)</span>
       <input type="date" class="pb-date-sel" id="pbDate">
       <select class="pb-time-sel" id="pbHour"></select>
       <span style="color:#8b949e;font-size:14px;">:</span>
@@ -2438,8 +2438,8 @@ function esc(s) {
     var el = document.getElementById('mapTimeLabel');
     if (!el) return;
     var now = new Date();
-    el.textContent = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate())
-      + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+    el.textContent = now.getUTCFullYear() + '-' + pad(now.getUTCMonth()+1) + '-' + pad(now.getUTCDate())
+      + ' ' + pad(now.getUTCHours()) + ':' + pad(now.getUTCMinutes()) + ':' + pad(now.getUTCSeconds()) + ' UTC';
   }
   updateTimeLabel();
   setInterval(updateTimeLabel, 1000);
@@ -2498,9 +2498,9 @@ function esc(s) {
     }
     // 默认选当前时间（整秒）
     var now = new Date();
-    el.date.value = now.getFullYear() + '-' + pad2(now.getMonth()+1) + '-' + pad2(now.getDate());
-    el.hour.value = pad2(now.getHours());
-    el.min.value = pad2(now.getMinutes());
+    el.date.value = now.getUTCFullYear() + '-' + pad2(now.getUTCMonth()+1) + '-' + pad2(now.getUTCDate());
+    el.hour.value = pad2(now.getUTCHours());
+    el.min.value = pad2(now.getUTCMinutes());
     el.sec.value = '00';
   }
 
@@ -2550,14 +2550,13 @@ function esc(s) {
     showReplayLoading();
 
     replaySpeed = parseInt(el.speed.value) || 4;
-    // 用户选择的是北京时 → 转 UTC
+    // 用户选择的是 UTC
     var parts = el.date.value.split('-');
-    var localDate = new Date(
+    var startMs = Date.UTC(
       parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]),
       parseInt(el.hour.value), parseInt(el.min.value), parseInt(el.sec.value)
     );
-    var startTS = localDate.toISOString();
-    var startMs = localDate.getTime();
+    var startTS = new Date(startMs).toISOString();
     var endMs = startMs + 30 * 60 * 1000;
     var endTS = new Date(endMs).toISOString();
 
@@ -2725,8 +2724,8 @@ function esc(s) {
     if (!el2) return;
     if (ts) {
       var d = new Date(ts);
-      el2.textContent = d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate())
-        + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+      el2.textContent = d.getUTCFullYear() + '-' + pad2(d.getUTCMonth()+1) + '-' + pad2(d.getUTCDate())
+        + ' ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ':' + pad2(d.getUTCSeconds()) + ' UTC';
     }
   }
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import logging
 import os
 import signal
@@ -116,42 +115,19 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         # FDR 定期处理线程（每 4 秒一次）
-        _checkpoint_counter = [0]
-
         def fdr_processor() -> None:
-            _lock_path = Path(config.db_path).parent / ".fdr_update.lock"
             while not stop_requested[0]:
                 time.sleep(PROCESS_INTERVAL_SECONDS)
-                # 文件锁：防止双实例同时写库（锁失败直接跳过本轮）
-                try:
-                    lock_fd = os.open(str(_lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-                    try:
-                        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    except BlockingIOError:
-                        os.close(lock_fd)
-                        continue  # 另一个实例持有锁，跳过本轮
-                except Exception:
-                    pass  # 无锁机制时退化为直接更新
                 try:
                     fdr_store.process_updates(db)
                 except Exception:
                     logger.exception("FDR processor error")
-                finally:
-                    try:
-                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                        os.close(lock_fd)
-                    except Exception:
-                        pass
-                # 定期 WAL checkpoint 防止 WAL 文件过大
-                _checkpoint_counter[0] += 1
-                if _checkpoint_counter[0] >= 125:  # ~每 500 秒一次
-                    _checkpoint_counter[0] = 0
-                    try:
-                        c = db._get_conn()
-                        c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                        logger.info("[FDR] WAL checkpoint 完成")
-                    except Exception:
-                        pass
+                # 每次迭代执行 PASSIVE checkpoint，快速截断 WAL
+                try:
+                    c = db._get_conn()
+                    c.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                except Exception:
+                    pass
 
         fdr_thread = Thread(target=fdr_processor, daemon=True, name="fdr-processor")
         fdr_thread.start()
