@@ -379,10 +379,12 @@ class FDRStore:
 
         dof = received_at.strftime("%Y-%m-%d")
         hour = received_at.hour
+        slot = (received_at.hour * 60 + received_at.minute) // 10
         key = (rec.callsign, dof, terminal)
 
         if key not in self._pending_sectors:
-            self._pending_sectors[key] = hour
+            # 存储 (hour, slot)
+            self._pending_sectors[key] = (hour, slot)
         rec._sector_recorded.add(terminal)
 
     def _flush_sector_records(self, db: Any) -> int:
@@ -394,10 +396,15 @@ class FDRStore:
             return 0
 
         flushed = 0
-        for (callsign, dof, terminal_code), hour in pending.items():
+        for (callsign, dof, terminal_code), (hour, slot) in pending.items():
             try:
                 if db.record_sector_flight(callsign, dof, terminal_code, hour):
                     flushed += 1
+                # 同时记录 10 分钟粒度
+                try:
+                    db.record_sector_flight_10min(callsign, dof, terminal_code, slot)
+                except Exception:
+                    pass
             except Exception:
                 logger.debug("[SECTOR] 写入失败 %s/%s/%s", callsign, dof, terminal_code)
         return flushed

@@ -649,7 +649,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     @app.route("/api/voice/duration")
     def api_voice_duration():
-        """返回指定通道在指定日期的 144 个通话时长数据点"""
+        """返回指定通道在指定日期的 144 个通话时长 + 扇区飞行架次"""
         if voice_receiver is None:
             return jsonify({"error": "voice not enabled"}), 400
         date_str = request.args.get("date", datetime.utcnow().strftime("%Y-%m-%d"))
@@ -658,8 +658,29 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             channel_id = int(channel_str)
         except (ValueError, TypeError):
             return jsonify({"error": "invalid channel"}), 400
-        data = voice_receiver.get_channel_duration(date_str, channel_id)
-        return jsonify({"date": date_str, "channel": channel_id, "data": data})
+
+        # 通道号 → 终端扇区代码
+        from .voice_receiver import CHANNEL_SECTORS
+        terminal_code = CHANNEL_SECTORS.get(channel_id, "")
+
+        # 语音时长
+        duration_data = voice_receiver.get_channel_duration(date_str, channel_id)
+
+        # 扇区飞行架次（10 分钟粒度）
+        flight_data = []
+        if terminal_code:
+            try:
+                flight_data = db.query_sector_traffic_10min(date_str, terminal_code)
+            except Exception:
+                pass
+
+        return jsonify({
+            "date": date_str,
+            "channel": channel_id,
+            "terminal_code": terminal_code,
+            "duration": duration_data,
+            "flight_count": flight_data,
+        })
 
     @app.route("/api/voice/stop", methods=["POST"])
     def api_voice_stop():

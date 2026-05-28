@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.4</title>
+<title>ATC AFTN WebHub v2.1.5</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.4</span>
+  <span class="badge">v2.1.5</span>
 </div>
 
 <div class="tabs">
@@ -3201,16 +3201,16 @@ function voiceLoadChart() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       document.getElementById('voiceChartEmpty').style.display = 'none';
-      voiceDrawChart(data.data, dateStr, ch);
+      voiceDrawChart(data.duration || [], data.flight_count || [], dateStr, ch, data.terminal_code || '');
     })
     .catch(function() {
       document.getElementById('voiceChartEmpty').textContent = '查询失败';
     });
 }
 
-function voiceDrawChart(data, dateStr, channelId) {
+function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCode) {
   var canvas = document.getElementById('voiceChart');
-  if (!canvas || !data || !data.length) return;
+  if (!canvas || !durationData) return;
 
   var ctx = canvas.getContext('2d');
   var W = canvas.parentElement.clientWidth || 800;
@@ -3221,18 +3221,17 @@ function voiceDrawChart(data, dateStr, channelId) {
   canvas.style.height = H + 'px';
   ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
 
-  var PAD = {top: 30, bottom: 40, left: 55, right: 20};
+  var PAD = {top: 30, bottom: 40, left: 55, right: 50};
   var plotW = W - PAD.left - PAD.right;
   var plotH = H - PAD.top - PAD.bottom;
 
-  // 清空
   ctx.clearRect(0, 0, W, H);
 
-  var maxVal = 600; // Y 轴最大值固定 600 秒
-  var numPoints = data.length; // 144
-  var xStep = plotW / (numPoints - 1);
+  var maxDur = 600;
+  var maxFlights = 12;
+  var numPoints = 144;
 
-  // 画网格
+  // ── 网格 ──
   ctx.strokeStyle = '#21262d';
   ctx.lineWidth = 1;
   for (var y = 0; y <= 6; y++) {
@@ -3241,74 +3240,115 @@ function voiceDrawChart(data, dateStr, channelId) {
     ctx.moveTo(PAD.left, yy);
     ctx.lineTo(W - PAD.right, yy);
     ctx.stroke();
-    // 标签
-    ctx.fillStyle = '#8b949e';
-    ctx.font = '11px sans-serif';
+    // 左 Y 轴标签（通话时长）
+    ctx.fillStyle = '#58a6ff';
+    ctx.font = '10px sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText(Math.round(y * 100), PAD.left - 8, yy + 4);
+    ctx.fillText(Math.round(y * 100), PAD.left - 6, yy + 3);
+    // 右 Y 轴标签（架次）
+    var flightLabel = Math.round(y * 2);
+    ctx.fillStyle = '#d29922';
+    ctx.textAlign = 'left';
+    ctx.fillText(flightLabel, W - PAD.right + 6, yy + 3);
   }
 
-  // 画 X 轴时间标签 (每 2 小时 = 12 个区间)
+  // ── X 轴时间标签 ──
   ctx.fillStyle = '#8b949e';
   ctx.font = '10px sans-serif';
   ctx.textAlign = 'center';
   for (var h = 0; h < 24; h += 2) {
-    var idx = h * 6;  // 每小时对应 6 个数据点 (10分钟/点)
+    var idx = h * 6;
     var xx = PAD.left + (idx / 143) * plotW;
-    var label = h === 0 ? '0:00' : h + ':00';
-    ctx.fillText(label, xx, H - 8);
+    ctx.fillText((h === 0 ? '0:00' : h + ':00'), xx, H - 8);
   }
-  // 最后一个标签 24:00
   ctx.fillText('24:00', W - PAD.right, H - 8);
 
-  // 画折线
+  // ── 通话时长折线（蓝） ──
   ctx.beginPath();
   ctx.strokeStyle = '#58a6ff';
   ctx.lineWidth = 2;
   var first = true;
   for (var i = 0; i < numPoints; i++) {
-    var x = PAD.left + (i / (numPoints - 1)) * plotW;
-    var val = Math.min(data[i] || 0, maxVal);
-    var y = PAD.top + plotH - (val / maxVal) * plotH;
-    if (first) {
-      ctx.moveTo(x, y);
-      first = false;
-    } else {
-      ctx.lineTo(x, y);
-    }
+    var x = PAD.left + (i / 143) * plotW;
+    var val = Math.min(durationData[i] || 0, maxDur);
+    var y = PAD.top + plotH - (val / maxDur) * plotH;
+    if (first) { ctx.moveTo(x, y); first = false; }
+    else { ctx.lineTo(x, y); }
   }
   ctx.stroke();
 
-  // 填充面积
+  // 面积填充
   ctx.lineTo(W - PAD.right, PAD.top + plotH);
   ctx.lineTo(PAD.left, PAD.top + plotH);
   ctx.closePath();
-  ctx.fillStyle = 'rgba(88,166,255,0.1)';
+  ctx.fillStyle = 'rgba(88,166,255,0.08)';
   ctx.fill();
 
-  // 标题
+  // ── 飞行架次折线（橙） ──
+  if (flightData && flightData.length) {
+    ctx.beginPath();
+    ctx.strokeStyle = '#d29922';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([]);
+    first = true;
+    for (var i = 0; i < numPoints && i < flightData.length; i++) {
+      var x = PAD.left + (i / 143) * plotW;
+      var val = Math.min(flightData[i] || 0, maxFlights);
+      var y = PAD.top + plotH - (val / maxFlights) * plotH;
+      if (first) { ctx.moveTo(x, y); first = false; }
+      else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+
+    // 面积
+    ctx.lineTo(W - PAD.right, PAD.top + plotH);
+    ctx.lineTo(PAD.left, PAD.top + plotH);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(210,153,34,0.08)';
+    ctx.fill();
+  }
+
+  // ── 标题 + 图例 ──
   ctx.fillStyle = '#e6edf3';
   ctx.font = '12px sans-serif';
   ctx.textAlign = 'left';
-  var secName = _chSectorNames[channelId] || ('CH' + channelId);
-  var label = '扇区 ' + secName + ' - ' + dateStr;
-  ctx.fillText(label, PAD.left, 16);
+  var secName = terminalCode || _chSectorNames[channelId] || ('CH' + channelId);
+  ctx.fillText('扇区 ' + secName + ' - ' + dateStr, PAD.left, 16);
+
+  // 图例
+  var legX = W - PAD.right - 140;
+  ctx.fillStyle = '#58a6ff';
+  ctx.fillRect(legX, 6, 12, 3);
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('通话时长', legX + 16, 12);
+
+  ctx.fillStyle = '#d29922';
+  ctx.fillRect(legX + 70, 6, 12, 3);
+  ctx.fillStyle = '#8b949e';
+  ctx.fillText('飞行架次', legX + 86, 12);
 
   // Y 轴标签
-  ctx.fillStyle = '#8b949e';
-  ctx.font = '11px sans-serif';
+  ctx.fillStyle = '#58a6ff';
+  ctx.font = '10px sans-serif';
   ctx.textAlign = 'center';
   ctx.save();
-  ctx.translate(14, PAD.top + plotH / 2);
+  ctx.translate(12, PAD.top + plotH / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.fillText('通话时长 (秒)', 0, 0);
   ctx.restore();
 
-  // 最大值标注
+  ctx.fillStyle = '#d29922';
+  ctx.save();
+  ctx.translate(W - 4, PAD.top + plotH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('飞行架次', 0, 0);
+  ctx.restore();
+
   ctx.fillStyle = '#8b949e';
-  ctx.font = '10px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText('max 600s', W - PAD.right - 60, PAD.top - 2);
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText('max 600s / 12架次', W - PAD.right - 6, PAD.top - 2);
 }
 
 // 启动轮询

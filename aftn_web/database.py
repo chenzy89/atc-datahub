@@ -55,6 +55,24 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_sector_flight_stats
                 ON sector_flights(dof, terminal_code);
 
+            CREATE TABLE IF NOT EXISTS voice_duration (
+                date TEXT NOT NULL,
+                channel INTEGER NOT NULL,
+                slot INTEGER NOT NULL,
+                duration REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (date, channel, slot)
+            );
+
+            CREATE TABLE IF NOT EXISTS sector_traffic_10min (
+                date TEXT NOT NULL,
+                terminal_code TEXT NOT NULL,
+                slot INTEGER NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (date, terminal_code, slot)
+            );
+            CREATE INDEX IF NOT EXISTS idx_st10m_terminal
+                ON sector_traffic_10min(date, terminal_code);
+
             CREATE TABLE IF NOT EXISTS aftn_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 raw_text TEXT NOT NULL DEFAULT '',
@@ -918,6 +936,91 @@ class Database:
             if tc not in result:
                 result[tc] = [0] * 24
             result[tc][r["hour"]] = r["cnt"]
+        return result
+
+    def save_voice_duration(self, date_str: str, channel: int,
+                             slot: int, duration: float) -> None:
+        """持久化语音通话时长到 DB（累加模式）"""
+        conn = self._get_conn()
+        for retry in range(3):
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO voice_duration "
+                    "(date, channel, slot, duration) VALUES (?, ?, ?, "
+                    "COALESCE((SELECT duration FROM voice_duration "
+                    "WHERE date=? AND channel=? AND slot=?), 0) + ?)",
+                    (date_str, channel, slot, date_str, channel, slot, duration),
+                )
+                conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and retry < 2:
+                    time.sleep(0.1)
+                    continue
+                return
+
+    def load_voice_durations(self, date_str: str, channel: int) -> list[float]:
+        """从 DB 恢复指定日期通道的 144 个时段通话时长"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT slot, duration FROM voice_duration "
+            "WHERE date=? AND channel=? ORDER BY slot",
+            (date_str, channel),
+        ).fetchall()
+        result = [0.0] * 144
+        for r in rows:
+            s = r["slot"]
+            if 0 <= s < 144:
+                result[s] = r["duration"]
+        return result
+
+    def record_sector_flight_10min(self, callsign: str, dof: str,
+                                     terminal_code: str, slot: int) -> bool:
+        """记录航班进入扇区的 10 分钟 slot（去重）"""
+        now = _fmt_dt(datetime.utcnow())
+        for retry in range(3):
+            try:
+                conn = self._get_conn()
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO sector_flights "
+                    "(callsign, dof, terminal_code, hour, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (callsign.upper(), dof, terminal_code, slot // 6, now),
+                )
+                conn.commit()
+                if cur.rowcount > 0:
+                    # 更新 10 分钟聚合表
+                    conn.execute(
+                        "INSERT OR REPLACE INTO sector_traffic_10min "
+                        "(date, terminal_code, slot, count) VALUES "
+                        "(?, ?, ?, COALESCE((SELECT count FROM sector_traffic_10min "
+                        "WHERE date=? AND terminal_code=? AND slot=?), 0) + 1)",
+                        (dof, terminal_code, slot, dof, terminal_code, slot),
+                    )
+                    conn.commit()
+                    return True
+                return False
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and retry < 2:
+                    time.sleep(0.1)
+                    continue
+                return False
+        return False
+
+    def query_sector_traffic_10min(self, date_str: str,
+                                    terminal_code: str) -> list[int]:
+        """查询指定日期扇区的 144 个 10 分钟 slot 飞行架次"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT slot, count FROM sector_traffic_10min "
+            "WHERE date=? AND terminal_code=? ORDER BY slot",
+            (date_str, terminal_code),
+        ).fetchall()
+        result = [0] * 144
+        for r in rows:
+            s = r["slot"]
+            if 0 <= s < 144:
+                result[s] = r["count"]
         return result
 
     def delete_by_key(self, callsign: str, adep: str, adest: str) -> bool:

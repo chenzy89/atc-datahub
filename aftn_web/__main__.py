@@ -94,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
             multicast_group=config.voice.multicast_group,
             port=config.voice.port,
             interface_ip=config.voice.interface_ip,
+            db=db,
         )
         voice_receiver.start()
         logger.info(

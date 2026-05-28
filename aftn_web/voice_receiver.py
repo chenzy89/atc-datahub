@@ -155,6 +155,7 @@ class VoiceReceiver:
         port: int,
         interface_ip: str,
         sector_channels: dict[str, int] | None = None,
+        db: Any = None,
     ):
         self.multicast_group = multicast_group
         self.port = port
@@ -162,6 +163,7 @@ class VoiceReceiver:
         self._running = False
         self._socket: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
+        self._db = db
 
         # 每个通道一个解码器（ADPCM 解码有状态）
         self._decoders: dict[int, ADPCMDecoder] = {}
@@ -197,6 +199,10 @@ class VoiceReceiver:
         self._today_date = datetime.now().strftime("%Y-%m-%d")
         # 定期清理线程
         self._duration_lock = threading.Lock()
+        self._db_flush_counter = 0
+
+        # 从 DB 恢复已有数据
+        self._load_from_db()
 
     def start(self) -> None:
         if self._running:
@@ -441,9 +447,46 @@ class VoiceReceiver:
             if channel not in self._burst_start:
                 self._burst_start[channel] = clock_now
 
+    def _load_from_db(self) -> None:
+        """启动时从 DB 恢复昨天的通话时长数据"""
+        db = self._db
+        if not db:
+            return
+        from datetime import timedelta
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
+        for date_key in (today, yesterday):
+            try:
+                day_data: dict[int, list[float]] = {}
+                for ch in SECTOR_CHANNELS.values():
+                    day_data[ch] = db.load_voice_durations(date_key, ch)
+                with self._duration_lock:
+                    self._duration_buckets[date_key] = day_data
+                logger.info("voice durations loaded from DB for %s", date_key)
+            except Exception:
+                pass
+
+    def _flush_durations_to_db(self) -> None:
+        """将内存中的语音时长数据刷到 DB"""
+        db = self._db
+        if not db:
+            return
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        with self._duration_lock:
+            day_data = self._duration_buckets.get(today, {})
+            for channel, buckets in day_data.items():
+                for slot, dur in enumerate(buckets):
+                    if dur > 0:
+                        try:
+                            db.save_voice_duration(today, channel, slot, dur)
+                        except Exception:
+                            pass
+
     def _flush_stale_bursts(self) -> None:
         """清理超过静默阈值的突发通话（在 get_status 调用时执行）"""
         now = time.time()
+        changed = False
         with self._duration_lock:
             for channel in list(self._burst_start.keys()):
                 last_data = self._last_data_time.get(channel, 0.0)
@@ -459,6 +502,13 @@ class VoiceReceiver:
                                 slot = (dt.hour * 60 + dt.minute) // 10
                                 if 0 <= slot < 144:
                                     day_buckets[channel][slot] += duration
+                            changed = True
+        # 如果清理了突发，顺便刷到 DB
+        if changed:
+            self._db_flush_counter += 1
+            if self._db_flush_counter >= 10:  # 每 10 次清理刷一次 DB
+                self._flush_durations_to_db()
+                self._db_flush_counter = 0
 
     def _play_pcm(self, pcm_data: bytes) -> None:
         """通过 pygame 播放 PCM16 数据"""
