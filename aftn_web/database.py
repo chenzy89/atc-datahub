@@ -161,6 +161,23 @@ class Database:
             pass
         conn.commit()
 
+        # ── 回填：从 sector_flights 填充 sector_traffic_10min ──
+        try:
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            conn.executescript(
+                "INSERT OR IGNORE INTO sector_traffic_10min (date, terminal_code, slot, count) "
+                "SELECT sf.dof, sf.terminal_code, "
+                "  (CAST(strftime('%H', sf.created_at) AS INTEGER) * 60 + "
+                "   CAST(strftime('%M', sf.created_at) AS INTEGER)) / 10 AS slot, "
+                "  COUNT(*) "
+                "FROM sector_flights sf "
+                "WHERE sf.dof = '" + today + "' "
+                "GROUP BY sf.dof, sf.terminal_code, slot"
+            )
+            conn.commit()
+        except Exception:
+            pass
+
     # ── AFTN 报文 ──────────────────────────────────────────────
 
     def save_aftn_message(self, msg: AftnMessage) -> int:
@@ -976,30 +993,19 @@ class Database:
 
     def record_sector_flight_10min(self, callsign: str, dof: str,
                                      terminal_code: str, slot: int) -> bool:
-        """记录航班进入扇区的 10 分钟 slot（去重）"""
-        now = _fmt_dt(datetime.utcnow())
+        """更新 10 分钟粒度扇区飞行架次（由上游去重，直接累加）"""
         for retry in range(3):
             try:
                 conn = self._get_conn()
-                cur = conn.execute(
-                    "INSERT OR IGNORE INTO sector_flights "
-                    "(callsign, dof, terminal_code, hour, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (callsign.upper(), dof, terminal_code, slot // 6, now),
+                conn.execute(
+                    "INSERT OR REPLACE INTO sector_traffic_10min "
+                    "(date, terminal_code, slot, count) VALUES "
+                    "(?, ?, ?, COALESCE((SELECT count FROM sector_traffic_10min "
+                    "WHERE date=? AND terminal_code=? AND slot=?), 0) + 1)",
+                    (dof, terminal_code, slot, dof, terminal_code, slot),
                 )
                 conn.commit()
-                if cur.rowcount > 0:
-                    # 更新 10 分钟聚合表
-                    conn.execute(
-                        "INSERT OR REPLACE INTO sector_traffic_10min "
-                        "(date, terminal_code, slot, count) VALUES "
-                        "(?, ?, ?, COALESCE((SELECT count FROM sector_traffic_10min "
-                        "WHERE date=? AND terminal_code=? AND slot=?), 0) + 1)",
-                        (dof, terminal_code, slot, dof, terminal_code, slot),
-                    )
-                    conn.commit()
-                    return True
-                return False
+                return True
             except sqlite3.OperationalError as e:
                 if "locked" in str(e) and retry < 2:
                     time.sleep(0.1)
