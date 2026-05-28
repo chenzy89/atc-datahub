@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import struct
+import sys
 import threading
 import time
+
+# 尝试从 online_auio 虚拟环境导入 pygame
+_VENV_PYGAME = "/home/share/online_auio/venv/lib/python3.8/site-packages"
+if os.path.isdir(_VENV_PYGAME):
+    sys.path.insert(0, _VENV_PYGAME)
 from dataclasses import dataclass, field
 from typing import Optional
 
