@@ -7,7 +7,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
+
+from .xlsx_writer import make_xlsx
 
 from .config import AppConfig
 from .database import Database
@@ -195,6 +197,90 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             return jsonify({"error": "机场和日期范围必填"}), 400
         result = db.query_traffic_statistics(airports, date_from, date_to)
         return jsonify(result)
+
+    @app.route("/api/statistics/export", methods=["POST"])
+    def api_statistics_export():
+        body = request.get_json()
+        if not body:
+            return jsonify({"error": "missing body"}), 400
+        d = body.get("data", {})
+        p = body.get("params", {})
+        days = d.get("days", 1) or 1
+
+        def fmt(sec):
+            if not sec or sec <= 0:
+                return "0m"
+            h = sec // 3600
+            m = (sec % 3600) // 60
+            s = sec % 60
+            return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+
+        sheets = []
+
+        # 概况
+        summary = [
+            ["指标", "值"],
+            ["日期范围", f'{p.get("df","")} ~ {p.get("dt","")}'],
+            ["机场", ", ".join(p.get("airports", []))],
+            ["统计天数", days],
+            ["日均出港", round(d.get("dep_count", 0) / days, 0)],
+            ["日均进港", round(d.get("arr_count", 0) / days, 0)],
+            ["出港总飞行时长", fmt(d.get("dep_terminal_seconds", 0))],
+            ["进港总飞行时长", fmt(d.get("arr_terminal_seconds", 0))],
+            ["高峰小时", f'{d.get("peak_hour", 0)}时({d.get("peak_hour_dep", 0) + d.get("peak_hour_arr", 0)}架次)'],
+            ["高峰日", f'{d.get("peak_day", "")} {d.get("peak_day_count", 0)}架次'],
+        ]
+        sheets.append({"name": "概况", "rows": summary})
+
+        # 进港移交点
+        ah = d.get("arr_handover", {})
+        arr_ho = [["移交点", "总架次", "日均", "占比"]]
+        for k, v in sorted(ah.items(), key=lambda x: -x[1]):
+            arr_ho.append([k, v, round(v / days, 0), f"{v / d.get('arr_count', 1) * 100:.1f}%"])
+        sheets.append({"name": "进港移交点", "rows": arr_ho})
+
+        # 出港移交点
+        dh = d.get("dep_handover", {})
+        dep_ho = [["移交点", "总架次", "日均", "占比"]]
+        for k, v in sorted(dh.items(), key=lambda x: -x[1]):
+            dep_ho.append([k, v, round(v / days, 0), f"{v / d.get('dep_count', 1) * 100:.1f}%"])
+        sheets.append({"name": "出港移交点", "rows": dep_ho})
+
+        # STAR 进港程序
+        arr_term = d.get("arr_terminal_seconds", 0) or 0
+        arr_proc = [["程序", "日均架次", "平均飞行时长", "时长占比"]]
+        for proc in d.get("arr_procedures", []):
+            avg = round(proc["total_seconds"] / proc["count"])
+            pct = f"{proc['total_seconds'] / arr_term * 100:.1f}%" if arr_term else "-"
+            arr_proc.append([proc["name"], round(proc["count"] / days, 1), fmt(avg), pct])
+        sheets.append({"name": "进港程序STAR", "rows": arr_proc})
+
+        # SID 出港程序
+        dep_term = d.get("dep_terminal_seconds", 0) or 0
+        dep_proc = [["程序", "日均架次", "平均飞行时长", "时长占比"]]
+        for proc in d.get("dep_procedures", []):
+            avg = round(proc["total_seconds"] / proc["count"])
+            pct = f"{proc['total_seconds'] / dep_term * 100:.1f}%" if dep_term else "-"
+            dep_proc.append([proc["name"], round(proc["count"] / days, 1), fmt(avg), pct])
+        sheets.append({"name": "出港程序SID", "rows": dep_proc})
+
+        # 24h流量
+        dep_h = [round(v / days) for v in d.get("dep_hourly", [0] * 24)]
+        arr_h = [round(v / days) for v in d.get("arr_hourly", [0] * 24)]
+        hdr = ["小时"] + [f"{h}时" for h in range(24)] + ["日均"]
+        hourly = [hdr]
+        hourly.append(["进港"] + arr_h + [round(d.get("arr_count", 0) / days, 0)])
+        hourly.append(["出港"] + dep_h + [round(d.get("dep_count", 0) / days, 0)])
+        hourly.append(["合计"] + [arr_h[i] + dep_h[i] for i in range(24)] + [round((d.get("arr_count", 0) + d.get("dep_count", 0)) / days, 0)])
+        sheets.append({"name": "小时流量", "rows": hourly})
+
+        xlsx_buf = make_xlsx(sheets)
+        return send_file(
+            xlsx_buf,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=f"统计_{p.get('df','')}_{p.get('dt','')}.xlsx",
+        )
 
     @app.route("/api/stats")
     def api_stats():

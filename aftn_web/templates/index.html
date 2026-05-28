@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.16</title>
+<title>ATC AFTN WebHub v2.0.17</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -315,13 +315,12 @@ canvas#radarMap {
   width: 0%;
 }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.16</span>
+  <span class="badge">v2.0.17</span>
 </div>
 
 <div class="tabs">
@@ -502,7 +501,7 @@ canvas#radarMap {
     </div>
     <div class="search-actions">
       <button class="btn btn-primary" onclick="generateStats()">🔍 查询</button>
-      <button class="btn btn-secondary" onclick="exportStatsXlsx()" style="margin-left:8px;">📊 导出</button>
+      <button class="btn btn-secondary" onclick="exportStatsXlsx()" style="margin-left:8px;">导出 xlsx</button>
       <span id="st-info" class="text-muted" style="margin-left:8px;"></span>
     </div>
   </div>
@@ -1175,83 +1174,31 @@ function exportStatsXlsx() {
   var d = window._statsData;
   var p = window._statsParams;
   if (!d || !p) { alert('请先查询统计结果'); return; }
-  if (typeof XLSX === 'undefined') { alert('缺少 SheetJS 库'); return; }
-
-  var wb = XLSX.utils.book_new();
-  var days = d.days || 1;
-  function fmtHms(sec) {
-    if (!sec || sec <= 0) return '0m';
-    var h = Math.floor(sec / 3600);
-    var m = Math.floor((sec % 3600) / 60);
-    var s = sec % 60;
-    return (h > 0 ? h + 'h' + String(m).padStart(2,'0') : m + 'm') + String(s).padStart(2,'0') + 's';
-  }
-
-  // ── 概况 ──
-  var summary = [
-    ['指标', '值'],
-    ['日期范围', p.df + ' ~ ' + p.dt],
-    ['机场', p.airports.join(', ')],
-    ['统计天数', days],
-    ['日均出港', (d.dep_count / days).toFixed(0)],
-    ['日均进港', (d.arr_count / days).toFixed(0)],
-    ['出港总飞行时长', fmtHms(d.dep_terminal_seconds || 0)],
-    ['进港总飞行时长', fmtHms(d.arr_terminal_seconds || 0)],
-    ['高峰小时', d.peak_hour + '时(' + (d.peak_hour_dep + d.peak_hour_arr) + '架次)'],
-    ['高峰日', (d.peak_day || '').replace(/^\d{4}-(\d{2})-(\d{2})$/, '$1-$2') + ' ' + (d.peak_day_count || 0) + '架次'],
-  ];
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), '概况');
-
-  // ── 进港移交点 ──
-  var arrHo = [['移交点', '总架次', '日均', '占比']];
-  var ah = d.arr_handover || {};
-  Object.keys(ah).sort(function(a,b){ return ah[b]-ah[a]; }).forEach(function(k) {
-    arrHo.push([k, ah[k], (ah[k]/days).toFixed(0), (ah[k]/d.arr_count*100).toFixed(1)+'%']);
+  var btn = document.querySelector('[onclick="exportStatsXlsx()"]');
+  var orig = btn.textContent;
+  btn.textContent = '导出中...';
+  btn.disabled = true;
+  fetch('/api/statistics/export', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({data: d, params: p})
+  }).then(function(r) {
+    if (!r.ok) throw new Error(r.statusText);
+    return r.blob();
+  }).then(function(blob) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = '统计_' + p.df + '_' + p.dt + '.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+    btn.textContent = orig;
+    btn.disabled = false;
+  }).catch(function(e) {
+    alert('导出失败: ' + e.message);
+    btn.textContent = orig;
+    btn.disabled = false;
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(arrHo), '进港移交点');
-
-  // ── 出港移交点 ──
-  var depHo = [['移交点', '总架次', '日均', '占比']];
-  var dh = d.dep_handover || {};
-  Object.keys(dh).sort(function(a,b){ return dh[b]-dh[a]; }).forEach(function(k) {
-    depHo.push([k, dh[k], (dh[k]/days).toFixed(0), (dh[k]/d.dep_count*100).toFixed(1)+'%']);
-  });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(depHo), '出港移交点');
-
-  // ── STAR 进港程序 ──
-  var arrTermSec = d.arr_terminal_seconds || 0;
-  var arrProc = [['程序', '日均架次', '平均飞行时长', '时长占比']];
-  (d.arr_procedures || []).forEach(function(p2) {
-    var avgSec = Math.round(p2.total_seconds / p2.count);
-    var pct = arrTermSec > 0 ? (p2.total_seconds / arrTermSec * 100).toFixed(1) + '%' : '-';
-    arrProc.push([p2.name, (p2.count/days).toFixed(1), fmtHms(avgSec), pct]);
-  });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(arrProc), '进港程序STAR');
-
-  // ── SID 出港程序 ──
-  var depTermSec = d.dep_terminal_seconds || 0;
-  var depProc = [['程序', '日均架次', '平均飞行时长', '时长占比']];
-  (d.dep_procedures || []).forEach(function(p2) {
-    var avgSec = Math.round(p2.total_seconds / p2.count);
-    var pct = depTermSec > 0 ? (p2.total_seconds / depTermSec * 100).toFixed(1) + '%' : '-';
-    depProc.push([p2.name, (p2.count/days).toFixed(1), fmtHms(avgSec), pct]);
-  });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(depProc), '出港程序SID');
-
-  // ── 24h 流量 ──
-  var depH = (d.dep_hourly || []).map(function(v){ return Math.round(v / days); });
-  var arrH = (d.arr_hourly || []).map(function(v){ return Math.round(v / days); });
-  var hourly = [['小时']].concat(depH.map(function(_,i){ return ['类型'].concat(depH.map(function(_,j){ return ''; })); }));
-  var hdr = ['小时'];
-  for (var h = 0; h < 24; h++) hdr.push(h + '时');
-  hdr = hdr.concat('日均');
-  var hData = [hdr];
-  hData.push(['进港'].concat(arrH).concat([(d.arr_count/days).toFixed(0)]));
-  hData.push(['出港'].concat(depH).concat([(d.dep_count/days).toFixed(0)]));
-  hData.push(['合计'].concat(arrH.map(function(v,i){ return v + depH[i]; })).concat([((d.arr_count+d.dep_count)/days).toFixed(0)]));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hData), '小时流量');
-
-  XLSX.writeFile(wb, '统计_' + p.df + '_' + p.dt + '.xlsx');
 }
 
 // 初始化日期选择
