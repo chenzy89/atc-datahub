@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.14</title>
+<title>ATC AFTN WebHub v2.0.15</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.14</span>
+  <span class="badge">v2.0.15</span>
 </div>
 
 <div class="tabs">
@@ -1146,7 +1146,7 @@ function renderStats(d, aps, df, dt) {
     var rows = '';
     procedures.forEach(function(p) {
       var dailyCount = (p.count / days).toFixed(1);
-      var avgSec = Math.round(p.total_seconds / days);
+      var avgSec = Math.round(p.total_seconds / p.count);
       var pct = totalCount > 0 ? (p.total_seconds / totalSeconds * 100).toFixed(1) + '%' : '-';
       rows += '<tr>' +
         '<td style="padding:6px 10px;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:500;">' + esc(p.name) + '</td>' +
