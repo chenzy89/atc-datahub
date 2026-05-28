@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.9</title>
+<title>ATC AFTN WebHub v2.1.10</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.9</span>
+  <span class="badge">v2.1.10</span>
 </div>
 
 <div class="tabs">
@@ -3284,28 +3284,19 @@ function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCo
   ctx.fillStyle = 'rgba(88,166,255,0.08)';
   ctx.fill();
 
-  // ── 飞行架次折线（橙） ──
+  // ── 飞行架次柱形图（橙） ──
   if (flightData && flightData.length) {
-    ctx.beginPath();
-    ctx.strokeStyle = '#d29922';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([]);
-    first = true;
+    var barW = Math.max(2, (plotW / 144) * 0.6);
     for (var i = 0; i < numPoints && i < flightData.length; i++) {
+      var val = flightData[i] || 0;
+      if (val <= 0) continue;
+      var valClamped = Math.min(val, maxFlights);
       var x = PAD.left + (i / 143) * plotW;
-      var val = Math.min(flightData[i] || 0, maxFlights);
-      var y = PAD.top + plotH - (val / maxFlights) * plotH;
-      if (first) { ctx.moveTo(x, y); first = false; }
-      else { ctx.lineTo(x, y); }
+      var barH = (valClamped / maxFlights) * plotH;
+      var y = PAD.top + plotH - barH;
+      ctx.fillStyle = 'rgba(210,153,34,0.7)';
+      ctx.fillRect(x - barW / 2, y, barW, barH);
     }
-    ctx.stroke();
-
-    // 面积
-    ctx.lineTo(W - PAD.right, PAD.top + plotH);
-    ctx.lineTo(PAD.left, PAD.top + plotH);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(210,153,34,0.08)';
-    ctx.fill();
   }
 
   // ── 标题 + 图例 ──
