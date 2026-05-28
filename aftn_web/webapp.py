@@ -20,8 +20,9 @@ logger = logging.getLogger("aftn_web.webapp")
 
 
 from .radar_history import RadarHistoryStore
+from .voice_receiver import VoiceReceiver
 
-def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = None, radar_history_store: RadarHistoryStore | None = None) -> Flask:
+def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = None, radar_history_store: RadarHistoryStore | None = None, voice_receiver: VoiceReceiver | None = None) -> Flask:
     _RADAR_MAP_VERSION = "v0.1"
     app = Flask(
         __name__,
@@ -620,6 +621,39 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             last_message_time=_dt(data.get("last_message_time")),
             raw_message_text=str(data.get("raw_message_text") or ""),
         )
+
+    # ── 语音数据 ──────────────────────────────────────────
+
+    @app.route("/api/voice/status")
+    def api_voice_status():
+        """返回语音通道状态"""
+        if voice_receiver is None:
+            return jsonify({"enabled": False, "channels": []})
+        return jsonify({
+            "enabled": True,
+            "playing": voice_receiver.get_playing_channel(),
+            "channels": voice_receiver.get_status(),
+        })
+
+    @app.route("/api/voice/select", methods=["POST"])
+    def api_voice_select():
+        """选择播放通道"""
+        if voice_receiver is None:
+            return jsonify({"error": "voice not enabled"}), 400
+        body = request.get_json(silent=True) or {}
+        channel = body.get("channel", -1)
+        ok = voice_receiver.select_channel(channel)
+        if not ok:
+            return jsonify({"error": "invalid channel"}), 400
+        return jsonify({"ok": True, "channel": channel})
+
+    @app.route("/api/voice/stop", methods=["POST"])
+    def api_voice_stop():
+        """停止播放"""
+        if voice_receiver is None:
+            return jsonify({"error": "voice not enabled"}), 400
+        voice_receiver.select_channel(-1)
+        return jsonify({"ok": True})
 
     # ── 禁用浏览器缓存 API 响应 ──────────────────────────
     @app.after_request

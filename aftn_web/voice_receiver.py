@@ -1,0 +1,412 @@
+"""语音数据接收器 — 组播 ADPCM 音频接收与播放"""
+
+from __future__ import annotations
+
+import logging
+import socket
+import struct
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Optional
+
+logger = logging.getLogger("aftn_web.voice")
+
+# ADPCM 常量
+T_STEP = [
+    7, 8, 9, 10, 11, 12, 13, 14,
+    16, 17, 19, 21, 23, 25, 28, 31,
+    34, 37, 41, 45, 50, 55, 60, 66,
+    73, 80, 88, 97, 107, 118, 130, 143,
+    157, 173, 190, 209, 230, 253, 279, 307,
+    337, 371, 408, 449, 494, 544, 598, 658,
+    724, 796, 876, 963, 1060, 1166, 1282, 1411,
+    1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024,
+    3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484,
+    7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+    15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+    32767,
+]
+T_INDEX = [
+    -1, -1, -1, -1, 2, 4, 6, 8,
+    -1, -1, -1, -1, 2, 4, 6, 8,
+]
+BLOCK_SIZE = 256
+
+# 扇区 → 内话通道号映射
+SECTOR_CHANNELS: dict[str, int] = {
+    "ZGJDTM01": 38,
+    "ZGJDTM02": 42,
+    "ZGJDTM03": 50,
+    "ZGJDTM04": 264,
+    "ZGJDTM05": 46,
+    "ZGJDTM06": 32,
+    "ZGJDTM07": 54,
+}
+
+# 通道号 → 扇区名
+CHANNEL_SECTORS: dict[int, str] = {v: k for k, v in SECTOR_CHANNELS.items()}
+
+
+@dataclass
+class ChannelStatus:
+    """单个通道的状态"""
+    sector_code: str           # ZGJDTM01
+    channel_id: int            # 内话通道号 38, 42, …
+    frequency: str             # 频率如 "120.35"
+    sector_name: str           # 扇区名如 HN
+    last_activity: float = 0.0 # time.monotonic() 最后收到数据时间
+    bytes_received: int = 0    # 累计接收字节数
+    active: bool = False       # 最近 3 秒是否有数据
+    selected: bool = False     # 是否被选中播放
+
+    def to_dict(self) -> dict:
+        return {
+            "sector_code": self.sector_code,
+            "channel_id": self.channel_id,
+            "frequency": self.frequency,
+            "sector_name": self.sector_name,
+            "last_activity": self.last_activity,
+            "bytes_received": self.bytes_received,
+            "active": self.active,
+            "selected": self.selected,
+        }
+
+
+class ADPCMDecoder:
+    """IMA ADPCM 解码器 — 从 online_auio 项目移植"""
+
+    def __init__(self):
+        self.decoder_predicted = 0
+        self.decoder_index = 0
+        self.decoder_step = 7
+
+    def decode_adpcm(self, adpcm_data: bytes) -> bytes:
+        pcm_frames = bytearray()
+        i = 0
+        while i < len(adpcm_data):
+            end = min(i + BLOCK_SIZE, len(adpcm_data))
+            block = adpcm_data[i:end]
+            if len(block) != BLOCK_SIZE:
+                break
+            try:
+                pcm_block = self.decode_block(block)
+                pcm_frames.extend(pcm_block)
+            except Exception:
+                pass
+            i += BLOCK_SIZE
+        return bytes(pcm_frames)
+
+    def decode_block(self, block: bytes) -> bytes:
+        if len(block) != BLOCK_SIZE:
+            raise ValueError(f"块大小必须为256，实际{len(block)}")
+        result = bytearray()
+        self.decoder_predicted = struct.unpack('<h', block[0:2])[0]
+        self.decoder_index = block[2] & 0xFF
+        self.decoder_step = T_STEP[self.decoder_index]
+        result.extend(block[0:2])
+        for i in range(4, len(block)):
+            original_sample = block[i] & 0xFF
+            second_sample = original_sample >> 4
+            first_sample = original_sample & 0x0F
+            first_pcm = self.decode_sample(first_sample)
+            second_pcm = self.decode_sample(second_sample)
+            result.extend(struct.pack('<h', first_pcm))
+            result.extend(struct.pack('<h', second_pcm))
+        return bytes(result)
+
+    def decode_sample(self, nibble: int) -> int:
+        sign = nibble & 8
+        delta = nibble & 7
+        difference = self.decoder_step >> 3
+        if delta & 4:
+            difference += self.decoder_step
+        if delta & 2:
+            difference += self.decoder_step >> 1
+        if delta & 1:
+            difference += self.decoder_step >> 2
+        if sign:
+            difference = -difference
+        self.decoder_predicted += difference
+        if self.decoder_predicted > 32767:
+            self.decoder_predicted = 32767
+        elif self.decoder_predicted < -32768:
+            self.decoder_predicted = -32768
+        self.decoder_index += T_INDEX[nibble]
+        self.decoder_index = max(0, min(88, self.decoder_index))
+        self.decoder_step = T_STEP[self.decoder_index]
+        return self.decoder_predicted
+
+
+class VoiceReceiver:
+    """语音数据接收器 — 组播接收、解码、播放"""
+
+    def __init__(
+        self,
+        multicast_group: str,
+        port: int,
+        interface_ip: str,
+        sector_channels: dict[str, int] | None = None,
+    ):
+        self.multicast_group = multicast_group
+        self.port = port
+        self.interface_ip = interface_ip
+        self._running = False
+        self._socket: Optional[socket.socket] = None
+        self._thread: Optional[threading.Thread] = None
+
+        # 每个通道一个解码器（ADPCM 解码有状态）
+        self._decoders: dict[int, ADPCMDecoder] = {}
+
+        # 通道状态 — 按扇区代码索引
+        channels = sector_channels or SECTOR_CHANNELS
+        self._status: dict[str, ChannelStatus] = {}
+        for sector_code, ch_id in channels.items():
+            self._status[sector_code] = ChannelStatus(
+                sector_code=sector_code,
+                channel_id=ch_id,
+                frequency=_get_frequency(sector_code),
+                sector_name=_get_sector_name(sector_code),
+            )
+
+        # 被选中的播放通道 (None = 不播放)
+        self._playing_channel: Optional[int] = None
+        self._play_lock = threading.Lock()
+        self._pygame_ok = False
+        self._pygame_mixer_inited = False
+
+        # 最近 3 秒内各通道的活跃标记（用于 Active 判定）
+        self._activity_window: dict[int, list[float]] = {}
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+
+        # 尝试初始化 pygame
+        self._init_pygame()
+
+        # 创建 UDP socket
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.bind(("", self.port))
+
+        # 加入组播
+        try:
+            import sys
+            group_bytes = socket.inet_aton(self.multicast_group)
+            # 用 interface_ip 绑定
+            if self.interface_ip and self.interface_ip != "0.0.0.0":
+                if sys.platform == "linux":
+                    self._socket.setsockopt(
+                        socket.IPPROTO_IP,
+                        socket.IP_MULTICAST_IF,
+                        socket.inet_aton(self.interface_ip),
+                    )
+                mreq = group_bytes + socket.inet_aton(self.interface_ip)
+            else:
+                mreq = group_bytes + socket.inet_aton("0.0.0.0")
+            self._socket.setsockopt(
+                socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq
+            )
+            self._socket.settimeout(0.5)
+            logger.info(
+                "voice receiver joined %s:%d (if=%s)",
+                self.multicast_group, self.port, self.interface_ip,
+            )
+        except Exception as e:
+            logger.error("voice multicast join failed: %s", e)
+            self._running = False
+            return
+
+        # 启动接收线程
+        self._thread = threading.Thread(
+            target=self._receive_loop, daemon=True, name="voice-receiver"
+        )
+        self._thread.start()
+        logger.info("voice receiver started")
+
+    def stop(self) -> None:
+        self._running = False
+        if self._socket:
+            try:
+                self._socket.close()
+            except Exception:
+                pass
+            self._socket = None
+        if self._pygame_mixer_inited:
+            try:
+                import pygame
+                pygame.mixer.quit()
+            except Exception:
+                pass
+        logger.info("voice receiver stopped")
+
+    # ── 公共状态查询 ──────────────────────────────────────
+
+    def get_status(self) -> list[dict]:
+        """返回所有通道的状态列表"""
+        now = time.monotonic()
+        result = []
+        for sector_code, st in self._status.items():
+            ch_id = st.channel_id
+            # 更新 active 状态：3 秒内有数据就标记为活跃
+            recent = self._activity_window.get(ch_id, [])
+            # 清理超过 3 秒的时间戳
+            recent = [t for t in recent if now - t < 3.0]
+            self._activity_window[ch_id] = recent
+            st.active = len(recent) > 0
+            st.selected = (self._playing_channel == ch_id)
+            result.append(st.to_dict())
+        return result
+
+    def get_playing_channel(self) -> Optional[int]:
+        return self._playing_channel
+
+    def select_channel(self, channel_id: int) -> bool:
+        """选择播放通道。ch 为 -1 表示停止播放。"""
+        valid = list(SECTOR_CHANNELS.values())
+        if channel_id != -1 and channel_id not in valid:
+            return False
+
+        with self._play_lock:
+            if channel_id == -1:
+                # 停止播放
+                if self._pygame_mixer_inited:
+                    try:
+                        import pygame
+                        pygame.mixer.stop()
+                    except Exception:
+                        pass
+                self._playing_channel = None
+                logger.info("voice playback stopped")
+            else:
+                self._playing_channel = channel_id
+                logger.info("voice playback selected channel %d", channel_id)
+        return True
+
+    def is_running(self) -> bool:
+        return self._running
+
+    # ── 内部方法 ──────────────────────────────────────────
+
+    def _init_pygame(self) -> None:
+        try:
+            import pygame
+            # 尝试初始化 8000Hz 16bit mono
+            pygame.mixer.pre_init(8000, -16, 1, 1024)
+            pygame.mixer.init()
+            self._pygame_ok = True
+            self._pygame_mixer_inited = True
+            logger.info("pygame mixer initialized: %s", pygame.mixer.get_init())
+        except Exception as e:
+            logger.warning("pygame init failed (audio playback disabled): %s", e)
+            self._pygame_ok = False
+
+    def _receive_loop(self) -> None:
+        sock = self._socket
+        if not sock:
+            return
+
+        while self._running:
+            try:
+                data, addr = sock.recvfrom(10240)
+            except socket.timeout:
+                continue
+            except Exception:
+                if self._running:
+                    logger.exception("voice receive error")
+                continue
+
+            if len(data) < 10:
+                continue
+
+            # 解析通道号 (前 2 字节, 小端序)
+            channel = struct.unpack("<H", data[0:2])[0] & 0xFFFF
+
+            # 只关心我们监控的 7 个通道
+            if channel not in CHANNEL_SECTORS:
+                # 检查对应的扇区代码
+                sector_code = CHANNEL_SECTORS.get(channel)
+                if not sector_code:
+                    continue
+
+            sector_code = CHANNEL_SECTORS.get(channel)
+            if not sector_code:
+                continue
+
+            # 记录活跃时间
+            now = time.monotonic()
+            if channel not in self._activity_window:
+                self._activity_window[channel] = []
+            self._activity_window[channel].append(now)
+            # 限制数量防内存泄漏
+            if len(self._activity_window[channel]) > 500:
+                self._activity_window[channel] = self._activity_window[channel][-250:]
+
+            # 更新状态
+            st = self._status.get(sector_code)
+            if st:
+                st.last_activity = now
+                st.bytes_received += len(data)
+
+            # 提取 ADPCM 数据 (跳过前 2 字节通道号, 去掉末尾 8 字节)
+            adpcm_data = data[2 : len(data) - 8]
+            if not adpcm_data:
+                continue
+
+            # 解码 PCM
+            if channel not in self._decoders:
+                self._decoders[channel] = ADPCMDecoder()
+            decoder = self._decoders[channel]
+            pcm_data = decoder.decode_adpcm(adpcm_data)
+
+            # 播放：如果该通道已被选中且解码成功
+            if (
+                pcm_data
+                and self._play_lock.acquire(blocking=False)
+            ):
+                try:
+                    if self._playing_channel == channel and self._pygame_ok:
+                        self._play_pcm(pcm_data)
+                finally:
+                    self._play_lock.release()
+
+    def _play_pcm(self, pcm_data: bytes) -> None:
+        """通过 pygame 播放 PCM16 数据"""
+        if not self._pygame_ok:
+            return
+        try:
+            import pygame
+            sound = pygame.mixer.Sound(buffer=pcm_data)
+            sound.set_volume(1.0)
+            pygame.mixer.find_channel(True).play(sound)
+        except Exception as e:
+            logger.debug("voice play error: %s", e)
+
+
+def _get_frequency(sector_code: str) -> str:
+    """从 SectorInfo 配置获取频率"""
+    freqs = {
+        "ZGJDTM01": "120.35",
+        "ZGJDTM02": "121.4",
+        "ZGJDTM03": "119.9",
+        "ZGJDTM04": "123.85",
+        "ZGJDTM05": "119.55",
+        "ZGJDTM06": "119.025",
+        "ZGJDTM07": "127.95",
+    }
+    return freqs.get(sector_code, "")
+
+
+def _get_sector_name(sector_code: str) -> str:
+    names = {
+        "ZGJDTM01": "HN",
+        "ZGJDTM02": "HE",
+        "ZGJDTM03": "ARW",
+        "ZGJDTM04": "AS",
+        "ZGJDTM05": "AD",
+        "ZGJDTM06": "ASL",
+        "ZGJDTM07": "ARE/AA",
+    }
+    return names.get(sector_code, "")

@@ -21,6 +21,7 @@ import json
 
 from .parser import AftnParser, split_multi_aftn
 from .receiver import UdpReceiver
+from .voice_receiver import VoiceReceiver
 from .webapp import create_app
 
 logger = logging.getLogger("aftn_web")
@@ -85,6 +86,22 @@ def main(argv: list[str] | None = None) -> int:
 
     # 停止标志 — 用于信号处理与线程协调
     stop_requested = [False]
+
+    # 语音数据接收器（可选）
+    voice_receiver: VoiceReceiver | None = None
+    if config.voice.enabled:
+        voice_receiver = VoiceReceiver(
+            multicast_group=config.voice.multicast_group,
+            port=config.voice.port,
+            interface_ip=config.voice.interface_ip,
+        )
+        voice_receiver.start()
+        logger.info(
+            "voice receiver: %s:%d (enabled)",
+            config.voice.multicast_group, config.voice.port,
+        )
+    else:
+        logger.info("voice receiver: disabled")
 
     # 雷达 CAT062 接收器（可选）
     fdr_store: FDRStore | None = None
@@ -376,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
     receiver.start()
 
     # Flask web 服务
-    app = create_app(config, db, fdr_store=fdr_store, radar_history_store=radar_history_store)
+    app = create_app(config, db, fdr_store=fdr_store, radar_history_store=radar_history_store, voice_receiver=voice_receiver)
     web_host = config.web.host
     web_port = config.web.port
 
@@ -407,6 +424,8 @@ def main(argv: list[str] | None = None) -> int:
     if config.radar.enabled:
         print(f"  雷达接收: {config.radar.multicast_group}:{config.radar.port}")
     print(f"  Web 页面: http://{web_host}:{web_port}")
+    if config.voice.enabled:
+        print(f"  语音接收: {config.voice.multicast_group}:{config.voice.port}")
     print(f"  数据库:   {config.db_path}")
     print(f"{'='*50}\n")
 

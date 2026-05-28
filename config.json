@@ -13,6 +13,12 @@
       "port": 8107,
       "interface_ip": "172.50.100.76",
       "enabled": true
+    },
+    "voice": {
+      "multicast_group": "229.34.34.34",
+      "port": 34034,
+      "interface_ip": "172.50.100.76",
+      "enabled": true
     }
   },
 

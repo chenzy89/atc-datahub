@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.18</title>
+<title>ATC AFTN WebHub v2.0.19</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -319,8 +319,8 @@ canvas#radarMap {
 <body>
 
 <div class="header">
-  <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.18</span>
+  <h1>🛩 ATC综合数据中心</h1>
+  <span class="badge">v2.0.19</span>
 </div>
 
 <div class="tabs">
@@ -328,6 +328,7 @@ canvas#radarMap {
   <button class="tab-btn" onclick="switchTab('plans')">飞行计划</button>
   <button class="tab-btn" onclick="switchTab('stats')">数据统计</button>
   <button class="tab-btn" onclick="switchTab('map')">雷达地图</button>
+  <button class="tab-btn" onclick="switchTab('voice')">语音数据</button>
 </div>
 
 <!-- ════════════════════════════════════════════════════════
@@ -498,10 +499,8 @@ canvas#radarMap {
     <div class="search-row" style="align-items:end;">
       <label><span>起始日期</span><input id="st-df" type="date"></label>
       <label><span>截止日期</span><input id="st-dt" type="date"></label>
-    </div>
-    <div class="search-actions">
-      <button class="btn btn-primary" onclick="generateStats()">🔍 查询</button>
-      <button class="btn btn-secondary" onclick="exportStatsXlsx()" style="margin-left:8px;">导出 xlsx</button>
+      <button class="btn btn-primary" onclick="generateStats()" style="margin-left:8px;">🔍 查询</button>
+      <button class="btn btn-secondary" onclick="exportStatsXlsx()" style="margin-left:8px;">导出</button>
       <span id="st-info" class="text-muted" style="margin-left:8px;"></span>
     </div>
   </div>
@@ -511,7 +510,7 @@ canvas#radarMap {
       <div id="st-summary" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;"></div>
 
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow-x:auto;margin-bottom:16px;">
-        <h3 style="font-size:14px;font-weight:600;margin:12px 12px 8px;color:var(--text-primary);">🕐 24小时流量分布（架次）</h3>
+        <h3 style="font-size:14px;font-weight:600;margin:12px 12px 8px;color:var(--text-primary);">机场24小时流量分布（架次）</h3>
         <table id="st-hourly-tbl" style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px;">
           <thead><tr id="st-hourly-head"></tr></thead>
           <tbody id="st-hourly-body"></tbody>
@@ -607,6 +606,204 @@ canvas#radarMap {
   </div>
 </div>
 
+<!-- ════════════════════════════════════════════════════════
+     Tab 5: 语音数据
+     ════════════════════════════════════════════════════════ -->
+<div class="panel" id="panel-voice">
+  <div class="voice-status-bar">
+    <span id="voiceRecvStatus" class="voice-recv-off">● 接收中...</span>
+    <span class="voice-info">组播 229.34.34.34:34034</span>
+  </div>
+
+  <div class="voice-controls">
+    <div class="voice-channels" id="voiceChannels">
+      <!-- JS 动态生成 -->
+    </div>
+
+    <div class="voice-playback">
+      <h3>播放控制</h3>
+      <div class="voice-play-row">
+        <select id="voiceChannelSelect" class="voice-select">
+          <option value="-1">— 选择通道 —</option>
+        </select>
+        <button class="btn btn-primary" id="voicePlayBtn" onclick="voiceStartPlay()">▶ 播放</button>
+        <button class="btn btn-secondary" id="voiceStopBtn" onclick="voiceStopPlay()">⏹ 停止</button>
+      </div>
+      <div class="voice-status-row">
+        <span id="voicePlayStatus" class="text-muted">未播放</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.voice-status-bar { display:flex; align-items:center; gap:12px; padding:10px 16px; background:var(--bg-card); border-bottom:1px solid var(--border); }
+.voice-status-bar .voice-recv-off { color:var(--accent-green); font-size:13px; font-weight:500; }
+.voice-status-bar .voice-info { color:var(--text-muted); font-size:12px; }
+.voice-controls { padding:16px; }
+.voice-channels { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px,1fr)); gap:10px; margin-bottom:20px; }
+.voice-channel-card { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:12px 14px; transition:.15s; cursor:pointer; }
+.voice-channel-card:hover { border-color:var(--accent); background:var(--bg-hover); }
+.voice-channel-card.selected { border-color:var(--accent); box-shadow:0 0 8px rgba(88,166,255,.3); }
+.voice-channel-card .vc-top { display:flex; justify-content:space-between; align-items:flex-start; }
+.voice-channel-card .vc-name { font-weight:600; font-size:14px; color:var(--text-primary); }
+.voice-channel-card .vc-sector { font-size:12px; color:var(--text-secondary); margin-top:2px; }
+.voice-channel-card .vc-freq { font-size:12px; color:var(--accent-orange); margin-top:2px; }
+.voice-channel-card .vc-ch { font-size:11px; color:var(--text-muted); margin-top:2px; }
+.voice-channel-card .vc-dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; transition:.3s; }
+.voice-channel-card .vc-dot.inactive { background:#2d333b; }
+.voice-channel-card .vc-dot.active { background:var(--accent-green); box-shadow:0 0 10px rgba(63,185,80,.6); animation:pulse-dot 1s ease-in-out infinite; }
+.voice-channel-card .vc-stats { font-size:11px; color:var(--text-muted); margin-top:6px; }
+@keyframes pulse-dot {
+  0%, 100% { opacity:1; transform:scale(1); }
+  50% { opacity:.6; transform:scale(1.3); }
+}
+.voice-playback { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:16px; }
+.voice-playback h3 { font-size:14px; font-weight:600; margin-bottom:12px; color:var(--text-primary); }
+.voice-play-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.voice-select { background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:6px; padding:8px 12px; font-size:14px; min-width:180px; }
+.voice-status-row { margin-top:10px; font-size:13px; }
+</style>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// 语音数据 Tab
+// ═══════════════════════════════════════════════════════
+
+var voicePollTimer = null;
+
+function voiceInit() {
+  voicePollStatus();
+  if (voicePollTimer) clearInterval(voicePollTimer);
+  voicePollTimer = setInterval(voicePollStatus, 2000);
+}
+
+function voicePollStatus() {
+  fetch('/api/voice/status')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.enabled) {
+        document.getElementById('voiceChannels').innerHTML =
+          '<div style="padding:40px;text-align:center;color:var(--text-muted);grid-column:1/-1;">语音数据接收未启用</div>';
+        document.getElementById('voiceRecvStatus').textContent = '● 未启用';
+        document.getElementById('voiceRecvStatus').style.color = 'var(--accent-red)';
+        return;
+      }
+      document.getElementById('voiceRecvStatus').textContent = '● 接收中';
+      document.getElementById('voiceRecvStatus').style.color = 'var(--accent-green)';
+      voiceRenderChannels(data.channels);
+      voiceUpdateSelect(data.channels, data.playing);
+      voiceUpdatePlayStatus(data.playing);
+    })
+    .catch(function() {
+      var el = document.getElementById('voiceRecvStatus');
+      if (el) { el.textContent = '× 连接错误'; el.style.color = 'var(--accent-red)'; }
+    });
+}
+
+function voiceRenderChannels(channels) {
+  var container = document.getElementById('voiceChannels');
+  if (!container || !channels || !channels.length) return;
+  var order = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
+  var sorted = order.map(function(code) { return channels.find(function(c) { return c.sector_code === code; }); }).filter(Boolean);
+
+  var html = '';
+  for (var i = 0; i < sorted.length; i++) {
+    var c = sorted[i];
+    var dotClass = c.active ? 'active' : 'inactive';
+    var selClass = c.selected ? 'selected' : '';
+    var bytesStr = c.bytes_received > 1024
+      ? (c.bytes_received / 1024).toFixed(1) + ' KB'
+      : c.bytes_received + ' B';
+    html += '<div class="voice-channel-card ' + selClass + '" onclick="voiceSelectFromCard(' + c.channel_id + ')">'
+      + '<div class="vc-top">'
+      + '  <div><div class="vc-name">' + c.sector_code + '</div>'
+      + '    <div class="vc-sector">' + c.sector_name + '</div>'
+      + '  </div>'
+      + '  <div class="vc-dot ' + dotClass + '" id="vdot-' + c.channel_id + '"></div>'
+      + '</div>'
+      + '<div class="vc-freq">' + c.frequency + ' MHz</div>'
+      + '<div class="vc-ch">内话通道 #' + c.channel_id + '</div>'
+      + '<div class="vc-stats">已接收 ' + bytesStr + '</div>'
+      + '</div>';
+  }
+  container.innerHTML = html;
+}
+
+function voiceUpdateSelect(channels, playing) {
+  var sel = document.getElementById('voiceChannelSelect');
+  if (!sel || !channels) return;
+  sel.innerHTML = '<option value="-1">— 选择通道 —</option>';
+  var order = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
+  var sorted = order.map(function(code) { return channels.find(function(c) { return c.sector_code === code; }); }).filter(Boolean);
+  for (var i = 0; i < sorted.length; i++) {
+    var c = sorted[i];
+    var opt = document.createElement('option');
+    opt.value = c.channel_id;
+    opt.textContent = c.sector_code + ' (' + c.sector_name + ') CH' + c.channel_id + ' ' + c.frequency + 'MHz';
+    if (c.channel_id === playing) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+function voiceUpdatePlayStatus(playing) {
+  var el = document.getElementById('voicePlayStatus');
+  if (!el) return;
+  if (playing && playing > 0) {
+    var info = '';
+    for (var code in {'ZGJDTM01':1,'ZGJDTM02':1,'ZGJDTM03':1,'ZGJDTM04':1,'ZGJDTM05':1,'ZGJDTM06':1,'ZGJDTM07':1}) {
+      if ({'38':'ZGJDTM01','42':'ZGJDTM02','50':'ZGJDTM03','264':'ZGJDTM04','46':'ZGJDTM05','32':'ZGJDTM06','54':'ZGJDTM07'}[playing] === code) {
+        info = code + ' (CH' + playing + ')';
+        break;
+      }
+    }
+    el.textContent = '▶ 正在播放: ' + info;
+    el.style.color = 'var(--accent-green)';
+  } else {
+    el.textContent = '未播放';
+    el.style.color = 'var(--text-muted)';
+  }
+}
+
+function voiceSelectFromCard(channelId) {
+  document.getElementById('voiceChannelSelect').value = channelId;
+  voiceStartPlay();
+}
+
+function voiceStartPlay() {
+  var sel = document.getElementById('voiceChannelSelect');
+  var ch = parseInt(sel.value) || -1;
+  if (ch < 0) return;
+  fetch('/api/voice/select', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({channel: ch}),
+  }).catch(function(){});
+  voicePollStatus();
+}
+
+function voiceStopPlay() {
+  fetch('/api/voice/stop', {method:'POST'}).catch(function(){});
+  document.getElementById('voiceChannelSelect').value = '-1';
+  voicePollStatus();
+}
+
+// 当切换到 voice tab 时重新初始化
+var _origSwitchTab = switchTab;
+switchTab = function(n) {
+  _origSwitchTab(n);
+  if (n === 'voice') {
+    if (voicePollTimer) clearInterval(voicePollTimer);
+    voicePollTimer = setInterval(voicePollStatus, 2000);
+    voicePollStatus();
+  } else {
+    if (voicePollTimer) { clearInterval(voicePollTimer); voicePollTimer = null; }
+  }
+};
+
+voiceInit();
+</script>
+
 <!-- ── AFTN 报文详情弹窗 ── -->
 <div id="modal-msg" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:transparent;z-index:1100;align-items:center;justify-content:center;" onclick="if(event.target===this)closeMsg()">
   <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;max-width:900px;width:92%;max-height:85vh;overflow-y:auto;padding:20px;">
@@ -668,7 +865,7 @@ function switchTab(n) {
   document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
   document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
   var btns = document.querySelectorAll('.tab-btn');
-  var idx = {'msgs':0, 'plans':1, 'stats':2, 'map':3}[n] || 0;
+  var idx = {'msgs':0, 'plans':1, 'stats':2, 'map':3, 'voice':4}[n] || 0;
   btns[idx].classList.add('active');
   document.getElementById('panel-'+n).classList.add('active');
 }
@@ -1183,13 +1380,13 @@ function renderStats(d, aps, df, dt) {
 // ── 终端扇区流量表渲染 ──
 function renderSectorTraffic(sectorData, days) {
   var terminalNames = {
-    'ZGJDTM01': 'TM01 HN',
-    'ZGJDTM02': 'TM02 HE',
-    'ZGJDTM03': 'TM03 ARW',
-    'ZGJDTM04': 'TM04 AS',
-    'ZGJDTM05': 'TM05 AD',
-    'ZGJDTM06': 'TM06 ASL',
-    'ZGJDTM07': 'TM07 ARE/AA',
+    'ZGJDTM01': 'HN',
+    'ZGJDTM02': 'HE',
+    'ZGJDTM03': 'ARW',
+    'ZGJDTM04': 'AS',
+    'ZGJDTM05': 'AD',
+    'ZGJDTM06': 'ASL',
+    'ZGJDTM07': 'ARE/AA',
   };
   var sectorOrder = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
 
@@ -1197,7 +1394,9 @@ function renderSectorTraffic(sectorData, days) {
   for (var h = 0; h < 24; h++) {
     head += '<th style="padding:6px 4px;text-align:center;border-bottom:2px solid var(--border);">' + h + '时</th>';
   }
-  head += '<th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--border);background:#1c2333;color:var(--text-secondary);">总架次</th></tr>';
+  head += '<th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--border);background:#1c2333;color:var(--text-secondary);">总架次</th>' +
+    '<th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--border);background:#1c2333;color:var(--text-secondary);">峰值</th>' +
+    '<th style="padding:6px 8px;text-align:center;border-bottom:2px solid var(--border);background:#1c2333;color:var(--text-secondary);">峰时</th></tr>';
   document.getElementById('st-sector-head').innerHTML = head;
 
   var bodyEl = document.getElementById('st-sector-body');
@@ -1218,12 +1417,20 @@ function renderSectorTraffic(sectorData, days) {
     }
     if (total > 0) { found = true; }
     var label = terminalNames[code] || code;
-    var row = '<tr><td style="padding:5px 8px;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:500;position:sticky;left:0;z-index:1;">' + label + '</td>' + cells + '<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:600;">' + Math.round(total / days) + '</td></tr>';
+    // 峰值
+    var peakVal = 0, peakHour = -1;
+    for (var h = 0; h < 24; h++) {
+      var hv = Math.round(data[h] / days);
+      if (hv > peakVal) { peakVal = hv; peakHour = h; }
+    }
+    var peakText = peakHour >= 0 ? peakVal : '-';
+    var peakHourText = peakHour >= 0 ? peakHour + '时' : '-';
+    var row = '<tr><td style="padding:5px 8px;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:500;position:sticky;left:0;z-index:1;">' + label + '</td>' + cells + '<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:600;">' + Math.round(total / days) + '</td>' + '<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);color:var(--accent);font-weight:600;">' + peakText + '</td>' + '<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);color:var(--accent);font-weight:600;">' + peakHourText + '</td></tr>';
     bodyEl.innerHTML += row;
   });
 
   if (!found) {
-    bodyEl.innerHTML = '<tr><td colspan="26" style="padding:16px;text-align:center;color:var(--text-muted);">暂无扇区数据（雷达数据累积中）</td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="28" style="padding:16px;text-align:center;color:var(--text-muted);">暂无扇区数据（雷达数据累积中）</td></tr>';
   }
 }
 
