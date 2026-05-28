@@ -998,12 +998,13 @@ class Database:
 
         # ── 出港统计 ──
         dep_rows = conn.execute(
-            f"""SELECT atd, handover_pt FROM flight_plans
+            f"""SELECT atd, handover_pt, terminal_flight_time FROM flight_plans
                WHERE adep IN ({placeholders})
                  AND atd IS NOT NULL AND atd >= ? AND atd <= ?""",
             [*airports, date_from, date_to_end],
         ).fetchall()
 
+        dep_terminal_sec = 0
         for row in dep_rows:
             h = _hour_from_dt_str(row["atd"])
             if h is not None:
@@ -1012,15 +1013,18 @@ class Database:
             hp = row["handover_pt"] or ""
             if hp:
                 result["dep_handover"][hp] = result["dep_handover"].get(hp, 0) + 1
+            dep_terminal_sec += row["terminal_flight_time"] or 0
+        result["dep_terminal_seconds"] = dep_terminal_sec
 
         # ── 进港统计 ──
         arr_rows = conn.execute(
-            f"""SELECT ata, handover_pt FROM flight_plans
+            f"""SELECT ata, handover_pt, terminal_flight_time FROM flight_plans
                WHERE adest IN ({placeholders})
                  AND ata IS NOT NULL AND ata >= ? AND ata <= ?""",
             [*airports, date_from, date_to_end],
         ).fetchall()
 
+        arr_terminal_sec = 0
         for row in arr_rows:
             h = _hour_from_dt_str(row["ata"])
             if h is not None:
@@ -1029,6 +1033,8 @@ class Database:
             hp = row["handover_pt"] or ""
             if hp:
                 result["arr_handover"][hp] = result["arr_handover"].get(hp, 0) + 1
+            arr_terminal_sec += row["terminal_flight_time"] or 0
+        result["arr_terminal_seconds"] = arr_terminal_sec
 
         # ── 天数 ──
         try:
@@ -1053,6 +1059,45 @@ class Database:
         result["peak_hour"] = peak_h
         result["peak_hour_dep"] = peak_dep
         result["peak_hour_arr"] = peak_arr
+
+        # ── 飞行程序统计 ──
+        # 进港 STAR
+        arr_proc_rows = conn.execute(
+            f"""SELECT flight_procedure, COUNT(*) as cnt,
+                        COALESCE(SUM(terminal_flight_time), 0) as total_sec
+                FROM flight_plans
+                WHERE adest IN ({placeholders})
+                  AND flight_procedure IS NOT NULL AND flight_procedure != ''
+                  AND flight_procedure != 'ERROR'
+                  AND ata IS NOT NULL AND ata >= ? AND ata <= ?
+                GROUP BY flight_procedure
+                ORDER BY cnt DESC""",
+            [*airports, date_from, date_to_end],
+        ).fetchall()
+        result["arr_procedures"] = [
+            {"name": r["flight_procedure"], "count": r["cnt"],
+             "total_seconds": r["total_sec"]}
+            for r in arr_proc_rows
+        ]
+
+        # 出港 SID
+        dep_proc_rows = conn.execute(
+            f"""SELECT flight_procedure, COUNT(*) as cnt,
+                        COALESCE(SUM(terminal_flight_time), 0) as total_sec
+                FROM flight_plans
+                WHERE adep IN ({placeholders})
+                  AND flight_procedure IS NOT NULL AND flight_procedure != ''
+                  AND flight_procedure != 'ERROR'
+                  AND atd IS NOT NULL AND atd >= ? AND atd <= ?
+                GROUP BY flight_procedure
+                ORDER BY cnt DESC""",
+            [*airports, date_from, date_to_end],
+        ).fetchall()
+        result["dep_procedures"] = [
+            {"name": r["flight_procedure"], "count": r["cnt"],
+             "total_seconds": r["total_sec"]}
+            for r in dep_proc_rows
+        ]
 
         # ── 高峰日 ──
         # 按日聚合 atd/ata

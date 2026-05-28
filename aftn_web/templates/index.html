@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.0.12</title>
+<title>ATC AFTN WebHub v2.0.13</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC AFTN WebHub</h1>
-  <span class="badge">v2.0.12</span>
+  <span class="badge">v2.0.13</span>
 </div>
 
 <div class="tabs">
@@ -524,12 +524,24 @@ canvas#radarMap {
             <thead><tr style="background:#1c2333;"><th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">移交点</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">总架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">占比</th></tr></thead>
             <tbody id="st-arr-tbl"></tbody>
           </table>
+
+          <h3 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">进港飞行程序 (STAR)</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead><tr style="background:#1c2333;"><th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">程序</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">总架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均飞行时长</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">时长占比</th></tr></thead>
+            <tbody id="st-arr-proc-tbl"></tbody>
+          </table>
         </div>
         <div style="flex:1;min-width:300px;">
           <h3 style="font-size:14px;font-weight:600;margin-bottom:8px;color:var(--text-primary);">出港移交点（日均架次）</h3>
           <table style="width:100%;border-collapse:collapse;font-size:13px;">
             <thead><tr style="background:#1c2333;"><th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">移交点</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">总架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">占比</th></tr></thead>
             <tbody id="st-dep-tbl"></tbody>
+          </table>
+
+          <h3 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">出港飞行程序 (SID)</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead><tr style="background:#1c2333;"><th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">程序</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">总架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均架次</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">日均飞行时长</th><th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--text-secondary);border-bottom:2px solid var(--border);">时长占比</th></tr></thead>
+            <tbody id="st-dep-proc-tbl"></tbody>
           </table>
         </div>
       </div>
@@ -1039,8 +1051,22 @@ function generateStats() {
 
 function renderStats(d, aps, df, dt) {
   var days = d.days || 1;
+  function fmtDuration(sec) {
+    if (!sec || sec <= 0) return '0m';
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = sec % 60;
+    if (h > 0) return h + 'h' + String(m).padStart(2,'0') + 'm' + String(s).padStart(2,'0') + 's';
+    if (m > 0) return m + 'm' + String(s).padStart(2,'0') + 's';
+    return s + 's';
+  }
+
   var depAvg = (d.dep_count / days).toFixed(0);
   var arrAvg = (d.arr_count / days).toFixed(0);
+  var depTermSec = d.dep_terminal_seconds || 0;
+  var arrTermSec = d.arr_terminal_seconds || 0;
+  var depTermAvg = Math.round(depTermSec / days);
+  var arrTermAvg = Math.round(arrTermSec / days);
 
   var peakHour = d.peak_hour || 0;
   var peakDep = d.peak_hour_dep || 0;
@@ -1055,6 +1081,8 @@ function renderStats(d, aps, df, dt) {
   document.getElementById('st-summary').innerHTML =
     '<div class="stat-card"><div class="num">' + depAvg + '</div><div class="label">日均出港</div></div>' +
     '<div class="stat-card"><div class="num">' + arrAvg + '</div><div class="label">日均进港</div></div>' +
+    '<div class="stat-card"><div class="num">' + fmtDuration(depTermSec) + '</div><div class="label">出港总飞行时长</div></div>' +
+    '<div class="stat-card"><div class="num">' + fmtDuration(arrTermSec) + '</div><div class="label">进港总飞行时长</div></div>' +
     '<div class="stat-card"><div class="num">' + peakTotal + '</div><div class="label">高峰小时架次</div></div>' +
     '<div class="stat-card"><div class="num">' + peakDayStr + ' ' + String(peakHour).padStart(2,'0') + '时</div><div class="label">高峰时段</div></div>' +
     '<div class="stat-card"><div class="num">' + peakDayCount + '</div><div class="label">高峰日架次</div></div>' +
@@ -1111,10 +1139,32 @@ function renderStats(d, aps, df, dt) {
     return rows;
   }
 
+  function buildProcedureRows(procedures, totalCount, totalSeconds) {
+    if (!procedures || procedures.length === 0) {
+      return '<tr><td colspan="5" style="padding:12px;text-align:center;color:var(--text-muted);">暂无数据</td></tr>';
+    }
+    var rows = '';
+    procedures.forEach(function(p) {
+      var dailyCount = (p.count / days).toFixed(1);
+      var avgSec = Math.round(p.total_seconds / days);
+      var pct = totalCount > 0 ? (p.total_seconds / totalSeconds * 100).toFixed(1) + '%' : '-';
+      rows += '<tr>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid var(--border);color:var(--text-primary);font-weight:500;">' + esc(p.name) + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + p.count + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + dailyCount + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + fmtDuration(avgSec) + '</td>' +
+        '<td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + pct + '</td>' +
+      '</tr>';
+    });
+    return rows;
+  }
+
   var arrTotal = d.arr_count || 0;
   var depTotal = d.dep_count || 0;
   document.getElementById('st-arr-tbl').innerHTML = buildHandoverRows(d.arr_handover, arrTotal);
   document.getElementById('st-dep-tbl').innerHTML = buildHandoverRows(d.dep_handover, depTotal);
+  document.getElementById('st-arr-proc-tbl').innerHTML = buildProcedureRows(d.arr_procedures, arrTotal, arrTermSec);
+  document.getElementById('st-dep-proc-tbl').innerHTML = buildProcedureRows(d.dep_procedures, depTotal, depTermSec);
 }
 
 // 初始化日期选择
