@@ -647,6 +647,21 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             return jsonify({"error": "invalid channel"}), 400
         return jsonify({"ok": True, "channel": channel})
 
+    _voice_config = {
+        "retention_days": config.voice_data.retention_days,
+        "flight_count_max": config.voice_data.flight_count_max,
+        "save_dir": str(config.voice_data.save_dir or ""),
+    } if hasattr(config, "voice_data") else {
+        "retention_days": 30,
+        "flight_count_max": 18,
+        "save_dir": "",
+    }
+
+    @app.route("/api/voice/config")
+    def api_voice_config():
+        """返回语音配置参数"""
+        return jsonify(_voice_config)
+
     @app.route("/api/voice/duration")
     def api_voice_duration():
         """返回指定通道在指定日期的 144 个通话时长 + 扇区飞行架次"""
@@ -680,7 +695,77 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             "terminal_code": terminal_code,
             "duration": duration_data,
             "flight_count": flight_data,
+            "flight_count_max": _voice_config["flight_count_max"],
         })
+
+    @app.route("/api/voice/recordings")
+    def api_voice_recordings():
+        """返回指定日期和通道的录音文件列表"""
+        if voice_receiver is None:
+            return jsonify({"error": "voice not enabled"}), 400
+        date_str = request.args.get("date", "")
+        channel_str = request.args.get("channel", "")
+        if not date_str or not channel_str:
+            return jsonify({"error": "date and channel required"}), 400
+        try:
+            channel_id = int(channel_str)
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid channel"}), 400
+
+        recordings = voice_receiver.list_recordings(date_str, channel_id)
+        total_size = sum(r["size"] for r in recordings)
+        return jsonify({
+            "date": date_str,
+            "channel": channel_id,
+            "recordings": recordings,
+            "count": len(recordings),
+            "total_size": total_size,
+            "total_size_str": voice_receiver._format_size(total_size),
+        })
+
+    @app.route("/api/voice/play_file")
+    def api_voice_play_file():
+        """返回指定日期/通道/时间范围的录音，解码为 WAV 流"""
+        if voice_receiver is None:
+            return jsonify({"error": "voice not enabled"}), 400
+        date_str = request.args.get("date", "")
+        channel_str = request.args.get("channel", "")
+        from_time = request.args.get("from", "")
+        to_time = request.args.get("to", "")
+        if not date_str or not channel_str:
+            return jsonify({"error": "date and channel required"}), 400
+        try:
+            channel_id = int(channel_str)
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid channel"}), 400
+
+        wav_data = voice_receiver.get_recording_data(
+            date_str, channel_id, from_time=from_time, to_time=to_time
+        )
+        if not wav_data:
+            return jsonify({"error": "no recordings found"}), 404
+
+        from io import BytesIO
+        buf = BytesIO(wav_data)
+        return send_file(
+            buf,
+            mimetype="audio/wav",
+            as_attachment=False,
+            download_name=f"voice_{date_str}_ch{channel_id}.wav",
+        )
+
+    @app.route("/api/voice/dates")
+    def api_voice_dates():
+        """返回指定通道下有录音的日期列表"""
+        if voice_receiver is None:
+            return jsonify({"error": "voice not enabled"}), 400
+        channel_str = request.args.get("channel", "")
+        try:
+            channel_id = int(channel_str)
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid channel"}), 400
+        dates = voice_receiver.list_dates(channel_id)
+        return jsonify({"dates": dates})
 
     @app.route("/api/voice/stop", methods=["POST"])
     def api_voice_stop():

@@ -29,6 +29,14 @@ class WebConfig:
 
 
 @dataclass
+class VoiceDataConfig:
+    """语音数据存储配置"""
+    save_dir: str = ""
+    retention_days: int = 30                 # VST：保存语音的天数
+    flight_count_max: int = 18               # 通话时长统计图右Y轴架次最大值
+
+
+@dataclass
 class RadarEndpointConfig:
     multicast_group: str = "228.28.28.28"
     port: int = 8107
@@ -50,6 +58,7 @@ class AppConfig:
     aftn: EndpointConfig = field(default_factory=EndpointConfig)
     radar: RadarEndpointConfig = field(default_factory=RadarEndpointConfig)
     voice: VoiceEndpointConfig = field(default_factory=VoiceEndpointConfig)
+    voice_data: VoiceDataConfig = field(default_factory=VoiceDataConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     web: WebConfig = field(default_factory=WebConfig)
     config_file: Path | None = None
@@ -73,6 +82,7 @@ def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
     net = raw.get("network", {}).get("aftn", {})
     radar_raw = raw.get("network", {}).get("radar", {})
     voice_raw = raw.get("network", {}).get("voice", {})
+    voice_data_raw = raw.get("voice_data", {})
     db = raw.get("database", {})
     web = raw.get("web", {})
 
@@ -95,6 +105,11 @@ def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
             port=int(voice_raw.get("port", 34034)),
             interface_ip=voice_raw.get("interface_ip", "0.0.0.0"),
             enabled=bool(voice_raw.get("enabled", False)),
+        ),
+        voice_data=VoiceDataConfig(
+            save_dir=voice_data_raw.get("save_dir", ""),
+            retention_days=int(voice_data_raw.get("retention_days", 30)),
+            flight_count_max=int(voice_data_raw.get("flight_count_max", 18)),
         ),
         database=DatabaseConfig(
             path=db.get("path", "./data/aftn.db"),

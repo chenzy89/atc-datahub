@@ -26,6 +26,11 @@
     "path": "./data/aftn.db"
   },
 
+  "voice_data": {
+    "retention_days": 30,
+    "flight_count_max": 18
+  },
+
   "web": {
     "host": "0.0.0.0",
     "port": 5000,

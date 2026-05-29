@@ -1,4 +1,4 @@
-"""语音数据接收器 — 组播 ADPCM 音频接收与播放"""
+"""语音数据接收器 — 组播 ADPCM 音频接收、播放与文件存储"""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ import struct
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 
 # 尝试从 online_auio 虚拟环境导入 pygame
 _VENV_PYGAME = "/home/share/online_auio/venv/lib/python3.8/site-packages"
@@ -65,6 +66,7 @@ class ChannelStatus:
     sector_name: str           # 扇区名如 HN
     last_activity: float = 0.0 # time.monotonic() 最后收到数据时间
     bytes_received: int = 0    # 累计接收字节数
+    bytes_saved: int = 0       # 已保存到文件的字节数
     active: bool = False       # 最近 3 秒是否有数据
     selected: bool = False     # 是否被选中播放
 
@@ -76,6 +78,7 @@ class ChannelStatus:
             "sector_name": self.sector_name,
             "last_activity": self.last_activity,
             "bytes_received": self.bytes_received,
+            "bytes_saved": self.bytes_saved,
             "active": self.active,
             "selected": self.selected,
         }
@@ -146,8 +149,54 @@ class ADPCMDecoder:
         return self.decoder_predicted
 
 
+def _get_frequency(sector_code: str) -> str:
+    """从 SectorInfo 配置获取频率"""
+    freqs = {
+        "ZGJDTM01": "120.35",
+        "ZGJDTM02": "121.4",
+        "ZGJDTM03": "119.9",
+        "ZGJDTM04": "123.85",
+        "ZGJDTM05": "119.55",
+        "ZGJDTM06": "119.025",
+        "ZGJDTM07": "127.95",
+    }
+    return freqs.get(sector_code, "")
+
+
+def _get_sector_name(sector_code: str) -> str:
+    names = {
+        "ZGJDTM01": "HN",
+        "ZGJDTM02": "HE",
+        "ZGJDTM03": "ARW",
+        "ZGJDTM04": "AS",
+        "ZGJDTM05": "AD",
+        "ZGJDTM06": "ASL",
+        "ZGJDTM07": "ARE/AA",
+    }
+    return names.get(sector_code, "")
+
+
+def make_wav(pcm16_data: bytes, sample_rate: int = 8000) -> bytes:
+    """将 PCM16 数据包装为 WAV 文件"""
+    num_channels = 1
+    bits_per_sample = 16
+    byte_rate = sample_rate * num_channels * bits_per_sample // 8
+    block_align = num_channels * bits_per_sample // 8
+    data_size = len(pcm16_data)
+
+    header = struct.pack(
+        '<4sI4s4sIHHIIHH4sI',
+        b'RIFF', 36 + data_size, b'WAVE',
+        b'fmt ', 16, 1, num_channels,
+        sample_rate, byte_rate, block_align,
+        bits_per_sample,
+        b'data', data_size,
+    )
+    return header + pcm16_data
+
+
 class VoiceReceiver:
-    """语音数据接收器 — 组播接收、解码、播放"""
+    """语音数据接收器 — 组播接收、解码、播放、文件存储"""
 
     def __init__(
         self,
@@ -156,6 +205,8 @@ class VoiceReceiver:
         interface_ip: str,
         sector_channels: dict[str, int] | None = None,
         db: Any = None,
+        save_dir: str = "",
+        retention_days: int = 30,
     ):
         self.multicast_group = multicast_group
         self.port = port
@@ -164,6 +215,8 @@ class VoiceReceiver:
         self._socket: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self._db = db
+        self._save_dir = save_dir
+        self._retention_days = retention_days
 
         # 每个通道一个解码器（ADPCM 解码有状态）
         self._decoders: dict[int, ADPCMDecoder] = {}
@@ -189,20 +242,37 @@ class VoiceReceiver:
         self._activity_window: dict[int, list[float]] = {}
 
         # ── 通话时长统计 ──
-        # _duration_buckets[date_str][channel_id] = [0.0]*144  (10-min intervals)
         self._duration_buckets: dict[str, dict[int, list[float]]] = {}
-        # 突发通话起始时间 (wall clock time.time)
         self._burst_start: dict[int, float] = {}
-        # 上次收到数据的时间 (用于检测通话结束)
         self._last_data_time: dict[int, float] = {}
         self._silence_threshold = 3.0  # 3 秒无数据视为通话结束
         self._today_date = datetime.now().strftime("%Y-%m-%d")
-        # 定期清理线程
         self._duration_lock = threading.Lock()
         self._db_flush_counter = 0
 
+        # ── 语音文件存储 ──
+        # 当前突发缓冲：channel_id -> bytearray(adpcm_data)
+        self._burst_buffers: dict[int, bytearray] = {}
+        # 当前突发起始时间戳：channel_id -> datetime
+        self._burst_start_ts: dict[int, datetime] = {}
+        # 当前突发包计数（用于生成文件名序号）
+        self._burst_seq: dict[int, int] = {}
+        # 每日每个通道已生成的文件数
+        self._daily_file_count: dict[str, dict[int, int]] = {}
+        self._file_lock = threading.Lock()
+        # 最后一次清理检查的日期
+        self._last_cleanup_date = ""
+
         # 从 DB 恢复已有数据
         self._load_from_db()
+
+    # ── 公共属性 ──────────────────────────────────────
+
+    @property
+    def retention_days(self) -> int:
+        return self._retention_days
+
+    # ── 生命周期 ──────────────────────────────────────
 
     def start(self) -> None:
         if self._running:
@@ -221,7 +291,6 @@ class VoiceReceiver:
         try:
             import sys
             group_bytes = socket.inet_aton(self.multicast_group)
-            # 用 interface_ip 绑定
             if self.interface_ip and self.interface_ip != "0.0.0.0":
                 if sys.platform == "linux":
                     self._socket.setsockopt(
@@ -254,6 +323,8 @@ class VoiceReceiver:
 
     def stop(self) -> None:
         self._running = False
+        # 保存所有未写入的突发缓冲
+        self._flush_all_bursts()
         if self._socket:
             try:
                 self._socket.close()
@@ -278,11 +349,12 @@ class VoiceReceiver:
             ch_id = st.channel_id
             # 更新 active 状态：3 秒内有数据就标记为活跃
             recent = self._activity_window.get(ch_id, [])
-            # 清理超过 3 秒的时间戳
             recent = [t for t in recent if now - t < 3.0]
             self._activity_window[ch_id] = recent
             st.active = len(recent) > 0
             st.selected = (self._playing_channel == ch_id)
+            # 更新已保存字节数
+            st.bytes_saved = self._get_channel_bytes_saved(ch_id)
             result.append(st.to_dict())
         self._flush_stale_bursts()
         return result
@@ -304,7 +376,6 @@ class VoiceReceiver:
 
         with self._play_lock:
             if channel_id == -1:
-                # 停止播放
                 if self._pygame_mixer_inited:
                     try:
                         import pygame
@@ -321,12 +392,149 @@ class VoiceReceiver:
     def is_running(self) -> bool:
         return self._running
 
+    # ── 语音文件 API ──────────────────────────────────────
+
+    def get_channel_save_dir(self, channel_id: int) -> str:
+        """返回指定通道的语音文件保存目录"""
+        if not self._save_dir:
+            return ""
+        return str(Path(self._save_dir) / str(channel_id))
+
+    def get_save_dir(self) -> str:
+        return self._save_dir
+
+    def list_recordings(self, date_str: str, channel_id: int) -> list[dict]:
+        """列出指定日期和通道的所有录音文件"""
+        recordings = []
+        date_dir = Path(self._save_dir) / str(channel_id) / date_str
+        if not date_dir.is_dir():
+            return recordings
+
+        try:
+            for fpath in sorted(date_dir.iterdir()):
+                if fpath.suffix == ".adpcm" and fpath.is_file():
+                    # 文件名格式: HHMMSS_fff_NNN.adpcm
+                    # 其中 HHMMSS_fff = 突发开始时间, NNN = 序号
+                    name = fpath.stem
+                    parts = name.split("_")
+                    start_ts = parts[0] if parts else "000000"
+                    seq_num = parts[2] if len(parts) >= 3 else parts[1] if len(parts) >= 2 else "000"
+                    file_size = fpath.stat().st_size
+                    # ADPCM 时长 = 文件大小 / 块大小 * 255 / 8 * 1000 ms... 近似
+                    # 每个256字节块产生255个字节PCM（128个16bit样本），8000Hz
+                    # 每个块时间 = 128/8000 = 16ms
+                    num_blocks = file_size // BLOCK_SIZE
+                    dur_seconds = round(num_blocks * 128 / 8000, 1)
+
+                    recordings.append({
+                        "filename": fpath.name,
+                        "start_time": start_ts,
+                        "size": file_size,
+                        "size_str": self._format_size(file_size),
+                        "duration": dur_seconds,
+                    })
+        except OSError:
+            pass
+        return recordings
+
+    def list_dates(self, channel_id: int) -> list[str]:
+        """列出指定通道下有哪些日期有录音文件"""
+        ch_dir = Path(self._save_dir) / str(channel_id)
+        if not ch_dir.is_dir():
+            return []
+        dates = []
+        try:
+            for entry in sorted(ch_dir.iterdir()):
+                if entry.is_dir():
+                    # 验证是 YYYY-MM-DD 格式
+                    name = entry.name
+                    parts = name.split("-")
+                    if len(parts) == 3 and all(p.isdigit() for p in parts):
+                        dates.append(name)
+        except OSError:
+            pass
+        return dates
+
+    def get_recording_data(self, date_str: str, channel_id: int,
+                            from_time: str = "", to_time: str = "") -> bytes:
+        """获取指定时间范围的录音 ADPCM 数据，解码为 WAV PCM16"""
+        recordings = self.list_recordings(date_str, channel_id)
+
+        # 过滤时间范围（文件名格式: HHMMSS_fff_NNN.adpcm → 取 HHMMSS）
+        if from_time:
+            from_key = from_time.replace(":", "")[:6]
+        else:
+            from_key = ""
+        if to_time:
+            to_key = to_time.replace(":", "")[:6]
+        else:
+            to_key = "235959"
+
+        selected = []
+        for rec in recordings:
+            if from_key and rec["start_time"] < from_key:
+                continue
+            if to_key and rec["start_time"] > to_key:
+                continue
+            selected.append(rec)
+
+        if not selected:
+            return b""
+
+        # 读取所有选中文件的 ADPCM 数据，拼接后解码为 PCM16
+        all_adpcm = bytearray()
+        for rec in selected:
+            fpath = Path(self._save_dir) / str(channel_id) / date_str / rec["filename"]
+            try:
+                data = fpath.read_bytes()
+                all_adpcm.extend(data)
+            except OSError:
+                pass
+
+        if not all_adpcm:
+            return b""
+
+        # 解码为 PCM16 → WAV
+        decoder = ADPCMDecoder()
+        pcm_data = decoder.decode_adpcm(bytes(all_adpcm))
+        wav_data = make_wav(pcm_data, sample_rate=8000)
+        return wav_data
+
+    def get_date_size(self, date_str: str, channel_id: int) -> int:
+        """返回指定日期指定通道的录音文件总大小"""
+        recordings = self.list_recordings(date_str, channel_id)
+        return sum(r["size"] for r in recordings)
+
+    def _get_channel_bytes_saved(self, channel_id: int) -> int:
+        """获取指定通道累计保存的字节数"""
+        if not self._save_dir:
+            return 0
+        total = 0
+        ch_dir = Path(self._save_dir) / str(channel_id)
+        if not ch_dir.is_dir():
+            return 0
+        try:
+            # 从内存中记录的突发文件累计
+            with self._file_lock:
+                for date_key, count_map in self._daily_file_count.items():
+                    total += sum(count_map.values()) * 1024  # approximate
+        except Exception:
+            pass
+        return total
+
+    def _format_size(self, size: int) -> str:
+        if size < 1024:
+            return f"{size} B"
+        elif size < 1024 * 1024:
+            return f"{size / 1024:.1f} KB"
+        else:
+            return f"{size / 1024 / 1024:.1f} MB"
+
     # ── 内部方法 ──────────────────────────────────────────
 
     def _init_pygame(self) -> None:
         try:
             import pygame
-            # 尝试初始化 8000Hz 16bit mono
             pygame.mixer.pre_init(8000, -16, 1, 1024)
             pygame.mixer.init()
             self._pygame_ok = True
@@ -345,6 +553,8 @@ class VoiceReceiver:
             try:
                 data, addr = sock.recvfrom(10240)
             except socket.timeout:
+                # 心跳：定期做清理
+                self._periodic_housekeeping()
                 continue
             except Exception:
                 if self._running:
@@ -358,12 +568,6 @@ class VoiceReceiver:
             channel = struct.unpack("<H", data[0:2])[0] & 0xFFFF
 
             # 只关心我们监控的 7 个通道
-            if channel not in CHANNEL_SECTORS:
-                # 检查对应的扇区代码
-                sector_code = CHANNEL_SECTORS.get(channel)
-                if not sector_code:
-                    continue
-
             sector_code = CHANNEL_SECTORS.get(channel)
             if not sector_code:
                 continue
@@ -374,7 +578,6 @@ class VoiceReceiver:
             if channel not in self._activity_window:
                 self._activity_window[channel] = []
             self._activity_window[channel].append(mono_now)
-            # 限制数量防内存泄漏
             if len(self._activity_window[channel]) > 500:
                 self._activity_window[channel] = self._activity_window[channel][-250:]
 
@@ -387,10 +590,11 @@ class VoiceReceiver:
             # ── 通话时长统计 ──
             self._track_duration(channel, clock_now)
 
+            # ── 语音文件保存 ──
             # 提取 ADPCM 数据 (跳过前 2 字节通道号, 去掉末尾 8 字节)
             adpcm_data = data[2 : len(data) - 8]
-            if not adpcm_data:
-                continue
+            if adpcm_data:
+                self._save_adpcm_data(channel, adpcm_data, clock_now)
 
             # 解码 PCM
             if channel not in self._decoders:
@@ -409,18 +613,26 @@ class VoiceReceiver:
                 finally:
                     self._play_lock.release()
 
+    def _periodic_housekeeping(self) -> None:
+        """定期维护任务（在 socket timeout 时执行）"""
+        # 清理过时的突发通话
+        self._flush_stale_bursts()
+        # 检查是否需要清理过期文件（每日一次）
+        today = datetime.now().strftime("%Y-%m-%d")
+        if today != self._last_cleanup_date:
+            self._last_cleanup_date = today
+            self._cleanup_old_files()
+
     def _track_duration(self, channel: int, clock_now: float) -> None:
         """追踪通话突发时长，计入对应 10 分钟 bucket"""
         with self._duration_lock:
             last_data = self._last_data_time.get(channel, 0.0)
             self._last_data_time[channel] = clock_now
 
-            # 检查日期是否变化（跨天重置）
             today = datetime.now().strftime("%Y-%m-%d")
             if today != self._today_date:
                 self._today_date = today
 
-            # 确保今日 bucket 存在
             date_key = today
             if date_key not in self._duration_buckets:
                 new_day: dict[int, list[float]] = {}
@@ -431,21 +643,138 @@ class VoiceReceiver:
             if channel not in day_buckets:
                 day_buckets[channel] = [0.0] * 144
 
-            # 安静超过阈值 → 结束之前的突发
             if last_data > 0 and (clock_now - last_data) > self._silence_threshold:
                 burst_start = self._burst_start.pop(channel, None)
                 if burst_start is not None:
-                    duration = last_data - burst_start  # 突发结束 = 最后一次数据时间
-                    if duration > 0.5:  # 只统计 >0.5 秒的有效通话
-                        # 计算突发开始时间所属的 10 分钟 slot
+                    duration = last_data - burst_start
+                    if duration > 0.5:
                         dt = datetime.fromtimestamp(burst_start)
                         slot = (dt.hour * 60 + dt.minute) // 10
                         if 0 <= slot < 144:
                             day_buckets[channel][slot] += duration
 
-            # 如果此通道没有活跃突发 → 开始一个新的
             if channel not in self._burst_start:
                 self._burst_start[channel] = clock_now
+
+    def _save_adpcm_data(self, channel: int, adpcm_data: bytes, clock_now: float) -> None:
+        """保存 ADPCM 数据到文件（按突发分组）"""
+        if not self._save_dir:
+            return
+
+        with self._file_lock:
+            last_data = self._last_data_time.get(channel, 0.0)
+
+            # 检查是否是新突发（上次数据超过静默阈值）
+            if last_data > 0 and (clock_now - last_data) > self._silence_threshold:
+                # 结束当前突发 → 写入文件
+                self._flush_burst(channel)
+                # 如果没有活跃的突发缓冲，启动新突发
+                if channel not in self._burst_buffers:
+                    self._burst_buffers[channel] = bytearray()
+                    self._burst_start_ts[channel] = datetime.fromtimestamp(clock_now)
+                    self._burst_seq[channel] = 0
+
+            # 确保突发缓冲存在
+            if channel not in self._burst_buffers:
+                self._burst_buffers[channel] = bytearray()
+                self._burst_start_ts[channel] = datetime.fromtimestamp(clock_now)
+                self._burst_seq[channel] = 0
+
+            # 追加数据到当前突发缓冲
+            self._burst_buffers[channel].extend(adpcm_data)
+
+            # 如果缓冲超过 256KB，立即写入文件防止 OOM
+            if len(self._burst_buffers[channel]) > 256 * 1024:
+                self._flush_burst(channel)
+                # 重新启动新突发
+                self._burst_buffers[channel] = bytearray()
+                self._burst_start_ts[channel] = datetime.fromtimestamp(clock_now)
+                self._burst_seq[channel] = 0
+
+    def _flush_burst(self, channel: int) -> None:
+        """将指定通道的当前突发写入文件"""
+        buf = self._burst_buffers.get(channel)
+        if not buf or len(buf) == 0:
+            return
+
+        start_ts = self._burst_start_ts.get(channel)
+        seq = self._burst_seq.get(channel, 0)
+
+        if not start_ts:
+            return
+
+        date_dir = start_ts.strftime("%Y-%m-%d")
+        # 文件名: HHMMSS_fff_NNN.adpcm
+        ts_str = start_ts.strftime("%H%M%S") + f"_{start_ts.microsecond // 1000:03d}"
+        filename = f"{ts_str}_{seq:03d}.adpcm"
+
+        save_path = Path(self._save_dir) / str(channel) / date_dir
+        try:
+            save_path.mkdir(parents=True, exist_ok=True)
+            (save_path / filename).write_bytes(bytes(buf))
+            logger.debug("voice file saved: %s (ch=%d, size=%d)",
+                         save_path / filename, channel, len(buf))
+
+            # 更新文件计数
+            if date_dir not in self._daily_file_count:
+                self._daily_file_count[date_dir] = {}
+            if channel not in self._daily_file_count[date_dir]:
+                self._daily_file_count[date_dir][channel] = 0
+            self._daily_file_count[date_dir][channel] += 1
+        except OSError as e:
+            logger.error("failed to save voice file %s: %s",
+                         save_path / filename, e)
+
+        # 清空缓冲，递增序号
+        self._burst_buffers.pop(channel, None)
+        self._burst_seq[channel] = seq + 1
+
+    def _flush_all_bursts(self) -> None:
+        """停止时写入所有未存盘的突发"""
+        with self._file_lock:
+            for ch in list(self._burst_buffers.keys()):
+                self._flush_burst(ch)
+
+    def _cleanup_old_files(self) -> None:
+        """删除超过保留天数的语音文件"""
+        if self._retention_days <= 0 or not self._save_dir:
+            return
+
+        cutoff = datetime.now() - timedelta(days=self._retention_days)
+        cutoff_str = cutoff.strftime("%Y-%m-%d")
+        logger.info("voice cleanup: deleting files before %s", cutoff_str)
+
+        base_dir = Path(self._save_dir)
+        if not base_dir.is_dir():
+            return
+
+        deleted = 0
+        freed_bytes = 0
+        try:
+            for ch_dir in base_dir.iterdir():
+                if not ch_dir.is_dir():
+                    continue
+                for date_dir in ch_dir.iterdir():
+                    if not date_dir.is_dir():
+                        continue
+                    date_name = date_dir.name
+                    # 检查日期是否在保留期内
+                    if date_name < cutoff_str:
+                        for f in date_dir.glob("*.adpcm"):
+                            freed_bytes += f.stat().st_size
+                            f.unlink()
+                            deleted += 1
+                        # 删除空目录
+                        try:
+                            date_dir.rmdir()
+                        except OSError:
+                            pass
+        except OSError as e:
+            logger.error("voice cleanup error: %s", e)
+
+        if deleted > 0:
+            logger.info("voice cleanup: deleted %d files, freed %s",
+                        deleted, self._format_size(freed_bytes))
 
     def _load_from_db(self) -> None:
         """启动时从 DB 恢复昨天的通话时长数据"""
@@ -506,7 +835,7 @@ class VoiceReceiver:
         # 如果清理了突发，顺便刷到 DB
         if changed:
             self._db_flush_counter += 1
-            if self._db_flush_counter >= 10:  # 每 10 次清理刷一次 DB
+            if self._db_flush_counter >= 10:
                 self._flush_durations_to_db()
                 self._db_flush_counter = 0
 
@@ -521,30 +850,3 @@ class VoiceReceiver:
             pygame.mixer.find_channel(True).play(sound)
         except Exception as e:
             logger.debug("voice play error: %s", e)
-
-
-def _get_frequency(sector_code: str) -> str:
-    """从 SectorInfo 配置获取频率"""
-    freqs = {
-        "ZGJDTM01": "120.35",
-        "ZGJDTM02": "121.4",
-        "ZGJDTM03": "119.9",
-        "ZGJDTM04": "123.85",
-        "ZGJDTM05": "119.55",
-        "ZGJDTM06": "119.025",
-        "ZGJDTM07": "127.95",
-    }
-    return freqs.get(sector_code, "")
-
-
-def _get_sector_name(sector_code: str) -> str:
-    names = {
-        "ZGJDTM01": "HN",
-        "ZGJDTM02": "HE",
-        "ZGJDTM03": "ARW",
-        "ZGJDTM04": "AS",
-        "ZGJDTM05": "AD",
-        "ZGJDTM06": "ASL",
-        "ZGJDTM07": "ARE/AA",
-    }
-    return names.get(sector_code, "")
