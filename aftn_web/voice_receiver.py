@@ -704,10 +704,10 @@ class VoiceReceiver:
             # 追加数据到当前突发缓冲
             self._burst_buffers[channel].extend(adpcm_data)
 
-            # 如果缓冲超过 256KB，立即写入文件防止 OOM
-            if len(self._burst_buffers[channel]) > 256 * 1024:
+            # 安全上限：50MB（约 100 分钟连续语音），仅防 OOM，正常靠静默检测切文件
+            if len(self._burst_buffers[channel]) > 50 * 1024 * 1024:
+                logger.warning("voice burst exceeded 50MB (ch=%d), forcing flush", channel)
                 self._flush_burst(channel)
-                # 重新启动新突发
                 self._burst_buffers[channel] = bytearray()
                 self._burst_start_ts[channel] = datetime.utcfromtimestamp(clock_now)
                 self._burst_seq[channel] = 0
