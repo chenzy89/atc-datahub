@@ -725,22 +725,33 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     @app.route("/api/voice/play_file")
     def api_voice_play_file():
-        """返回指定日期/通道/时间范围的录音，解码为 WAV 流"""
+        """返回指定日期/通道/时间范围的录音，解码为 WAV 流
+
+        Query params:
+            date: UTC 日期 YYYY-MM-DD
+            channel: 通道号
+            from: 起始时间 (UTC)，格式 HH:MM 或 HHMMSS
+            duration: 时长（分钟），默认10
+        """
         if voice_receiver is None:
             return jsonify({"error": "voice not enabled"}), 400
         date_str = request.args.get("date", "")
         channel_str = request.args.get("channel", "")
         from_time = request.args.get("from", "")
-        to_time = request.args.get("to", "")
+        duration_str = request.args.get("duration", "10")
         if not date_str or not channel_str:
             return jsonify({"error": "date and channel required"}), 400
         try:
             channel_id = int(channel_str)
         except (ValueError, TypeError):
             return jsonify({"error": "invalid channel"}), 400
+        try:
+            duration = max(1, min(1440, int(duration_str)))
+        except (ValueError, TypeError):
+            duration = 10
 
         wav_data = voice_receiver.get_recording_data(
-            date_str, channel_id, from_time=from_time, to_time=to_time
+            date_str, channel_id, from_time=from_time, duration_minutes=duration
         )
         if not wav_data:
             return jsonify({"error": "no recordings found"}), 404

@@ -266,6 +266,9 @@ class VoiceReceiver:
         # 从 DB 恢复已有数据
         self._load_from_db()
 
+        # 迁移旧版文件名到新格式
+        self._migrate_old_files()
+
     # ── 公共属性 ──────────────────────────────────────
 
     @property
@@ -413,12 +416,18 @@ class VoiceReceiver:
         try:
             for fpath in sorted(date_dir.iterdir()):
                 if fpath.suffix == ".adpcm" and fpath.is_file():
-                    # 文件名格式: HHMMSS_fff_NNN.adpcm
-                    # 其中 HHMMSS_fff = 突发开始时间, NNN = 序号
+                    # 文件名格式: HHMMSS_NNN.adpcm (UTC时间)
+                    # 或兼容旧格式: HHMMSS_fff_NNN.adpcm
                     name = fpath.stem
                     parts = name.split("_")
-                    start_ts = parts[0] if parts else "000000"
-                    seq_num = parts[2] if len(parts) >= 3 else parts[1] if len(parts) >= 2 else "000"
+                    if len(parts) >= 3:
+                        # 旧格式: HHMMSS_fff_NNN
+                        start_ts = parts[0]
+                    elif len(parts) >= 2:
+                        # 新格式: HHMMSS_NNN
+                        start_ts = parts[0]
+                    else:
+                        start_ts = "000000"
                     file_size = fpath.stat().st_size
                     # ADPCM 时长 = 文件大小 / 块大小 * 255 / 8 * 1000 ms... 近似
                     # 每个256字节块产生255个字节PCM（128个16bit样本），8000Hz
@@ -456,25 +465,37 @@ class VoiceReceiver:
         return dates
 
     def get_recording_data(self, date_str: str, channel_id: int,
-                            from_time: str = "", to_time: str = "") -> bytes:
-        """获取指定时间范围的录音 ADPCM 数据，解码为 WAV PCM16"""
+                            from_time: str = "", duration_minutes: int = 10) -> bytes:
+        """获取指定时间范围的录音 ADPCM 数据，解码为 WAV PCM16
+
+        Args:
+            date_str: UTC 日期 "YYYY-MM-DD"
+            channel_id: 通道号
+            from_time: 起始时间 (UTC)，格式 "HH:MM" 或 "HH:MM:SS" 或 "HHMMSS"
+            duration_minutes: 时长（分钟），默认10分钟
+        """
         recordings = self.list_recordings(date_str, channel_id)
 
-        # 过滤时间范围（文件名格式: HHMMSS_fff_NNN.adpcm → 取 HHMMSS）
-        if from_time:
-            from_key = from_time.replace(":", "")[:6]
-        else:
-            from_key = ""
-        if to_time:
-            to_key = to_time.replace(":", "")[:6]
-        else:
-            to_key = "235959"
+        # 计算 UTC 时间范围
+        from_key = (from_time or "").replace(":", "")[:6]
+        if not from_key:
+            from_key = "000000"
+
+        # 计算结束时间
+        from_h = int(from_key[0:2])
+        from_m = int(from_key[2:4])
+        from_s = int(from_key[4:6])
+        total_sec = from_h * 3600 + from_m * 60 + from_s + duration_minutes * 60
+        to_h = (total_sec // 3600) % 24
+        to_m = (total_sec % 3600) // 60
+        to_s = total_sec % 60
+        to_key = f"{to_h:02d}{to_m:02d}{to_s:02d}"
 
         selected = []
         for rec in recordings:
-            if from_key and rec["start_time"] < from_key:
+            if rec["start_time"] < from_key:
                 continue
-            if to_key and rec["start_time"] > to_key:
+            if rec["start_time"] > to_key:
                 continue
             selected.append(rec)
 
@@ -648,7 +669,7 @@ class VoiceReceiver:
                 if burst_start is not None:
                     duration = last_data - burst_start
                     if duration > 0.5:
-                        dt = datetime.fromtimestamp(burst_start)
+                        dt = datetime.utcfromtimestamp(burst_start)
                         slot = (dt.hour * 60 + dt.minute) // 10
                         if 0 <= slot < 144:
                             day_buckets[channel][slot] += duration
@@ -671,13 +692,13 @@ class VoiceReceiver:
                 # 如果没有活跃的突发缓冲，启动新突发
                 if channel not in self._burst_buffers:
                     self._burst_buffers[channel] = bytearray()
-                    self._burst_start_ts[channel] = datetime.fromtimestamp(clock_now)
+                    self._burst_start_ts[channel] = datetime.utcfromtimestamp(clock_now)
                     self._burst_seq[channel] = 0
 
             # 确保突发缓冲存在
             if channel not in self._burst_buffers:
                 self._burst_buffers[channel] = bytearray()
-                self._burst_start_ts[channel] = datetime.fromtimestamp(clock_now)
+                self._burst_start_ts[channel] = datetime.utcfromtimestamp(clock_now)
                 self._burst_seq[channel] = 0
 
             # 追加数据到当前突发缓冲
@@ -688,7 +709,7 @@ class VoiceReceiver:
                 self._flush_burst(channel)
                 # 重新启动新突发
                 self._burst_buffers[channel] = bytearray()
-                self._burst_start_ts[channel] = datetime.fromtimestamp(clock_now)
+                self._burst_start_ts[channel] = datetime.utcfromtimestamp(clock_now)
                 self._burst_seq[channel] = 0
 
     def _flush_burst(self, channel: int) -> None:
@@ -704,8 +725,8 @@ class VoiceReceiver:
             return
 
         date_dir = start_ts.strftime("%Y-%m-%d")
-        # 文件名: HHMMSS_fff_NNN.adpcm
-        ts_str = start_ts.strftime("%H%M%S") + f"_{start_ts.microsecond // 1000:03d}"
+        # 文件名: HHMMSS_NNN.adpcm (UTC)
+        ts_str = start_ts.strftime("%H%M%S")
         filename = f"{ts_str}_{seq:03d}.adpcm"
 
         save_path = Path(self._save_dir) / str(channel) / date_dir
@@ -795,6 +816,65 @@ class VoiceReceiver:
             except Exception:
                 pass
 
+    def _migrate_old_files(self) -> None:
+        """迁移旧版文件名 (HHMMSS_fff_NNN.adpcm) 到新格式 (HHMMSS_NNN.adpcm)，并将时间从北京转为UTC"""
+        if not self._save_dir:
+            return
+        base = Path(self._save_dir)
+        if not base.is_dir():
+            return
+
+        migrated = 0
+        for ch_dir in sorted(base.iterdir()):
+            if not ch_dir.is_dir():
+                continue
+            for date_dir in sorted(ch_dir.iterdir()):
+                if not date_dir.is_dir():
+                    continue
+                for fpath in sorted(date_dir.glob("*.adpcm")):
+                    name = fpath.stem
+                    parts = name.split("_")
+                    if len(parts) < 3:
+                        continue  # 已经是新格式 HHMMSS_NNN 或非标准
+                    # 旧格式: HHMMSS_fff_NNN.adpcm (北京时间)
+                    local_hms = parts[0]
+                    seq_str = parts[2] if len(parts) >= 3 else parts[1]
+                    if len(local_hms) != 6 or not local_hms.isdigit():
+                        continue
+                    # 解析旧目录名作为本地日期
+                    local_date_str = date_dir.name
+                    try:
+                        local_dt = datetime.strptime(local_date_str + "_" + local_hms, "%Y-%m-%d_%H%M%S")
+                    except ValueError:
+                        continue
+                    # 北京时间 = UTC+8
+                    from datetime import timedelta as _td
+                    utc_dt = local_dt - _td(hours=8)
+                    utc_date_str = utc_dt.strftime("%Y-%m-%d")
+                    utc_hms = utc_dt.strftime("%H%M%S")
+                    # 新文件名: HHMMSS_NNN.adpcm
+                    new_name = f"{utc_hms}_{seq_str}.adpcm"
+                    new_dir = Path(self._save_dir) / str(ch_dir.name) / utc_date_str
+                    new_path = new_dir / new_name
+                    if new_path.exists():
+                        logger.warning("migration target exists, skipping: %s", new_path)
+                        continue
+                    try:
+                        new_dir.mkdir(parents=True, exist_ok=True)
+                        fpath.rename(new_path)
+                        migrated += 1
+                    except OSError as e:
+                        logger.error("migration error: %s -> %s: %s", fpath, new_path, e)
+                # 尝试删除旧日期目录（如果空了）
+                try:
+                    remaining = list(date_dir.iterdir())
+                    if not remaining:
+                        date_dir.rmdir()
+                except OSError:
+                    pass
+        if migrated > 0:
+            logger.info("voice file migration: renamed %d old files to UTC naming", migrated)
+
     def _flush_durations_to_db(self) -> None:
         """将内存中的语音时长数据刷到 DB"""
         db = self._db
@@ -827,7 +907,7 @@ class VoiceReceiver:
                             today = datetime.now().strftime("%Y-%m-%d")
                             day_buckets = self._duration_buckets.get(today, {})
                             if channel in day_buckets:
-                                dt = datetime.fromtimestamp(burst_start)
+                                dt = datetime.utcfromtimestamp(burst_start)
                                 slot = (dt.hour * 60 + dt.minute) // 10
                                 if 0 <= slot < 144:
                                     day_buckets[channel][slot] += duration

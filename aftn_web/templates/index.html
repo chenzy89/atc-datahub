@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.13</title>
+<title>ATC AFTN WebHub v2.1.14</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.13</span>
+  <span class="badge">v2.1.14</span>
 </div>
 
 <div class="tabs">
@@ -583,6 +583,22 @@ canvas#radarMap {
 
       <span class="pb-sep"></span>
 
+      <label class="label">扇区</label>
+      <select id="pbSector" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;outline:none;cursor:pointer;">
+        <option value="">— 无 —</option>
+        <option value="ZGJDTM01">TM01 HN (CH38)</option>
+        <option value="ZGJDTM02">TM02 HE (CH42)</option>
+        <option value="ZGJDTM03">TM03 ARW (CH50)</option>
+        <option value="ZGJDTM04">TM04 AS (CH264)</option>
+        <option value="ZGJDTM05">TM05 AD (CH46)</option>
+        <option value="ZGJDTM06">TM06 ASL (CH32)</option>
+        <option value="ZGJDTM07">TM07 ARE/AA (CH54)</option>
+      </select>
+
+      <span id="pbVoiceStatus" style="font-size:11px;color:var(--text-muted);white-space:nowrap;"></span>
+
+      <span class="pb-sep"></span>
+
       <button class="pb-btn" id="pbRewind" title="跳至最早">⏮</button>
       <button class="pb-btn" id="pbStepBack" title="后退10秒">⏪</button>
       <button class="pb-btn" id="pbPlayPause" title="播放/暂停">▶</button>
@@ -624,12 +640,12 @@ canvas#radarMap {
     <!-- ── 语音回放 ── -->
     <div class="voice-playback-section" style="margin-bottom:20px;">
       <div class="voice-chart-toolbar">
-        <h3>🎧 录音回放</h3>
+        <h3>🎧 录音回放 (UTC)</h3>
         <div class="voice-chart-controls">
           <label><span>日期</span><input type="date" id="voicePlayDate"></label>
           <label><span>通道</span><select id="voicePlayChannel"><option value="-1">— 选择通道 —</option></select></label>
-          <label><span>起始</span><input type="time" id="voicePlayFrom" value="00:00" step="1" style="width:110px;"></label>
-          <label><span>截止</span><input type="time" id="voicePlayTo" value="23:59" step="1" style="width:110px;"></label>
+          <label><span>起始(UTC)</span><input type="time" id="voicePlayFrom" value="00:00" step="1" style="width:130px;"></label>
+          <label><span>时长(分)</span><input type="number" id="voicePlayDuration" value="10" min="1" max="1440" style="width:70px;"></label>
           <button class="btn btn-primary btn-sm" onclick="voiceLoadRecordings()">📂 查询录音</button>
         </div>
       </div>
@@ -2707,7 +2723,7 @@ function esc(s) {
 })();
 
 // ══════════════════════════════════════════════════════════════
-// 航迹回放状态机
+// 航迹回放状态机 (含语音同步)
 // ══════════════════════════════════════════════════════════════
 (function() {
   var STATE = { LIVE: 0, PLAYING: 1, PAUSED: 2 };
@@ -2721,6 +2737,18 @@ function esc(s) {
   var replayEndTime = null;
   var replayTimer = null;
   var replaySpeed = 4;
+
+  // 扇区 → 通道号映射
+  var _SEC_CH = {'ZGJDTM01':38,'ZGJDTM02':42,'ZGJDTM03':50,'ZGJDTM04':264,'ZGJDTM05':46,'ZGJDTM06':32,'ZGJDTM07':54};
+
+  // 语音同步
+  var _voiceAudio = null;          // Audio 元素
+  var _voiceUrl = null;            // blob URL
+  var _voiceLoaded = false;        // 语音数据是否已加载
+  var _voiceRangeStart = 0;        // 语音对应 UTC 起始时间 (ms)
+  var _voiceRangeEnd = 0;          // 语音对应 UTC 结束时间 (ms)
+  var _voiceSyncEnabled = false;   // 是否启用语音同步
+  var _voiceStatusEl = document.getElementById('pbVoiceStatus');
 
   // DOM refs
   var el = {
@@ -2737,37 +2765,27 @@ function esc(s) {
     sec: document.getElementById('pbSec'),
     speed: document.getElementById('pbSpeed'),
     progress: document.getElementById('pbProgressFill'),
+    sector: document.getElementById('pbSector'),
   };
 
   // ── 初始化时间选择器 ──
   function initSelects() {
     for (var h = 0; h < 24; h++) {
-      var opt = document.createElement('option');
-      opt.value = pad2(h);
-      opt.textContent = pad2(h);
-      el.hour.appendChild(opt);
+      el.hour.appendChild(opt(h));
     }
     for (var m = 0; m < 60; m++) {
-      var opt = document.createElement('option');
-      opt.value = pad2(m);
-      opt.textContent = pad2(m);
-      el.min.appendChild(opt);
-      var opt2 = document.createElement('option');
-      opt2.value = pad2(m);
-      opt2.textContent = pad2(m);
-      el.sec.appendChild(opt2);
+      el.min.appendChild(opt(m));
+      el.sec.appendChild(opt(m));
     }
-    // 默认选当前时间（整秒）
     var now = new Date();
     el.date.value = now.getUTCFullYear() + '-' + pad2(now.getUTCMonth()+1) + '-' + pad2(now.getUTCDate());
     el.hour.value = pad2(now.getUTCHours());
     el.min.value = pad2(now.getUTCMinutes());
     el.sec.value = '00';
   }
-
+  function opt(v) { var o=document.createElement('option');o.value=pad2(v);o.textContent=pad2(v);return o; }
   function pad2(n) { return String(n).padStart(2,'0'); }
 
-  // ── UI 更新 ──
   function updateUI() {
     var isReplay = state !== STATE.LIVE;
     var isPlaying = state === STATE.PLAYING;
@@ -2776,7 +2794,6 @@ function esc(s) {
     el.status.textContent = isReplay ? '● 回放' : '● 实时';
     el.status.className = 'pb-status ' + (isReplay ? 'replay' : 'live');
     window._replayActive = isReplay;
-
     [el.rewind, el.stepBack, el.stepFwd, el.skipEnd].forEach(function(b) { b.disabled = !isReplay; });
     el.date.disabled = isReplay;
     el.hour.disabled = isReplay;
@@ -2784,34 +2801,113 @@ function esc(s) {
     el.sec.disabled = isReplay;
   }
 
-  // ── 显示/隐藏回放加载遮罩 ──
-  function showReplayLoading() {
-    var el2 = document.getElementById('replay-loading');
-    if (!el2) return;
-    el2.style.display = 'flex';
+  function showReplayLoading() { var e=document.getElementById('replay-loading');if(e)e.style.display='flex'; }
+  function hideReplayLoading() { var e=document.getElementById('replay-loading');if(e)e.style.display='none'; }
+
+  // ── 语音同步 ──
+  function _loadVoiceSync(sectorCode) {
+    _voiceSyncEnabled = false;
+    _voiceLoaded = false;
+    if (_voiceUrl) { URL.revokeObjectURL(_voiceUrl); _voiceUrl = null; }
+    if (_voiceAudio) { _voiceAudio.pause(); _voiceAudio = null; }
+
+    if (!sectorCode) {
+      if (_voiceStatusEl) _voiceStatusEl.textContent = '';
+      return;
+    }
+    var ch = _SEC_CH[sectorCode];
+    if (!ch) {
+      if (_voiceStatusEl) _voiceStatusEl.textContent = '扇区无对应通道';
+      return;
+    }
+
+    var parts = el.date.value.split('-');
+    var utcDateStr = el.date.value;
+    var fromH = pad2(parseInt(el.hour.value));
+    var fromM = pad2(parseInt(el.min.value));
+    var fromS = pad2(parseInt(el.sec.value));
+    var fromTime = fromH + ':' + fromM + ':' + fromS;
+
+    if (_voiceStatusEl) _voiceStatusEl.textContent = '加载语音...';
+
+    var url = '/api/voice/play_file?date=' + encodeURIComponent(utcDateStr)
+      + '&channel=' + ch + '&from=' + encodeURIComponent(fromTime) + '&duration=30';
+
+    fetch(url)
+      .then(function(r) {
+        if (!r.ok) throw new Error('无语音数据');
+        return r.blob();
+      })
+      .then(function(blob) {
+        if (blob.size < 100) throw new Error('语音数据过小');
+        _voiceUrl = URL.createObjectURL(blob);
+        _voiceAudio = new Audio(_voiceUrl);
+        _voiceAudio.preload = 'auto';
+        _voiceLoaded = true;
+        _voiceSyncEnabled = true;
+
+        // 计算语音时间范围 (ms)
+        var startMs = Date.UTC(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]),
+          parseInt(el.hour.value), parseInt(el.min.value), parseInt(el.sec.value));
+        _voiceRangeStart = startMs;
+        _voiceRangeEnd = startMs + 30 * 60 * 1000;
+
+        var sizeStr = blob.size > 1024*1024
+          ? (blob.size/1024/1024).toFixed(1)+'MB'
+          : (blob.size/1024).toFixed(1)+'KB';
+        if (_voiceStatusEl) _voiceStatusEl.textContent = '🎧 ' + sectorCode + ' CH' + ch + ' ' + sizeStr;
+      })
+      .catch(function(e) {
+        if (_voiceStatusEl) _voiceStatusEl.textContent = '语音: ' + e.message;
+        _voiceLoaded = false;
+        _voiceSyncEnabled = false;
+      });
   }
-  function hideReplayLoading() {
-    var el2 = document.getElementById('replay-loading');
-    if (el2) el2.style.display = 'none';
+
+  function _syncVoicePosition() {
+    if (!_voiceSyncEnabled || !_voiceAudio || !_voiceLoaded || !replayCurrentTime || !replayStartTime) return;
+    try {
+      var replayMs = new Date(replayCurrentTime).getTime();
+      var startMs = _voiceRangeStart;
+      var offsetSec = (replayMs - startMs) / 1000;
+      if (offsetSec >= 0 && offsetSec < _voiceAudio.duration) {
+        _voiceAudio.currentTime = offsetSec;
+      }
+    } catch(e) {}
+  }
+
+  function _pauseVoice() {
+    if (_voiceAudio && _voiceLoaded) { _voiceAudio.pause(); }
+  }
+
+  function _startVoice() {
+    if (!_voiceSyncEnabled || !_voiceAudio || !_voiceLoaded) return;
+    try {
+      _syncVoicePosition();
+      _voiceAudio.play().catch(function(){});
+    } catch(e) {}
+  }
+
+  function _stopVoice() {
+    if (_voiceAudio && _voiceLoaded) {
+      _voiceAudio.pause();
+      _voiceAudio.currentTime = 0;
+    }
   }
 
   // ── 开始回放 ──
   function startReplay() {
     try {
     if (state !== STATE.LIVE) stopReplay();
-    // 立即标记为回放，防止途中实时数据覆盖
     window._replayActive = true;
     state = STATE.PAUSED;
     updateUI();
-    console.log('[REPLAY] startReplay, _replayActive=', window._replayActive);
 
-    // 清空画布并显示加载遮罩
     window._radarTracks = [];
     if (typeof window.drawMap === 'function') window.drawMap();
     showReplayLoading();
 
     replaySpeed = parseInt(el.speed.value) || 4;
-    // 用户选择的是 UTC
     var parts = el.date.value.split('-');
     var startMs = Date.UTC(
       parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]),
@@ -2825,29 +2921,32 @@ function esc(s) {
     replayCurrentTime = startTS;
     replayEndTime = endTS;
 
-    // 用 XHR 替代 fetch 以跟踪加载进度
+    // 加载语音（如果选中扇区且速度为1×）
+    var sectorCode = el.sector ? el.sector.value : '';
+    if (sectorCode && replaySpeed === 1) {
+      _loadVoiceSync(sectorCode);
+    } else if (sectorCode && replaySpeed !== 1) {
+      if (_voiceStatusEl) _voiceStatusEl.textContent = '🎧 1×速度时启用语音';
+      _voiceSyncEnabled = false;
+    } else {
+      if (_voiceStatusEl) _voiceStatusEl.textContent = '';
+      _voiceSyncEnabled = false;
+    }
+
     var url = '/api/radar_history?from=' + encodeURIComponent(startTS) + '&to=' + encodeURIComponent(endTS);
     var xhr = new XMLHttpRequest();
     xhr.open('GET', url);
     xhr.responseType = 'json';
     xhr.onprogress = function(e) {
-      if (e.lengthComputable) {
-        var pct = Math.round(e.loaded / e.total * 100);
-        showReplayLoading(pct);
-      }
+      if (e.lengthComputable) { showReplayLoading(Math.round(e.loaded/e.total*100)); }
     };
     xhr.onload = function() {
       hideReplayLoading();
       var data = xhr.response;
       if (!data || !Array.isArray(data)) {
-        console.error('[REPLAY] invalid response');
-        window._replayActive = false;
-        state = STATE.LIVE;
-        updateUI();
-        return;
+        window._replayActive = false; state = STATE.LIVE; updateUI(); return;
       }
       historyPoints = data;
-      // 按呼号分组排序
       var byCs = {};
       for (var i = 0; i < historyPoints.length; i++) {
         var pt = historyPoints[i];
@@ -2855,38 +2954,30 @@ function esc(s) {
         if (!byCs[cs]) byCs[cs] = [];
         byCs[cs].push(pt);
       }
-      for (var cs in byCs) {
-        byCs[cs].sort(function(a,b) { return a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0; });
-      }
+      for (var cs in byCs) byCs[cs].sort(function(a,b){return a.ts<b.ts?-1:a.ts>b.ts?1:0;});
       replayTracks = byCs;
-      console.log('[REPLAY] data loaded, points=', historyPoints.length, 'tracks=', Object.keys(byCs).length);
       state = STATE.PLAYING;
       updateUI();
-
-      // 清除可能的实时尾迹并显示第一帧
       window._radarTracks = [];
       updateReplayFrame(replayCurrentTime);
       startPlaybackClock();
     };
     xhr.onerror = xhr.onabort = function() {
       hideReplayLoading();
-      console.error('[REPLAY] Load failed');
-      window._replayActive = false;
-      state = STATE.LIVE;
-      updateUI();
+      window._replayActive = false; state = STATE.LIVE; updateUI();
     };
     xhr.send();
-    } catch(e) { console.error('[REPLAY] startReplay error:', e); hideReplayLoading(); }
+    } catch(e) { console.error('[REPLAY] startReplay:', e); hideReplayLoading(); }
   }
 
   function startPlaybackClock() {
     if (replayTimer) clearInterval(replayTimer);
-    replayTimer = setInterval(advanceReplay, 100);  // 每100ms步进
+    replayTimer = setInterval(advanceReplay, 100);
   }
 
   function advanceReplay() {
     try {
-    if (state !== STATE.PLAYING) { console.log('[REPLAY] advance skipped, state=', state); return; }
+    if (state !== STATE.PLAYING) return;
     if (!replayCurrentTime) return;
 
     var stepMs = replaySpeed * 100;
@@ -2895,43 +2986,30 @@ function esc(s) {
     var nextTS = next.toISOString();
 
     if (replayEndTime && nextTS > replayEndTime) {
-      console.log('[REPLAY] end of window reached');
       pauseReplay();
       return;
     }
 
     replayCurrentTime = nextTS;
     updateReplayFrame(nextTS);
-    console.log('[REPLAY] advanced to', replayCurrentTime, 'tracks=', (window._radarTracks||[]).length);
 
     var remaining = new Date(replayEndTime).getTime() - next.getTime();
-    if (remaining < 10000) {
-      loadMoreHistory();
-    }
-    } catch(e) { console.error('[REPLAY] advanceReplay error:', e); }
+    if (remaining < 10000) loadMoreHistory();
+    } catch(e) { console.error('[REPLAY] advanceReplay:', e); }
   }
 
   function loadMoreHistory() {
     if (!replayEndTime) return;
-    var newEndMs = new Date(replayEndTime).getTime() + 15 * 60 * 1000;
+    var newEndMs = new Date(replayEndTime).getTime() + 15*60*1000;
     var newEndTS = new Date(newEndMs).toISOString();
     var url = '/api/radar_history?from=' + encodeURIComponent(replayEndTime) + '&to=' + encodeURIComponent(newEndTS);
     replayEndTime = newEndTS;
-    fetch(url)
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        for (var i = 0; i < data.length; i++) {
-          var pt = data[i];
-          var cs = pt.cs || pt.ss || '?';
-          if (!replayTracks[cs]) replayTracks[cs] = [];
-          replayTracks[cs].push(pt);
-        }
-        for (var cs in replayTracks) {
-          replayTracks[cs].sort(function(a,b) { return a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0; });
-        }
-        historyPoints = historyPoints.concat(data);
-      })
-      .catch(function() {});
+    fetch(url).then(function(r){return r.json();}).then(function(data) {
+      for(var i=0;i<data.length;i++){var pt=data[i];var cs=pt.cs||pt.ss||'?';
+        if(!replayTracks[cs])replayTracks[cs]=[];replayTracks[cs].push(pt);}
+      for(var cs in replayTracks)replayTracks[cs].sort(function(a,b){return a.ts<b.ts?-1:a.ts>b.ts?1:0;});
+      historyPoints=historyPoints.concat(data);
+    }).catch(function(){});
   }
 
   function updateReplayFrame(ts) {
@@ -2941,43 +3019,25 @@ function esc(s) {
       var pts = replayTracks[cs];
       var best = null;
       for (var i = 0; i < pts.length; i++) {
-        if (pts[i].ts <= ts) {
-          best = pts[i];
-        } else {
-          break;
-        }
+        if (pts[i].ts <= ts) { best = pts[i]; } else { break; }
       }
       if (best) {
         tracks.push({
-          callsign: best.cs,
-          ssr: best.ss,
-          latitude: best.lt,
-          longitude: best.ln,
-          heading: best.hd,
-          flight_level: best.fl,
-          speed: best.sp,
-          adep: best.ap,
-          adest: best.ad,
-          runway: best.rw,
-          flight_procedure: best.fp,
-          trail: [],
-          level_trend: 'm',
+          callsign: best.cs, ssr: best.ss, latitude: best.lt, longitude: best.ln,
+          heading: best.hd, flight_level: best.fl, speed: best.sp,
+          adep: best.ap, adest: best.ad, runway: best.rw, flight_procedure: best.fp,
+          trail: [], level_trend: 'm',
         });
       }
     }
     window._radarTracks = tracks;
-    console.log('[REPLAY] frame ts=', ts, 'tracks=', tracks.length);
-
-    // 更新时间标签
     updateTimeLabel(ts);
     updateProgress();
-
-    // 重绘
     var activeTab = document.querySelector('.tab-btn.active');
     if (activeTab && activeTab.textContent.trim() === '雷达地图') {
       if (typeof window.drawMap === 'function') window.drawMap();
     }
-    } catch(e) { console.error('[REPLAY] updateReplayFrame error:', e); }
+    } catch(e) { console.error('[REPLAY] updateReplayFrame:', e); }
   }
 
   function updateTimeLabel(ts) {
@@ -2985,8 +3045,8 @@ function esc(s) {
     if (!el2) return;
     if (ts) {
       var d = new Date(ts);
-      el2.textContent = d.getUTCFullYear() + '-' + pad2(d.getUTCMonth()+1) + '-' + pad2(d.getUTCDate())
-        + ' ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ':' + pad2(d.getUTCSeconds()) + ' UTC';
+      el2.textContent = d.getUTCFullYear()+'-'+pad2(d.getUTCMonth()+1)+'-'+pad2(d.getUTCDate())
+        + ' ' + pad2(d.getUTCHours())+':'+pad2(d.getUTCMinutes())+':'+pad2(d.getUTCSeconds()) + ' UTC';
     }
   }
 
@@ -2995,8 +3055,7 @@ function esc(s) {
     var start = new Date(replayStartTime).getTime();
     var end = new Date(replayEndTime).getTime();
     var cur = new Date(replayCurrentTime).getTime();
-    var pct = ((cur - start) / (end - start)) * 100;
-    el.progress.style.width = Math.min(100, Math.max(0, pct)) + '%';
+    el.progress.style.width = Math.min(100, Math.max(0, ((cur-start)/(end-start))*100)) + '%';
   }
 
   function pauseReplay() {
@@ -3004,20 +3063,22 @@ function esc(s) {
     state = STATE.PAUSED;
     updateUI();
     if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+    _pauseVoice();
   }
 
   function stopReplay() {
     if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
     state = STATE.LIVE;
-    historyPoints = [];
-    replayTracks = {};
-    replayStartTime = null;
-    replayCurrentTime = null;
-    replayEndTime = null;
+    historyPoints = []; replayTracks = {};
+    replayStartTime = null; replayCurrentTime = null; replayEndTime = null;
     window._replayActive = false;
     updateUI();
     el.progress.style.width = '0%';
-    // 恢复实时
+    _stopVoice();
+    // 清除语音状态
+    if (_voiceUrl) { URL.revokeObjectURL(_voiceUrl); _voiceUrl = null; }
+    _voiceAudio = null; _voiceLoaded = false; _voiceSyncEnabled = false;
+    if (_voiceStatusEl) _voiceStatusEl.textContent = '';
     setTimeout(function() {
       if (typeof window.fetchTracks === 'function') window.fetchTracks();
     }, 200);
@@ -3029,7 +3090,7 @@ function esc(s) {
     if (wasPlaying) pauseReplay();
     replayCurrentTime = replayStartTime;
     updateReplayFrame(replayCurrentTime);
-    if (wasPlaying) { state = STATE.PLAYING; updateUI(); startPlaybackClock(); }
+    if (wasPlaying) { state = STATE.PLAYING; updateUI(); startPlaybackClock(); _startVoice(); }
   }
 
   function stepBack10s() {
@@ -3037,10 +3098,10 @@ function esc(s) {
     var wasPlaying = state === STATE.PLAYING;
     if (wasPlaying) pauseReplay();
     var cur = new Date(replayCurrentTime);
-    var prev = new Date(cur.getTime() - 10000);
-    replayCurrentTime = replayStartTime && prev.toISOString() < replayStartTime ? replayStartTime : prev.toISOString();
+    replayCurrentTime = replayStartTime && new Date(cur.getTime()-10000).toISOString() < replayStartTime
+      ? replayStartTime : new Date(cur.getTime()-10000).toISOString();
     updateReplayFrame(replayCurrentTime);
-    if (wasPlaying) { state = STATE.PLAYING; updateUI(); startPlaybackClock(); }
+    if (wasPlaying) { state = STATE.PLAYING; updateUI(); startPlaybackClock(); _startVoice(); _syncVoicePosition(); }
   }
 
   function stepFwd10s() {
@@ -3048,26 +3109,60 @@ function esc(s) {
     var wasPlaying = state === STATE.PLAYING;
     if (wasPlaying) pauseReplay();
     var cur = new Date(replayCurrentTime);
-    var next = new Date(cur.getTime() + 10000);
-    replayCurrentTime = replayEndTime && next.toISOString() > replayEndTime ? replayEndTime : next.toISOString();
+    replayCurrentTime = replayEndTime && new Date(cur.getTime()+10000).toISOString() > replayEndTime
+      ? replayEndTime : new Date(cur.getTime()+10000).toISOString();
     updateReplayFrame(replayCurrentTime);
-    if (wasPlaying) { state = STATE.PLAYING; updateUI(); startPlaybackClock(); }
+    if (wasPlaying) { state = STATE.PLAYING; updateUI(); startPlaybackClock(); _startVoice(); _syncVoicePosition(); }
   }
 
   function skipToLive() { stopReplay(); }
+
+  // ── 扇区切换时重载语音 ──
+  if (el.sector) {
+    el.sector.addEventListener('change', function() {
+      if (state !== STATE.LIVE) {
+        _stopVoice();
+        if (_voiceUrl) { URL.revokeObjectURL(_voiceUrl); _voiceUrl = null; }
+        _voiceAudio = null; _voiceLoaded = false;
+        var sectorCode = el.sector.value;
+        if (sectorCode && replaySpeed === 1) {
+          _loadVoiceSync(sectorCode);
+          _startVoice();
+        }
+      } else {
+        _voiceSyncEnabled = false;
+      }
+    });
+  }
+
+  // ── 速度切换时处理语音 ──
+  el.speed.addEventListener('change', function() {
+    replaySpeed = parseInt(el.speed.value) || 4;
+    if (state !== STATE.LIVE) {
+      var sectorCode = el.sector ? el.sector.value : '';
+      if (sectorCode && replaySpeed === 1 && !_voiceSyncEnabled) {
+        _loadVoiceSync(sectorCode);
+        if (state === STATE.PLAYING) _startVoice();
+      } else if (sectorCode && replaySpeed !== 1 && _voiceSyncEnabled) {
+        _pauseVoice();
+        _voiceSyncEnabled = false;
+        if (_voiceStatusEl) _voiceStatusEl.textContent = '🎧 ' + replaySpeed + '×已禁用语音';
+      }
+    }
+  });
 
   // ── 绑定事件 ──
   initSelects();
 
   el.playPause.addEventListener('click', function() {
-    if (state === STATE.LIVE) {
-      startReplay();
-    } else if (state === STATE.PLAYING) {
-      pauseReplay();
-    } else {
+    if (state === STATE.LIVE) { startReplay(); }
+    else if (state === STATE.PLAYING) { pauseReplay(); }
+    else {
       state = STATE.PLAYING;
       updateUI();
       startPlaybackClock();
+      _startVoice();
+      _syncVoicePosition();
     }
   });
 
@@ -3076,10 +3171,6 @@ function esc(s) {
   el.stepBack.addEventListener('click', stepBack10s);
   el.stepFwd.addEventListener('click', stepFwd10s);
   el.skipEnd.addEventListener('click', skipToLive);
-
-  el.speed.addEventListener('change', function() {
-    replaySpeed = parseInt(el.speed.value) || 4;
-  });
 
   updateUI();
 })();
@@ -3269,8 +3360,10 @@ function voiceSelectFromCard(channelId) {
 function voiceLoadRecordings() {
   var dateEl = document.getElementById('voicePlayDate');
   var chEl = document.getElementById('voicePlayChannel');
+  var durEl = document.getElementById('voicePlayDuration');
   var dateStr = dateEl ? dateEl.value : '';
   var ch = chEl ? parseInt(chEl.value) : -1;
+  var dur = durEl ? parseInt(durEl.value) || 10 : 10;
 
   if (!dateStr || ch < 0) {
     alert('请选择日期和通道');
@@ -3279,13 +3372,13 @@ function voiceLoadRecordings() {
 
   var infoEl = document.getElementById('voicePlaybackInfo');
   infoEl.style.display = 'block';
-  infoEl.textContent = '查询录音中...';
+  infoEl.textContent = '查询录音中 (UTC) ...';
 
   fetch('/api/voice/recordings?date=' + encodeURIComponent(dateStr) + '&channel=' + ch)
     .then(function(r) { return r.json(); })
     .then(function(data) {
       var recs = data.recordings || [];
-      infoEl.textContent = '共 ' + data.count + ' 段录音，总计 ' + (data.total_size_str || '0 B');
+      infoEl.textContent = '共 ' + data.count + ' 段录音，总计 ' + (data.total_size_str || '0 B') + ' (UTC)';
 
       var tbody = document.getElementById('voiceRecTbody');
       if (recs.length === 0) {
@@ -3296,8 +3389,8 @@ function voiceLoadRecordings() {
           var r = recs[i];
           var st = r.start_time;
           var stDisplay = st.slice(0,2) + ':' + st.slice(2,4) + ':' + st.slice(4,6);
-          h += '<tr onclick="voicePlayRecordings(\'' + dateStr + '\',' + ch + ', true)" style="cursor:pointer;">' +
-            '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-primary);">' + stDisplay + '</td>' +
+          h += '<tr onclick="voicePlayRecording(\'' + dateStr + '\',' + ch + ',' + dur + ')" style="cursor:pointer;">' +
+            '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-primary);">' + stDisplay + ' UTC</td>' +
             '<td style="padding:4px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + r.duration + 's</td>' +
             '<td style="padding:4px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + r.size_str + '</td>' +
             '</tr>';
@@ -3308,26 +3401,18 @@ function voiceLoadRecordings() {
       document.getElementById('voiceRecordingsList').style.display = 'block';
       document.getElementById('voicePlaybackControl').style.display = 'block';
 
-      // 自动播放全部录音，使用 from/to 参数
-      voicePlayRecordings(dateStr, ch, false);
+      // 自动播放
+      voicePlayRecording(dateStr, ch, dur);
     })
     .catch(function(e) {
       infoEl.textContent = '查询失败: ' + e.message;
     });
 }
 
-function voicePlayRecordings(dateStr, channelId, userClick) {
+function voicePlayRecording(dateStr, channelId, durationMin) {
   var fromEl = document.getElementById('voicePlayFrom');
-  var toEl = document.getElementById('voicePlayTo');
-  var fromTime = fromEl ? fromEl.value : '';
-  var toTime = toEl ? toEl.value : '';
+  var fromTime = fromEl ? fromEl.value : '00:00';
 
-  // 构建播放 URL
-  var url = '/api/voice/play_file?date=' + encodeURIComponent(dateStr) + '&channel=' + channelId;
-  if (fromTime) url += '&from=' + encodeURIComponent(fromTime);
-  if (toTime) url += '&to=' + encodeURIComponent(toTime);
-
-  // 停止之前的播放
   if (_currentAudioUrl) {
     URL.revokeObjectURL(_currentAudioUrl);
     _currentAudioUrl = null;
@@ -3335,19 +3420,17 @@ function voicePlayRecordings(dateStr, channelId, userClick) {
 
   var audio = document.getElementById('voiceAudioPlayer');
   var infoEl = document.getElementById('voicePlayFileInfo');
-
-  // 用 fetch 获取录音数据
   var infoEl2 = document.getElementById('voicePlaybackInfo');
-  if (userClick) {
-    infoEl2.textContent = '加载录音...';
-  } else {
-    infoEl2.textContent = '自动加载录音...';
-  }
+  infoEl2.textContent = '加载录音 (UTC ' + fromTime + ', ' + durationMin + 'min) ...';
+
+  var url = '/api/voice/play_file?date=' + encodeURIComponent(dateStr)
+    + '&channel=' + channelId
+    + '&from=' + encodeURIComponent(fromTime)
+    + '&duration=' + durationMin;
 
   fetch(url)
     .then(function(r) {
       if (!r.ok) throw new Error('无录音数据');
-      var contentDisposition = r.headers.get('Content-Disposition') || '';
       return r.blob();
     })
     .then(function(blob) {
@@ -3357,12 +3440,12 @@ function voicePlayRecordings(dateStr, channelId, userClick) {
       audio.play();
       if (infoEl) {
         var sizeMB = (blob.size / (1024 * 1024)).toFixed(1);
-        var durSeconds = Math.round(blob.size / (8000 * 2)); // 大约
+        var durSeconds = Math.round(blob.size / (8000 * 2));
         var durMin = Math.floor(durSeconds / 60);
         var durSec = durSeconds % 60;
         infoEl.textContent = '📊 WAV ' + sizeMB + ' MB, 约' + durMin + 'm' + durSec + 's';
       }
-      infoEl2.textContent = '🎧 播放中: ' + (fromTime || '00:00') + ' ~ ' + (toTime || '23:59') + ' (' + blob.size + ' bytes)';
+      infoEl2.textContent = '🎧 播放中 (UTC): ' + fromTime + ', ' + durationMin + 'min';
     })
     .catch(function(e) {
       infoEl2.textContent = '❌ ' + e.message;
