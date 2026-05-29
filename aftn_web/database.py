@@ -964,16 +964,14 @@ class Database:
 
     def save_voice_duration(self, date_str: str, channel: int,
                              slot: int, duration: float) -> None:
-        """持久化语音通话时长到 DB（累加模式）"""
+        """持久化语音通话时长到 DB（直接覆盖，调用方提供累计值）"""
         conn = self._get_conn()
         for retry in range(3):
             try:
                 conn.execute(
                     "INSERT OR REPLACE INTO voice_duration "
-                    "(date, channel, slot, duration) VALUES (?, ?, ?, "
-                    "COALESCE((SELECT duration FROM voice_duration "
-                    "WHERE date=? AND channel=? AND slot=?), 0) + ?)",
-                    (date_str, channel, slot, date_str, channel, slot, duration),
+                    "(date, channel, slot, duration) VALUES (?, ?, ?, ?)",
+                    (date_str, channel, slot, duration),
                 )
                 conn.commit()
                 return

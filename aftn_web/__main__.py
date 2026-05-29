@@ -69,6 +69,25 @@ def _check_pid_file() -> None:
     logger.debug("PID 文件已写入: %s (PID=%d)", PID_FILE, os.getpid())
 
 
+def _check_port(port: int) -> None:
+    """检查 Web 端口是否已被占用，防止第二个进程启动。"""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(2)
+    try:
+        s.connect(("127.0.0.1", port))
+        s.close()
+        logger.error(
+            "端口 %d 已被占用，疑似已有 aftn_web 进程在运行，退出",
+            port,
+        )
+        sys.exit(1)
+    except (ConnectionRefusedError, OSError):
+        pass
+    finally:
+        s.close()
+
+
 def _remove_pid_file() -> None:
     try:
         PID_FILE.unlink(missing_ok=True)
@@ -117,8 +136,9 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("starting %s", config.system_name)
     logger.info("config: %s", config.config_file)
 
-    # PID 文件互斥锁
+    # PID 文件互斥锁 + 端口占用检测（双重保险）
     _check_pid_file()
+    _check_port(config.web.port)
 
     # 数据库
     db = Database(config.db_path)
