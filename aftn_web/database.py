@@ -932,6 +932,10 @@ class Database:
                 if "locked" in str(e) and retry < 4:
                     time.sleep(0.1)
                     continue
+                logger.warning(
+                    "[SECTOR_FLT] %s/%s/%s 写锁争用，放弃 %d/%s",
+                    callsign, dof, terminal_code, hour, now,
+                )
                 return False
         return False
 

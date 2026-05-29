@@ -45,6 +45,59 @@ def setup_logging(log_dir: str | Path | None = None) -> None:
     )
 
 
+PID_FILE = Path("/tmp/aftn_web.pid")
+
+
+def _check_pid_file() -> None:
+    """检查 PID 文件互斥锁，防止重复启动。"""
+    if PID_FILE.exists():
+        try:
+            old_pid = int(PID_FILE.read_text().strip())
+            # 检查进程是否存活
+            os.kill(old_pid, 0)
+            logger.error(
+                "进程已运行 (PID=%d)，PID 文件: %s，请先停止旧进程",
+                old_pid, PID_FILE,
+            )
+            sys.exit(1)
+        except (ValueError, ProcessLookupError):
+            # PID 无效或进程已死 → 覆盖
+            pass
+        except OSError:
+            pass
+    PID_FILE.write_text(str(os.getpid()))
+    logger.debug("PID 文件已写入: %s (PID=%d)", PID_FILE, os.getpid())
+
+
+def _remove_pid_file() -> None:
+    try:
+        PID_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _backfill_sector_traffic_10min(db: Database) -> None:
+    """回填今日 sector_traffic_10min（从 sector_flights 重建丢失的 slot 数据）"""
+    try:
+        import datetime as _dt
+        bj_now = _dt.datetime.utcnow() + _dt.timedelta(hours=8)
+        today_bj = bj_now.strftime("%Y-%m-%d")
+        conn = db._get_conn()
+        conn.executescript(
+            "INSERT OR IGNORE INTO sector_traffic_10min (date, terminal_code, slot, count) "
+            "SELECT '" + today_bj + "', sf.terminal_code, "
+            "  ((CAST(strftime('%H', sf.created_at) AS INTEGER) + 8) % 24 * 60 + "
+            "   CAST(strftime('%M', sf.created_at) AS INTEGER)) / 10 AS slot, "
+            "  COUNT(*) "
+            "FROM sector_flights sf "
+            "WHERE sf.dof = '" + today_bj + "' "
+            "GROUP BY sf.terminal_code, slot"
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = ArgumentParser(description="ATC AFTN WebHub — AFTN 报文接收与查询系统")
     parser.add_argument(
@@ -63,6 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
     logger.info("starting %s", config.system_name)
     logger.info("config: %s", config.config_file)
+
+    # PID 文件互斥锁
+    _check_pid_file()
 
     # 数据库
     db = Database(config.db_path)
@@ -133,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         # FDR 定期处理线程（每 4 秒一次）
+        _last_backfill_date = [""]
+
         def fdr_processor() -> None:
             while not stop_requested[0]:
                 time.sleep(PROCESS_INTERVAL_SECONDS)
@@ -144,6 +202,17 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     c = db._get_conn()
                     c.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                except Exception:
+                    pass
+                # 定期回填今日扇区架次（每日一次，防止跨日或启动时遗漏）
+                try:
+                    import datetime as _dt_b
+                    _bj = _dt_b.datetime.utcnow() + _dt_b.timedelta(hours=8)
+                    _today = _bj.strftime("%Y-%m-%d")
+                    if _last_backfill_date[0] != _today:
+                        _backfill_sector_traffic_10min(db)
+                        _last_backfill_date[0] = _today
+                        logger.info("sector_traffic_10min backfill done for %s", _today)
                 except Exception:
                     pass
 
@@ -412,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.exit(1)
         logger.info("received signal %d, shutting down...", signum)
         stop_requested[0] = True
+        _remove_pid_file()
         receiver.stop()
 
     signal.signal(signal.SIGINT, signal_handler)
