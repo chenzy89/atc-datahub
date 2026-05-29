@@ -783,7 +783,10 @@ canvas#radarMap {
     </div>
     <div style="flex:1;position:relative;overflow:hidden;">
       <canvas id="trailCanvas"></canvas>
-      <div id="trail-loading" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--text-muted);font-size:14px;">加载中...</div>
+      <div id="trail-loading" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(10,22,40,0.85);z-index:10;align-items:center;justify-content:center;flex-direction:column;">
+        <div style="width:32px;height:32px;border:3px solid #1e3a5f;border-top-color:#58a6ff;border-radius:50%;animation:rl-spin .8s linear infinite;margin-bottom:16px;"></div>
+        <div style="color:#94a3b8;font-size:16px;">加载中...</div>
+      </div>
     </div>
   </div>
 </div>
@@ -2258,7 +2261,7 @@ function esc(s) {
 
     var canvas = document.getElementById('trailCanvas');
     var loading = document.getElementById('trail-loading');
-    loading.style.display = 'block';
+    loading.style.display = 'flex';
 
     var callsign = _trailState.callsign;
     var dateStr = _trailState.dateStr;
