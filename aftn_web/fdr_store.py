@@ -26,7 +26,7 @@ from .terminal_area import is_in_terminal, load_terminal_config
 logger = logging.getLogger("aftn_web.fdr")
 
 # TTL: 超过此时间未更新的 FDR 将被移除
-FDR_TTL_SECONDS = 8
+FDR_TTL_SECONDS = 60
 
 # 定期检查间隔
 PROCESS_INTERVAL_SECONDS = 4
