@@ -2263,6 +2263,26 @@ function esc(s) {
     var loading = document.getElementById('trail-loading');
     loading.style.display = 'flex';
 
+    // 同时在画布上绘制加载提示（保证可见）
+    try {
+      var ctx = canvas.getContext('2d');
+      var w = canvas.parentElement.clientWidth || 800;
+      var h = canvas.parentElement.clientHeight || 500;
+      var dpr = window.devicePixelRatio || 1;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      ctx.scale(dpr, dpr);
+      ctx.fillStyle = '#0a1628';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('⟳ 加载中...', w/2, h/2);
+    } catch(e) {}
+
     var callsign = _trailState.callsign;
     var dateStr = _trailState.dateStr;
 
