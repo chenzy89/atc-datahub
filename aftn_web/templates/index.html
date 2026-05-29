@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.15</title>
+<title>ATC AFTN WebHub v2.1.16</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.15</span>
+  <span class="badge">v2.1.16</span>
 </div>
 
 <div class="tabs">
@@ -2199,6 +2199,7 @@ function esc(s) {
 
   // 存储全局状态供时间过滤使用
   var _trailState = { callsign: '', dateStr: '', allPoints: [], mapElements: [], terminalConfig: {} };
+  var _trailLoading = false;
 
   function showFlightTrail(callsign, dateStr) {
     if (!callsign) return;
@@ -2206,22 +2207,61 @@ function esc(s) {
     var canvas = document.getElementById('trailCanvas');
     var loading = document.getElementById('trail-loading');
     var title = document.getElementById('trail-title');
+    var filter = document.getElementById('trail-time-filter');
     if (!modal || !canvas) return;
 
     title.textContent = callsign + ' 历史轨迹';
     modal.style.display = 'flex';
-    loading.style.display = 'block';
+    loading.style.display = 'none';
+    if (filter) filter.style.display = 'flex';
+    _trailLoading = false;
+
+    // 清空画布显示提示
     clearCanvas(canvas);
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#64748b';
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    var w = canvas.parentElement.clientWidth || 800;
+    var h = canvas.parentElement.clientHeight || 500;
+    ctx.fillText('输入时间范围后点「确认」或点「全部轨迹」', w/2, h/2);
 
     // 保存状态
     _trailState.callsign = callsign;
     _trailState.dateStr = dateStr || '';
+    _trailState.allPoints = [];
 
     // 重置时间过滤器
     var fromEl = document.getElementById('trailFromTime');
     var durEl = document.getElementById('trailDuration');
     if (fromEl) fromEl.value = '00:00';
     if (durEl) durEl.value = '';
+  }
+
+  function applyTrailFilter() {
+    var fromEl = document.getElementById('trailFromTime');
+    var durEl = document.getElementById('trailDuration');
+    var fromTime = fromEl ? fromEl.value : '';
+    var durStr = durEl ? durEl.value : '';
+    if (!durStr) { alert('请输入时长（分钟）'); return; }
+    _loadAndDrawTrail(fromTime, durStr);
+  }
+
+  function skipTrailFilter() {
+    _loadAndDrawTrail(null, null);
+  }
+
+  function _loadAndDrawTrail(fromTime, durationStr) {
+    if (_trailLoading) return;
+    _trailLoading = true;
+
+    var canvas = document.getElementById('trailCanvas');
+    var loading = document.getElementById('trail-loading');
+    loading.style.display = 'block';
+
+    var callsign = _trailState.callsign;
+    var dateStr = _trailState.dateStr;
 
     // 并行请求：轨迹数据 + 地图背景 + 终端区配置
     var trailPromise = fetch('/api/flight_trail?callsign=' + encodeURIComponent(callsign) + '&date=' + encodeURIComponent(dateStr || ''))
@@ -2253,73 +2293,53 @@ function esc(s) {
 
     Promise.all([trailPromise, mapPromise, termPromise])
       .then(function(results) {
-        _trailState.allPoints = results[0] || [];
+        var allPoints = results[0] || [];
+        _trailState.allPoints = allPoints;
         _trailState.mapElements = results[1] || [];
         _trailState.terminalConfig = results[2] || {};
         loading.style.display = 'none';
+        _trailLoading = false;
 
-        if (!_trailState.allPoints.length) {
+        if (!allPoints.length) {
           drawTrailEmpty(canvas, '航班 ' + callsign + ' 无历史航迹数据');
           return;
         }
 
-        // 未主动点确认/全部前，绘制完整轨迹
-        // 用 setTimeout 等一帧让过滤 UI 先出现
-        setTimeout(function() {
-          doDrawTrail(null, null);
-        }, 50);
+        // 时间过滤
+        var filtered = allPoints;
+        if (fromTime && durationStr) {
+          var dur = parseInt(durationStr);
+          if (!isNaN(dur) && dur > 0) {
+            var fromParts = fromTime.split(':');
+            var fromSec = parseInt(fromParts[0]||0) * 3600 + parseInt(fromParts[1]||0) * 60 + parseInt(fromParts[2]||0);
+            var toSec = fromSec + dur * 60;
+
+            filtered = [];
+            for (var i = 0; i < allPoints.length; i++) {
+              var ts = allPoints[i].ts;
+              if (!ts) continue;
+              var d = new Date(ts);
+              var ptSec = d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds();
+              if (ptSec >= fromSec && ptSec <= toSec) {
+                filtered.push(allPoints[i]);
+              }
+            }
+          }
+        }
+
+        if (!filtered.length) {
+          drawTrailEmpty(canvas, '该时段无轨迹点');
+          return;
+        }
+
+        _trailMapElements = _trailState.mapElements;
+        drawFlightTrail(canvas, callsign, filtered, _trailState.terminalConfig);
       })
       .catch(function(err) {
         loading.style.display = 'none';
+        _trailLoading = false;
         drawTrailEmpty(canvas, '查询失败: ' + err.message);
       });
-  }
-
-  function applyTrailFilter() {
-    var fromEl = document.getElementById('trailFromTime');
-    var durEl = document.getElementById('trailDuration');
-    var fromTime = fromEl ? fromEl.value : '';
-    var durStr = durEl ? durEl.value : '';
-    doDrawTrail(fromTime, durStr);
-  }
-
-  function skipTrailFilter() {
-    doDrawTrail(null, null);
-  }
-
-  function doDrawTrail(fromTime, durationStr) {
-    var canvas = document.getElementById('trailCanvas');
-    var pts = _trailState.allPoints;
-    if (!pts.length) {
-      drawTrailEmpty(canvas, '无数据');
-      return;
-    }
-
-    // 时间过滤
-    var filtered = pts;
-    if (fromTime && durationStr) {
-      var dur = parseInt(durationStr);
-      if (!isNaN(dur) && dur > 0) {
-        var fromParts = fromTime.split(':');
-        var fromSec = parseInt(fromParts[0]||0) * 3600 + parseInt(fromParts[1]||0) * 60 + parseInt(fromParts[2]||0);
-        var toSec = fromSec + dur * 60;
-
-        filtered = [];
-        for (var i = 0; i < pts.length; i++) {
-          var ts = pts[i].ts;
-          if (!ts) continue;
-          // ts is ISO: "2026-05-29T06:00:00.000Z"
-          var d = new Date(ts);
-          var ptSec = d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds();
-          if (ptSec >= fromSec && ptSec <= toSec) {
-            filtered.push(pts[i]);
-          }
-        }
-      }
-    }
-
-    _trailMapElements = _trailState.mapElements;
-    drawFlightTrail(canvas, _trailState.callsign, filtered, _trailState.terminalConfig);
   }
 
   function closeTrailPopup() {
