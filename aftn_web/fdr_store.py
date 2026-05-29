@@ -377,17 +377,21 @@ class FDRStore:
         if terminal in rec._sector_recorded:
             return
 
-        # received_at 为 UTC，折线图横轴为北京时，统一转为 UTC+8
+        # received_at 为 UTC
+        # sector_flights（小时粒度统计）仍用北京时
         from datetime import timedelta
         bj = received_at + timedelta(hours=8)
         dof = bj.strftime("%Y-%m-%d")
         hour = bj.hour
-        slot = (bj.hour * 60 + bj.minute) // 10
+        slot_bj = (bj.hour * 60 + bj.minute) // 10
+        # sector_traffic_10min（语音页折线图）使用 UTC
+        utc_dof = received_at.strftime("%Y-%m-%d")
+        utc_slot = (received_at.hour * 60 + received_at.minute) // 10
         key = (rec.callsign, dof, terminal)
 
         if key not in self._pending_sectors:
-            # 存储 (hour, slot)
-            self._pending_sectors[key] = (hour, slot)
+            # 存储 (hour, slot_bj, utc_dof, utc_slot)
+            self._pending_sectors[key] = (hour, slot_bj, utc_dof, utc_slot)
         rec._sector_recorded.add(terminal)
 
     def _flush_sector_records(self, db: Any) -> int:
@@ -399,13 +403,13 @@ class FDRStore:
             return 0
 
         flushed = 0
-        for (callsign, dof, terminal_code), (hour, slot) in pending.items():
+        for (callsign, dof, terminal_code), (hour, slot_bj, utc_dof, utc_slot) in pending.items():
             try:
                 if db.record_sector_flight(callsign, dof, terminal_code, hour):
                     flushed += 1
-                # 同时记录 10 分钟粒度
+                # 10 分钟粒度使用 UTC
                 try:
-                    db.record_sector_flight_10min(callsign, dof, terminal_code, slot)
+                    db.record_sector_flight_10min(utc_dof, terminal_code, utc_slot)
                 except Exception:
                     pass
             except Exception:

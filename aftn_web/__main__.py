@@ -96,20 +96,21 @@ def _remove_pid_file() -> None:
 
 
 def _backfill_sector_traffic_10min(db: Database) -> None:
-    """回填今日 sector_traffic_10min（从 sector_flights 重建丢失的 slot 数据）"""
+    """回填今日 sector_traffic_10min（从 sector_flights 重建丢失的 slot 数据）
+    使用 UTC 时间与语音折线图对齐。"""
     try:
         import datetime as _dt
-        bj_now = _dt.datetime.utcnow() + _dt.timedelta(hours=8)
-        today_bj = bj_now.strftime("%Y-%m-%d")
+        utc_now = _dt.datetime.utcnow()
+        today_utc = utc_now.strftime("%Y-%m-%d")
         conn = db._get_conn()
         conn.executescript(
             "INSERT OR IGNORE INTO sector_traffic_10min (date, terminal_code, slot, count) "
-            "SELECT '" + today_bj + "', sf.terminal_code, "
-            "  ((CAST(strftime('%H', sf.created_at) AS INTEGER) + 8) % 24 * 60 + "
+            "SELECT '" + today_utc + "', sf.terminal_code, "
+            "  (CAST(strftime('%H', sf.created_at) AS INTEGER) * 60 + "
             "   CAST(strftime('%M', sf.created_at) AS INTEGER)) / 10 AS slot, "
             "  COUNT(*) "
             "FROM sector_flights sf "
-            "WHERE sf.dof = '" + today_bj + "' "
+            "WHERE sf.dof = '" + today_utc + "' "
             "GROUP BY sf.terminal_code, slot"
         )
         conn.commit()

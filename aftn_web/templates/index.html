@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.19</title>
+<title>ATC AFTN WebHub v2.1.20</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.19</span>
+  <span class="badge">v2.1.20</span>
 </div>
 
 <div class="tabs">
@@ -3735,7 +3735,7 @@ function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCo
   ctx.font = '12px sans-serif';
   ctx.textAlign = 'left';
   var secName = terminalCode || _chSectorNames[channelId] || ('CH' + channelId);
-  ctx.fillText('扇区 ' + secName + ' - ' + dateStr, PAD.left, 16);
+  ctx.fillText('扇区 ' + secName + ' - ' + dateStr + ' (UTC)', PAD.left, 16);
 
   var legX = W - PAD.right - 140;
   ctx.fillStyle = '#58a6ff';
