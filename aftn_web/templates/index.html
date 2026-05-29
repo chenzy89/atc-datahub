@@ -2698,6 +2698,8 @@ function esc(s) {
   // 暴露给 HTML onclick（函数定义在 IIFE 内，需要挂到 window）
   window.showFlightTrail = showFlightTrail;
   window.closeTrailPopup = closeTrailPopup;
+  window.applyTrailFilter = applyTrailFilter;
+  window.skipTrailFilter = skipTrailFilter;
 
   // ── 缩放与拖动 + 悬停检测 ──
   var isDragging = false;
