@@ -2261,9 +2261,12 @@ function esc(s) {
 
     var canvas = document.getElementById('trailCanvas');
     var loading = document.getElementById('trail-loading');
+    var _startTime = Date.now();
+
+    // 显示加载遮罩
     loading.style.display = 'flex';
 
-    // 同时在画布上绘制加载提示（保证可见）
+    // 画布绘制加载提示
     try {
       var ctx = canvas.getContext('2d');
       var w = canvas.parentElement.clientWidth || 800;
@@ -2320,49 +2323,78 @@ function esc(s) {
         _trailState.allPoints = allPoints;
         _trailState.mapElements = results[1] || [];
         _trailState.terminalConfig = results[2] || {};
-        loading.style.display = 'none';
-        _trailLoading = false;
 
-        if (!allPoints.length) {
-          drawTrailEmpty(canvas, '航班 ' + callsign + ' 无历史航迹数据');
-          return;
+        // 保证加载提示至少显示 500ms，避免闪一下就消失
+        var elapsed = Date.now() - _startTime;
+        var minShow = 500;
+        if (elapsed < minShow) {
+          setTimeout(function() { _renderTrailResult(canvas, loading, callsign, allPoints, fromTime, durationStr); }, minShow - elapsed);
+        } else {
+          _renderTrailResult(canvas, loading, callsign, allPoints, fromTime, durationStr);
         }
-
-        // 时间过滤
-        var filtered = allPoints;
-        if (fromTime && durationStr) {
-          var dur = parseInt(durationStr);
-          if (!isNaN(dur) && dur > 0) {
-            var fromParts = fromTime.split(':');
-            var fromSec = parseInt(fromParts[0]||0) * 3600 + parseInt(fromParts[1]||0) * 60 + parseInt(fromParts[2]||0);
-            var toSec = fromSec + dur * 60;
-
-            filtered = [];
-            for (var i = 0; i < allPoints.length; i++) {
-              var ts = allPoints[i].ts;
-              if (!ts) continue;
-              var d = new Date(ts);
-              var ptSec = d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds();
-              if (ptSec >= fromSec && ptSec <= toSec) {
-                filtered.push(allPoints[i]);
-              }
-            }
-          }
-        }
-
-        if (!filtered.length) {
-          drawTrailEmpty(canvas, '该时段无轨迹点');
-          return;
-        }
-
-        _trailMapElements = _trailState.mapElements;
-        drawFlightTrail(canvas, callsign, filtered, _trailState.terminalConfig);
       })
       .catch(function(err) {
         loading.style.display = 'none';
         _trailLoading = false;
-        drawTrailEmpty(canvas, '查询失败: ' + err.message);
+        try {
+          var ctx = canvas.getContext('2d');
+          var w = canvas.parentElement.clientWidth || 800;
+          var h = canvas.parentElement.clientHeight || 500;
+          var dpr = window.devicePixelRatio || 1;
+          canvas.width = w * dpr;
+          canvas.height = h * dpr;
+          canvas.style.width = w + 'px';
+          canvas.style.height = h + 'px';
+          ctx.scale(dpr, dpr);
+          ctx.fillStyle = '#0a1628';
+          ctx.fillRect(0, 0, w, h);
+          ctx.fillStyle = '#f85149';
+          ctx.font = '14px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('查询失败: ' + err.message, w/2, h/2);
+        } catch(e2) {}
       });
+  }
+
+  function _renderTrailResult(canvas, loading, callsign, allPoints, fromTime, durationStr) {
+    loading.style.display = 'none';
+    _trailLoading = false;
+
+    if (!allPoints.length) {
+      drawTrailEmpty(canvas, '航班 ' + callsign + ' 无历史航迹数据');
+      return;
+    }
+
+    // 时间过滤
+    var filtered = allPoints;
+    if (fromTime && durationStr) {
+      var dur = parseInt(durationStr);
+      if (!isNaN(dur) && dur > 0) {
+        var fromParts = fromTime.split(':');
+        var fromSec = parseInt(fromParts[0]||0) * 3600 + parseInt(fromParts[1]||0) * 60 + parseInt(fromParts[2]||0);
+        var toSec = fromSec + dur * 60;
+
+        filtered = [];
+        for (var i = 0; i < allPoints.length; i++) {
+          var ts = allPoints[i].ts;
+          if (!ts) continue;
+          var d = new Date(ts);
+          var ptSec = d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds();
+          if (ptSec >= fromSec && ptSec <= toSec) {
+            filtered.push(allPoints[i]);
+          }
+        }
+      }
+    }
+
+    if (!filtered.length) {
+      drawTrailEmpty(canvas, '该时段无轨迹点');
+      return;
+    }
+
+    _trailMapElements = _trailState.mapElements;
+    drawFlightTrail(canvas, callsign, filtered, _trailState.terminalConfig);
   }
 
   function closeTrailPopup() {
