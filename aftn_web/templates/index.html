@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.18</title>
+<title>ATC AFTN WebHub v2.1.19</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.18</span>
+  <span class="badge">v2.1.19</span>
 </div>
 
 <div class="tabs">
@@ -2982,6 +2982,12 @@ function esc(s) {
         _voiceLoaded = true;
         _voiceSyncEnabled = true;
 
+        // 如果回放已经在播放，自动开始语音
+        if (state === STATE.PLAYING) {
+          _syncVoicePosition();
+          _voiceAudio.play().catch(function(){});
+        }
+
         // 计算语音时间范围 (ms)
         var startMs = Date.UTC(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]),
           parseInt(el.hour.value), parseInt(el.min.value), parseInt(el.sec.value));
@@ -3097,6 +3103,8 @@ function esc(s) {
       window._radarTracks = [];
       updateReplayFrame(replayCurrentTime);
       startPlaybackClock();
+      _startVoice();
+      _syncVoicePosition();
     };
     xhr.onerror = xhr.onabort = function() {
       hideReplayLoading();
