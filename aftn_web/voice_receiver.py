@@ -245,7 +245,7 @@ class VoiceReceiver:
         self._duration_buckets: dict[str, dict[int, list[float]]] = {}
         self._burst_start: dict[int, float] = {}
         self._last_data_time: dict[int, float] = {}
-        self._silence_threshold = 3.0  # 3 秒无数据视为通话结束
+        self._silence_threshold = 1.0  # 1 秒无数据视为一句话说完
         self._today_date = datetime.now().strftime("%Y-%m-%d")
         self._duration_lock = threading.Lock()
         self._db_flush_counter = 0
