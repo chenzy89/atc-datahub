@@ -783,7 +783,7 @@ canvas#radarMap {
     </div>
     <div style="flex:1;position:relative;overflow:hidden;">
       <canvas id="trailCanvas"></canvas>
-      <div id="trail-loading" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--text-muted);font-size:14px;">加载中...</div>
+      <div id="trail-loading" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--text-muted);font-size:14px;">加载中...</div>
     </div>
   </div>
 </div>
@@ -2346,6 +2346,7 @@ function esc(s) {
     document.getElementById('modal-trail').style.display = 'none';
     _trailMapElements = [];
     _trailGeo = null;
+    _trailLoading = false;  // 重置加载标志，防止下次无法加载
   }
 
   function clearCanvas(canvas) {
