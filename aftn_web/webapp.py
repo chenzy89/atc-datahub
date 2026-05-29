@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from .voice_receiver import VoiceReceiver
 
 def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = None, radar_history_store: RadarHistoryStore | None = None, voice_receiver: VoiceReceiver | None = None) -> Flask:
     _RADAR_MAP_VERSION = "v0.1"
+    _config_file = config.config_file
     app = Flask(
         __name__,
         template_folder=str(Path(__file__).parent / "templates"),
@@ -33,8 +35,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     @app.route("/")
     def index():
-        return render_template("index.html",
-            map_bg_color=config.web.map_background_color)
+        return render_template("index.html")
 
     @app.route("/api/maplist")
     def api_maplist():
@@ -179,6 +180,18 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         """返回终端区完整配置（机场列表+多边形+高度）"""
         from .terminal_area import get_terminal_config_safe
         return jsonify(get_terminal_config_safe())
+
+    @app.route("/api/config/map_bg")
+    def api_config_map_bg():
+        """动态读取 config.json 中的雷达地图背景色（改配置后刷新即可，无需重启）"""
+        bg = "#0a1628"
+        if _config_file and _config_file.exists():
+            try:
+                raw = json.loads(_config_file.read_text(encoding="utf-8"))
+                bg = str(raw.get("web", {}).get("map_background_color", "#0a1628"))
+            except Exception:
+                pass
+        return jsonify({"color": bg})
 
     @app.route("/api/fdr_stats")
     def api_fdr_stats():

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.17</title>
+<title>ATC AFTN WebHub v2.1.18</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.17</span>
+  <span class="badge">v2.1.18</span>
 </div>
 
 <div class="tabs">
@@ -792,7 +792,9 @@ canvas#radarMap {
 </div>
 
 <script>
-var _MAP_BG = '{{ map_bg_color }}';
+var _MAP_BG = '#0a1628';  // 默认值，加载后从 API 更新
+// 异步获取配置中的背景色（改 config.json 刷新页面即生效，无需重启进程）
+fetch('/api/config/map_bg').then(r=>r.json()).then(d=>{ if(d.color) _MAP_BG=d.color }).catch(()=>{});
 // ═══════════════════════════════════════════════════════
 // State
 // ═══════════════════════════════════════════════════════
