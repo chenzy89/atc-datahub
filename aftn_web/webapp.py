@@ -33,7 +33,8 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     @app.route("/")
     def index():
-        return render_template("index.html")
+        return render_template("index.html",
+            map_bg_color=config.web.map_background_color)
 
     @app.route("/api/maplist")
     def api_maplist():

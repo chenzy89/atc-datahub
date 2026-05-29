@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.16</title>
+<title>ATC AFTN WebHub v2.1.17</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.16</span>
+  <span class="badge">v2.1.17</span>
 </div>
 
 <div class="tabs">
@@ -792,6 +792,7 @@ canvas#radarMap {
 </div>
 
 <script>
+var _MAP_BG = '{{ map_bg_color }}';
 // ═══════════════════════════════════════════════════════
 // State
 // ═══════════════════════════════════════════════════════
@@ -1942,7 +1943,7 @@ function esc(s) {
     ctx.scale(dpr, dpr);
 
     // ── 背景 ──
-    ctx.fillStyle = '#0a1628';
+    ctx.fillStyle = _MAP_BG;
     ctx.fillRect(0, 0, displayW, displayH);
 
     // ── 边框 ──
@@ -2328,7 +2329,7 @@ function esc(s) {
           canvas.style.width = w + 'px';
           canvas.style.height = h + 'px';
           ctx.scale(dpr, dpr);
-          ctx.fillStyle = '#0a1628';
+          ctx.fillStyle = _MAP_BG;
           ctx.fillRect(0, 0, w, h);
           ctx.fillStyle = '#f85149';
           ctx.font = '14px sans-serif';
@@ -2399,7 +2400,7 @@ function esc(s) {
     canvas.style.height = h + 'px';
     var ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    ctx.fillStyle = '#0a1628';
+    ctx.fillStyle = _MAP_BG;
     ctx.fillRect(0, 0, w, h);
   }
 
@@ -2416,7 +2417,7 @@ function esc(s) {
     canvas.style.height = h + 'px';
     var ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    ctx.fillStyle = '#0a1628';
+    ctx.fillStyle = _MAP_BG;
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = '#64748b';
     ctx.font = '14px sans-serif';
@@ -2502,7 +2503,7 @@ function esc(s) {
     _trailGeo = new GeoTransform({lat: centerLat, lon: centerLon}, scale, w, h);
 
     // 绘制背景
-    ctx.fillStyle = '#0a1628';
+    ctx.fillStyle = _MAP_BG;
     ctx.fillRect(0, 0, w, h);
 
     for (var i = 0; i < _trailMapElements.length; i++) {

@@ -26,6 +26,7 @@ class WebConfig:
     host: str = "0.0.0.0"
     port: int = 5000
     debug: bool = False
+    map_background_color: str = "#0a1628"
 
 
 @dataclass
@@ -118,6 +119,7 @@ def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
             host=web.get("host", "0.0.0.0"),
             port=int(web.get("port", 5000)),
             debug=bool(web.get("debug", False)),
+            map_background_color=str(web.get("map_background_color", "#0a1628")),
         ),
         config_file=config_file,
     )
