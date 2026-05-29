@@ -647,14 +647,14 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             return jsonify({"error": "invalid channel"}), 400
         return jsonify({"ok": True, "channel": channel})
 
+    _voice_save_dir = config.voice_data.save_dir if hasattr(config, "voice_data") and config.voice_data.save_dir else ""
+    if not _voice_save_dir:
+        _voice_save_dir = str(Path(config.db_path).parent / "voice")
+    _voice_save_dir = str(Path(_voice_save_dir).resolve())
     _voice_config = {
-        "retention_days": config.voice_data.retention_days,
-        "flight_count_max": config.voice_data.flight_count_max,
-        "save_dir": str(config.voice_data.save_dir or ""),
-    } if hasattr(config, "voice_data") else {
-        "retention_days": 30,
-        "flight_count_max": 18,
-        "save_dir": "",
+        "retention_days": config.voice_data.retention_days if hasattr(config, "voice_data") else 30,
+        "flight_count_max": config.voice_data.flight_count_max if hasattr(config, "voice_data") else 18,
+        "save_dir": _voice_save_dir,
     }
 
     @app.route("/api/voice/config")
