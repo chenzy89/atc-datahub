@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.22</title>
+<title>ATC AFTN WebHub v2.1.23</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.22</span>
+  <span class="badge">v2.1.23</span>
 </div>
 
 <div class="tabs">
@@ -1088,7 +1088,7 @@ function renderPlans(rs) {
       msgTagsHtml += '<span class="tag ' + mtc + '" style="cursor:pointer;margin-right:3px;" onclick="showFplMsg(\'' + esc(r.callsign||'') + '\',\'' + dofStr + '\')" title="查看该计划的两天内所有报文">' + mt + '</span>';
     }
     h += '<tr>' +
-      '<td class="callsign"><a href="javascript:void(0)" onclick="showFlightTrail(\'' + esc(r.callsign||'') + '\',\'' + (r.dof||'').slice(0,10) + '\')" style="color:var(--accent-green);text-decoration:none;cursor:pointer;" title="查看历史轨迹">' + (r.callsign||'-') + '</a></td>' +
+      '<td class="callsign"><a href="javascript:void(0)" onclick="showFlightTrail(this)" data-callsign="' + esc(r.callsign||'') + '" data-dof="' + esc((r.dof||'').slice(0,10)) + '" data-atd="' + esc(r.atd||'') + '" data-ata="' + esc(r.ata||'') + '" data-entry="' + esc(r.entry_time||'') + '" data-exit="' + esc(r.exit_time||'') + '" style="color:var(--accent-green);text-decoration:none;cursor:pointer;" title="查看历史轨迹">' + (r.callsign||'-') + '</a></td>' +
       '<td>' + (r.flight_rule||'-') + '</td>' +
       '<td>' + (r.handover_pt||'-') + '</td>' +
       '<td>' + (r.aircraft_type||'-') + '</td>' +
@@ -2207,7 +2207,66 @@ function esc(s) {
   var _trailState = { callsign: '', dateStr: '', allPoints: [], mapElements: [], terminalConfig: {} };
   var _trailLoading = false;
 
-  function showFlightTrail(callsign, dateStr) {
+  function _parseUtcTimestamp(s) {
+    if (!s) return null;
+    // handles "YYYY-MM-DD HH:MM:SS" and "YYYY-MM-DDTHH:MM:SSZ"
+    var t = s.replace(' ', 'T').replace('Z', '');
+    if (!t) return null;
+    var d = new Date(t + 'Z');
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function _pad2(n) { return n < 10 ? '0' + n : '' + n; }
+
+  function _computeTrailDefaults(atd, ata, entryTime, exitTime) {
+    // 返回: { fromTime: 'HH:MM', duration: number (分钟) }
+    // 进港航班：fromTime = 进区域时间 - 8分钟
+    if (entryTime) {
+      var entryDt = _parseUtcTimestamp(entryTime);
+      if (entryDt) {
+        var fromDt = new Date(entryDt.getTime() - 8 * 60000);
+        var fromH = _pad2(fromDt.getUTCHours());
+        var fromM = _pad2(fromDt.getUTCMinutes());
+        var fromTime = fromH + ':' + fromM;
+        // 时长 = max(12, ATA - entryTime + 5)
+        var dur = 12;
+        if (ata) {
+          var ataDt = _parseUtcTimestamp(ata);
+          if (ataDt) {
+            dur = Math.max(12, Math.round((ataDt - entryDt) / 60000) + 5);
+          }
+        }
+        return { fromTime: fromTime, duration: dur };
+      }
+    }
+    // 出港航班：fromTime = ATD
+    if (atd) {
+      var atdDt = _parseUtcTimestamp(atd);
+      if (atdDt) {
+        var fromTime = _pad2(atdDt.getUTCHours()) + ':' + _pad2(atdDt.getUTCMinutes());
+        // 时长 = max(12, exitTime - ATD + 5)
+        var dur = 12;
+        if (exitTime) {
+          var exitDt = _parseUtcTimestamp(exitTime);
+          if (exitDt) {
+            dur = Math.max(12, Math.round((exitDt - atdDt) / 60000) + 5);
+          }
+        }
+        return { fromTime: fromTime, duration: dur };
+      }
+    }
+    // 无可用时间，使用默认值
+    return { fromTime: '00:00', duration: '' };
+  }
+
+  function showFlightTrail(el) {
+    var callsign = el.dataset.callsign;
+    var dateStr = el.dataset.dof;
+    var atd = el.dataset.atd;
+    var ata = el.dataset.ata;
+    var entryTime = el.dataset.entry;
+    var exitTime = el.dataset.exit;
+
     if (!callsign) return;
     var modal = document.getElementById('modal-trail');
     var canvas = document.getElementById('trailCanvas');
@@ -2238,11 +2297,12 @@ function esc(s) {
     _trailState.dateStr = dateStr || '';
     _trailState.allPoints = [];
 
-    // 重置时间过滤器
+    // 设置智能默认值
+    var defaults = _computeTrailDefaults(atd, ata, entryTime, exitTime);
     var fromEl = document.getElementById('trailFromTime');
     var durEl = document.getElementById('trailDuration');
-    if (fromEl) fromEl.value = '00:00';
-    if (durEl) durEl.value = '';
+    if (fromEl) fromEl.value = defaults.fromTime || '00:00';
+    if (durEl) durEl.value = defaults.duration !== '' ? String(defaults.duration) : '';
   }
 
   function applyTrailFilter() {
