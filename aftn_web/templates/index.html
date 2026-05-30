@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.21</title>
+<title>ATC AFTN WebHub v2.1.22</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.21</span>
+  <span class="badge">v2.1.22</span>
 </div>
 
 <div class="tabs">
@@ -3354,11 +3354,11 @@ function voiceInit() {
   if (voiceChartTimer) clearInterval(voiceChartTimer);
   voiceChartTimer = setInterval(voiceLoadChart, 60000);
 
-  // 初始化回放日期为今天
+  // 初始化回放日期为今天（UTC）
   var pd = document.getElementById('voicePlayDate');
   if (pd) {
     var d = new Date();
-    pd.value = d.getFullYear() + '-' + _zp(d.getMonth()+1) + '-' + _zp(d.getDate());
+    pd.value = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
   }
 }
 
@@ -3471,7 +3471,7 @@ function voiceSelectFromCard(channelId) {
   var dateInput = document.getElementById('voiceChartDate');
   if (dateInput && !dateInput.value) {
     var d = new Date();
-    dateInput.value = d.getFullYear() + '-' + _zp(d.getMonth()+1) + '-' + _zp(d.getDate());
+    dateInput.value = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
   }
   var sel = document.getElementById('voiceChartChannel');
   if (sel) sel.value = channelId;

@@ -97,11 +97,13 @@ def _remove_pid_file() -> None:
 
 def _backfill_sector_traffic_10min(db: Database) -> None:
     """回填今日 sector_traffic_10min（从 sector_flights 重建丢失的 slot 数据）
-    使用 UTC 时间与语音折线图对齐。"""
+    使用 UTC 时间与语音折线图对齐。
+    通过 sf.created_at（UTC）过滤来对齐 UTC 日期，而非 sf.dof（北京时）。"""
     try:
         import datetime as _dt
         utc_now = _dt.datetime.utcnow()
         today_utc = utc_now.strftime("%Y-%m-%d")
+        tomorrow_utc = (utc_now + _dt.timedelta(days=1)).strftime("%Y-%m-%d")
         conn = db._get_conn()
         conn.executescript(
             "INSERT OR IGNORE INTO sector_traffic_10min (date, terminal_code, slot, count) "
@@ -110,7 +112,8 @@ def _backfill_sector_traffic_10min(db: Database) -> None:
             "   CAST(strftime('%M', sf.created_at) AS INTEGER)) / 10 AS slot, "
             "  COUNT(*) "
             "FROM sector_flights sf "
-            "WHERE sf.dof = '" + today_utc + "' "
+            "WHERE sf.created_at >= '" + today_utc + " 00:00:00' "
+            "  AND sf.created_at < '" + tomorrow_utc + " 00:00:00' "
             "GROUP BY sf.terminal_code, slot"
         )
         conn.commit()
@@ -233,14 +236,14 @@ def main(argv: list[str] | None = None) -> int:
                 except Exception:
                     pass
                 # 定期回填今日扇区架次（每日一次，防止跨日或启动时遗漏）
+                # 使用 UTC 日期作为触发条件，与 backfill 内部查询一致
                 try:
-                    import datetime as _dt_b
-                    _bj = _dt_b.datetime.utcnow() + _dt_b.timedelta(hours=8)
-                    _today = _bj.strftime("%Y-%m-%d")
-                    if _last_backfill_date[0] != _today:
+                    import datetime as _dt_u
+                    _today_utc = _dt_u.datetime.utcnow().strftime("%Y-%m-%d")
+                    if _last_backfill_date[0] != _today_utc:
                         _backfill_sector_traffic_10min(db)
-                        _last_backfill_date[0] = _today
-                        logger.info("sector_traffic_10min backfill done for %s", _today)
+                        _last_backfill_date[0] = _today_utc
+                        logger.info("sector_traffic_10min backfill done for %s", _today_utc)
                 except Exception:
                     pass
 
