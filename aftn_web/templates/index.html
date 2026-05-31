@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.23</title>
+<title>ATC AFTN WebHub v2.1.24</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.23</span>
+  <span class="badge">v2.1.24</span>
 </div>
 
 <div class="tabs">
@@ -2224,7 +2224,7 @@ function esc(s) {
     if (entryTime) {
       var entryDt = _parseUtcTimestamp(entryTime);
       if (entryDt) {
-        var fromDt = new Date(entryDt.getTime() - 8 * 60000);
+        var fromDt = new Date(entryDt.getTime() - 5 * 60000);
         var fromH = _pad2(fromDt.getUTCHours());
         var fromM = _pad2(fromDt.getUTCMinutes());
         var fromTime = fromH + ':' + fromM;

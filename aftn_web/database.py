@@ -162,22 +162,20 @@ class Database:
         conn.commit()
 
         # ── 回填：从 sector_flights 填充 sector_traffic_10min ──
+        # 覆盖所有 sector_flights 中存在但 sector_traffic_10min 中缺失的日期
         try:
-            import datetime as _dt
-            utc_now = _dt.datetime.utcnow()
-            today_utc = utc_now.strftime("%Y-%m-%d")
-            # created_at 是 UTC，用 created_at 过滤对齐 UTC 日期
-            tomorrow_utc = (utc_now + _dt.timedelta(days=1)).strftime("%Y-%m-%d")
             conn.executescript(
                 "INSERT OR IGNORE INTO sector_traffic_10min (date, terminal_code, slot, count) "
-                "SELECT '" + today_utc + "', sf.terminal_code, "
+                "SELECT sf.dof, sf.terminal_code, "
                 "  (CAST(strftime('%H', sf.created_at) AS INTEGER) * 60 + "
                 "   CAST(strftime('%M', sf.created_at) AS INTEGER)) / 10 AS slot, "
                 "  COUNT(*) "
                 "FROM sector_flights sf "
-                "WHERE sf.created_at >= '" + today_utc + " 00:00:00' "
-                "  AND sf.created_at < '" + tomorrow_utc + " 00:00:00' "
-                "GROUP BY sf.terminal_code, slot"
+                "WHERE NOT EXISTS ("
+                "  SELECT 1 FROM sector_traffic_10min st "
+                "  WHERE st.date = sf.dof AND st.terminal_code = sf.terminal_code"
+                ")"
+                "GROUP BY sf.dof, sf.terminal_code, slot"
             )
             conn.commit()
         except Exception:
@@ -998,7 +996,7 @@ class Database:
                 result[s] = r["duration"]
         return result
 
-    def record_sector_flight_10min(self, callsign: str, dof: str,
+    def record_sector_flight_10min(self, dof: str,
                                      terminal_code: str, slot: int) -> bool:
         """更新 10 分钟粒度扇区飞行架次（由上游去重，直接累加）"""
         for retry in range(3):
