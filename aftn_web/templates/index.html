@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.24</title>
+<title>ATC AFTN WebHub v2.1.25</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.24</span>
+  <span class="badge">v2.1.25</span>
 </div>
 
 <div class="tabs">
@@ -3414,12 +3414,13 @@ function voiceInit() {
   if (voiceChartTimer) clearInterval(voiceChartTimer);
   voiceChartTimer = setInterval(voiceLoadChart, 60000);
 
-  // 初始化回放日期为今天（UTC）
+  // 初始化日期为今天（UTC）
+  var d = new Date();
+  var todayUTC = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
   var pd = document.getElementById('voicePlayDate');
-  if (pd) {
-    var d = new Date();
-    pd.value = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
-  }
+  if (pd) pd.value = todayUTC;
+  var cd = document.getElementById('voiceChartDate');
+  if (cd && !cd.value) cd.value = todayUTC;
 }
 
 function voicePollStatus() {
@@ -3679,6 +3680,13 @@ function voiceLoadChart() {
   var ch = chSel ? parseInt(chSel.value) : -1;
   var flightMax = fmInput ? parseInt(fmInput.value) || 18 : 18;
 
+  // 自动填充 UTC 日期
+  if (!dateStr && dateInput) {
+    var d = new Date();
+    dateStr = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
+    dateInput.value = dateStr;
+  }
+
   if (!dateStr || ch < 0) {
     document.getElementById('voiceChartEmpty').style.display = 'block';
     document.getElementById('voiceChartEmpty').textContent = '请选择日期和通道';
@@ -3688,21 +3696,31 @@ function voiceLoadChart() {
   document.getElementById('voiceChartEmpty').textContent = '加载中...';
   document.getElementById('voiceChartEmpty').style.display = 'block';
 
-  fetch('/api/voice/duration?date=' + encodeURIComponent(dateStr) + '&channel=' + ch)
+  // 判断是否为今天（UTC）— 需要获取昨日参考数据
+  var now = new Date();
+  var todayUTC = now.getUTCFullYear() + '-' + _zp(now.getUTCMonth()+1) + '-' + _zp(now.getUTCDate());
+  var isToday = (dateStr === todayUTC);
+
+  var url = '/api/voice/duration?date=' + encodeURIComponent(dateStr) + '&channel=' + ch;
+  if (isToday) url += '&include_yesterday=1';
+
+  fetch(url)
     .then(function(r) { return r.json(); })
     .then(function(data) {
       document.getElementById('voiceChartEmpty').style.display = 'none';
-      // 使用用户配置或服务器返回的 flight_count_max
       var serverMax = data.flight_count_max || 18;
       var useMax = flightMax || serverMax;
-      voiceDrawChart(data.duration || [], data.flight_count || [], dateStr, ch, data.terminal_code || '', useMax);
+      voiceDrawChart(
+        data.duration || [], data.flight_count || [], dateStr, ch, data.terminal_code || '', useMax,
+        isToday, data.yesterday_duration || null, data.yesterday_flight_count || null
+      );
     })
     .catch(function() {
       document.getElementById('voiceChartEmpty').textContent = '查询失败';
     });
 }
 
-function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCode, flightMax) {
+function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCode, flightMax, isToday, yesterdayDuration, yesterdayFlight) {
   var canvas = document.getElementById('voiceChart');
   if (!canvas || !durationData) return;
 
@@ -3724,6 +3742,20 @@ function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCo
   var maxDur = 600;
   var maxFlights = flightMax || 18;
   var numPoints = 144;
+
+  // ── 跨日参考逻辑 ──
+  var currentSlot = -1;
+  var maskStartSlot = -1;
+  var hasReference = false;
+  var now = new Date();
+
+  if (isToday && yesterdayDuration && yesterdayDuration.length === numPoints) {
+    currentSlot = now.getUTCHours() * 6 + Math.floor(now.getUTCMinutes() / 10);
+    if (currentSlot >= numPoints) currentSlot = numPoints - 1;
+    maskStartSlot = currentSlot + 6; // 60 分钟缓冲
+    if (maskStartSlot > numPoints) maskStartSlot = numPoints;
+    hasReference = true;
+  }
 
   // ── 网格 ──
   ctx.strokeStyle = '#21262d';
@@ -3755,30 +3787,80 @@ function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCo
   }
   ctx.fillText('24:00', W - PAD.right, H - 8);
 
-  // ── 通话时长折线 ──
+  // ════════════════════════════════════════════
+  // 昨日参考数据（位于遮罩层下层）
+  // ════════════════════════════════════════════
+  if (hasReference) {
+    // 飞行架次柱形图（昨日参考 — 半透明）
+    if (yesterdayFlight && yesterdayFlight.length) {
+      var barW = Math.max(2, (plotW / 144) * 0.6);
+      for (var i = maskStartSlot; i < numPoints; i++) {
+        var val = yesterdayFlight[i] || 0;
+        if (val <= 0) continue;
+        var valClamped = Math.min(val, maxFlights);
+        var x = PAD.left + (i / 143) * plotW;
+        var barH = (valClamped / maxFlights) * plotH;
+        var y = PAD.top + plotH - barH;
+        ctx.fillStyle = 'rgba(210,153,34,0.35)';
+        ctx.fillRect(x - barW / 2, y, barW, barH);
+      }
+    }
+
+    // 通话时长折线（昨日参考 — 虚线 + 半透明）
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(88,166,255,0.4)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    var firstRef = true;
+    for (var i = maskStartSlot; i < numPoints; i++) {
+      var x = PAD.left + (i / 143) * plotW;
+      var val = Math.min(yesterdayDuration[i] || 0, maxDur);
+      var y = PAD.top + plotH - (val / maxDur) * plotH;
+      if (firstRef) { ctx.moveTo(x, y); firstRef = false; }
+      else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // ════════════════════════════════════════════
+  // 今日数据
+  // ════════════════════════════════════════════
+
+  // ── 通话时长折线（今日） ──
   ctx.beginPath();
   ctx.strokeStyle = '#58a6ff';
   ctx.lineWidth = 2;
   var first = true;
-  for (var i = 0; i < numPoints; i++) {
+  var todayEndIdx = hasReference ? maskStartSlot : numPoints;
+  for (var i = 0; i < todayEndIdx; i++) {
     var x = PAD.left + (i / 143) * plotW;
-    var val = Math.min(durationData[i] || 0, maxDur);
+    var val;
+    if (hasReference && i >= currentSlot) {
+      val = 0; // 缓冲区域强制为 0
+    } else {
+      val = Math.min(durationData[i] || 0, maxDur);
+    }
     var y = PAD.top + plotH - (val / maxDur) * plotH;
     if (first) { ctx.moveTo(x, y); first = false; }
     else { ctx.lineTo(x, y); }
   }
+  // 如果今日数据有效，闭合填充区域
+  if (todayEndIdx > 0) {
+    var lastX = PAD.left + ((todayEndIdx - 1) / 143) * plotW;
+    ctx.lineTo(lastX, PAD.top + plotH);
+    ctx.lineTo(PAD.left, PAD.top + plotH);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(88,166,255,0.08)';
+    ctx.fill();
+  }
   ctx.stroke();
 
-  ctx.lineTo(W - PAD.right, PAD.top + plotH);
-  ctx.lineTo(PAD.left, PAD.top + plotH);
-  ctx.closePath();
-  ctx.fillStyle = 'rgba(88,166,255,0.08)';
-  ctx.fill();
-
-  // ── 飞行架次柱形图 ──
+  // ── 飞行架次柱形图（今日） ──
   if (flightData && flightData.length) {
     var barW = Math.max(2, (plotW / 144) * 0.6);
-    for (var i = 0; i < numPoints && i < flightData.length; i++) {
+    for (var i = 0; i < todayEndIdx && i < flightData.length; i++) {
+      if (hasReference && i >= currentSlot) continue;
       var val = flightData[i] || 0;
       if (val <= 0) continue;
       var valClamped = Math.min(val, maxFlights);
@@ -3790,24 +3872,98 @@ function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCo
     }
   }
 
+  // ════════════════════════════════════════════
+  // 缓冲区域标记
+  // ════════════════════════════════════════════
+  if (hasReference && currentSlot < maskStartSlot - 1) {
+    var bufX1 = PAD.left + (currentSlot / 143) * plotW;
+    var bufX2 = PAD.left + ((maskStartSlot - 1) / 143) * plotW;
+    ctx.fillStyle = 'rgba(255,165,0,0.06)';
+    ctx.fillRect(bufX1, PAD.top, bufX2 - bufX1, plotH);
+    ctx.fillStyle = 'rgba(255,165,0,0.5)';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('缓冲', (bufX1 + bufX2) / 2, PAD.top + 12);
+  }
+
+  // ════════════════════════════════════════════
+  // 参考区域遮罩（半透明 + 斜纹理 + 分隔线）
+  // ════════════════════════════════════════════
+  if (hasReference && maskStartSlot < numPoints) {
+    var maskX = PAD.left + (maskStartSlot / 143) * plotW;
+
+    // 半透明遮罩底层
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    ctx.fillRect(maskX, PAD.top, W - PAD.right - maskX, plotH);
+
+    // 斜线纹理
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(maskX, PAD.top, W - PAD.right - maskX, plotH);
+    ctx.clip();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    for (var lx = maskX - 20; lx < W - PAD.right + 40; lx += 12) {
+      ctx.beginPath();
+      ctx.moveTo(lx, PAD.top);
+      ctx.lineTo(lx + 24, PAD.top + plotH);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 分隔竖虚线
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(maskX, PAD.top);
+    ctx.lineTo(maskX, PAD.top + plotH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 参考区域标签
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    var labelX = maskX + (W - PAD.right - maskX) / 2;
+    ctx.fillText('┅ 昨日参考数据 ┅', labelX, PAD.top + plotH / 2);
+  }
+
   // ── 标题 + 图例 ──
   ctx.fillStyle = '#e6edf3';
   ctx.font = '12px sans-serif';
   ctx.textAlign = 'left';
   var secName = terminalCode || _chSectorNames[channelId] || ('CH' + channelId);
-  ctx.fillText('扇区 ' + secName + ' - ' + dateStr + ' (UTC)', PAD.left, 16);
+  var title = '扇区 ' + secName + ' - ' + dateStr + ' (UTC)';
+  if (isToday) title += '  [实时]';
+  ctx.fillText(title, PAD.left, 16);
 
-  var legX = W - PAD.right - 140;
+  var legX = W - PAD.right - 220;
   ctx.fillStyle = '#58a6ff';
   ctx.fillRect(legX, 6, 12, 3);
   ctx.fillStyle = '#8b949e';
   ctx.font = '10px sans-serif';
-  ctx.fillText('通话时长', legX + 16, 12);
+  ctx.fillText('今日通话时长', legX + 16, 12);
 
   ctx.fillStyle = '#d29922';
-  ctx.fillRect(legX + 70, 6, 12, 3);
+  ctx.fillRect(legX + 90, 6, 12, 3);
   ctx.fillStyle = '#8b949e';
-  ctx.fillText('飞行架次', legX + 86, 12);
+  ctx.fillText('今日飞行架次', legX + 106, 12);
+
+  if (hasReference) {
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = 'rgba(88,166,255,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(legX + 178, 9);
+    ctx.lineTo(legX + 190, 9);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '9px sans-serif';
+    ctx.fillText('昨日参考', legX + 194, 12);
+  }
 
   ctx.fillStyle = '#58a6ff';
   ctx.font = '10px sans-serif';

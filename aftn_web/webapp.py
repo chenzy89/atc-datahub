@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -678,7 +678,11 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     @app.route("/api/voice/duration")
     def api_voice_duration():
-        """返回指定通道在指定日期的 144 个通话时长 + 扇区飞行架次"""
+        """返回指定通道在指定日期的 144 个通话时长 + 扇区飞行架次
+
+        Query params:
+            include_yesterday: 1 时额外返回昨日参考数据
+        """
         if voice_receiver is None:
             return jsonify({"error": "voice not enabled"}), 400
         date_str = request.args.get("date", datetime.utcnow().strftime("%Y-%m-%d"))
@@ -703,14 +707,33 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             except Exception:
                 pass
 
-        return jsonify({
+        result = {
             "date": date_str,
             "channel": channel_id,
             "terminal_code": terminal_code,
             "duration": duration_data,
             "flight_count": flight_data,
             "flight_count_max": _voice_config["flight_count_max"],
-        })
+        }
+
+        # 昨日参考数据
+        include_yesterday = request.args.get("include_yesterday", "0") == "1"
+        if include_yesterday:
+            try:
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                yesterday_str = (dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                result["yesterday_duration"] = voice_receiver.get_channel_duration(yesterday_str, channel_id)
+                yesterday_flight = []
+                if terminal_code:
+                    try:
+                        yesterday_flight = db.query_sector_traffic_10min(yesterday_str, terminal_code)
+                    except Exception:
+                        pass
+                result["yesterday_flight_count"] = yesterday_flight
+            except Exception:
+                pass
+
+        return jsonify(result)
 
     @app.route("/api/voice/recordings")
     def api_voice_recordings():
