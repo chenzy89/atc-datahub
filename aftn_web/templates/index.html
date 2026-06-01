@@ -3704,7 +3704,7 @@ function voiceRenderChart(idx, channelId) {
     + '  <h3>扇区负荷 #' + (idx + 1) + '</h3>'
     + '  <div class="voice-chart-controls">'
     + '    <label><span>日期</span><input type="date" id="voiceChartDate_' + idx + '"></label>'
-    + '    <label><span>扇区</span><select id="voiceChartChannel_' + idx + '" onchange="voiceLoadChart(' + idx + ')"><option value="-1">— 选择扇区 —</option></select></label>
+    + '    <label><span>扇区</span><select id="voiceChartChannel_' + idx + '" onchange="voiceLoadChart(' + idx + ')"><option value="-1">— 选择扇区 —</option></select></label>'
     + '    <label><span>Y轴架次</span><input type="number" id="voiceChartFlightMax_' + idx + '" value="18" min="1" max="200" style="width:60px;"></label>'
     + '    <button class="btn btn-primary btn-sm" onclick="voiceLoadChart(' + idx + ')">📊 查询</button>'
     + '  </div>'
