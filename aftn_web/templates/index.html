@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.27</title>
+<title>ATC AFTN WebHub v2.1.28</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.27</span>
+  <span class="badge">v2.1.28</span>
 </div>
 
 <div class="tabs">
@@ -3536,6 +3536,88 @@ function voiceSyncPlaySelect(channels) {
   }
 }
 
+/* ── SSE 浏览器端音频播放 ── */
+var _voiceAudioCtx = null;
+var _voiceEventSource = null;
+var _voiceAudioChannel = -1;
+
+function _ensureAudioCtx() {
+  if (!_voiceAudioCtx) {
+    _voiceAudioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 8000});
+  }
+  if (_voiceAudioCtx.state === 'suspended') {
+    _voiceAudioCtx.resume();
+  }
+}
+
+function voiceStopSSE() {
+  if (_voiceEventSource) {
+    _voiceEventSource.close();
+    _voiceEventSource = null;
+  }
+  _voiceAudioChannel = -1;
+  // 通知服务端停止
+  fetch('/api/voice/stop', {method:'POST'}).catch(function(){});
+}
+
+function voiceStartSSE(channelId) {
+  _ensureAudioCtx();
+  voiceStopSSE();
+  _voiceAudioChannel = channelId;
+
+  // 通知服务端选中通道 + 清空缓冲
+  fetch('/api/voice/select', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({channel: channelId}),
+  }).catch(function(){});
+
+  // 连接 SSE
+  _voiceEventSource = new EventSource('/api/voice/stream?channel=' + channelId);
+  _voiceEventSource.onmessage = function(ev) {
+    var b64 = ev.data;
+    if (!b64 || b64.length < 20) return;
+    try {
+      var binaryStr = atob(b64);
+      var len = binaryStr.length;
+      var bytes = new Uint8Array(len);
+      for (var i = 0; i < len; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      // 解码 WAV 或原始 PCM16
+      _voiceAudioCtx.decodeAudioData(bytes.buffer, function(buf) {
+        var src = _voiceAudioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(_voiceAudioCtx.destination);
+        src.start(0);
+      }, function() {
+        // decodeAudioData 失败，尝试作为原始 PCM16 播放
+        // 从 WAV 数据中提取 PCM 部分 (跳过 44 字节 WAV 头)
+        var pcmStart = 44;
+        if (len > pcmStart + 4) {
+          var sampleCount = (len - pcmStart) / 2;
+          var float32 = new Float32Array(sampleCount);
+          var view = new DataView(bytes.buffer, pcmStart);
+          for (var i = 0; i < sampleCount; i++) {
+            float32[i] = view.getInt16(i * 2, true) / 32768;
+          }
+          var audioBuf = _voiceAudioCtx.createBuffer(1, sampleCount, 8000);
+          audioBuf.getChannelData(0).set(float32);
+          var src = _voiceAudioCtx.createBufferSource();
+          src.buffer = audioBuf;
+          src.connect(_voiceAudioCtx.destination);
+          src.start(0);
+        }
+      });
+    } catch(e) {
+      // 静默忽略解码错误
+    }
+  };
+  _voiceEventSource.onerror = function() {
+    // 连接断开时自动重连
+  };
+}
+
 function voiceSelectFromCard(channelId) {
   var dateInput = document.getElementById('voiceChartDate_0');
   if (dateInput && !dateInput.value) {
@@ -3545,25 +3627,18 @@ function voiceSelectFromCard(channelId) {
   var sel = document.getElementById('voiceChartChannel_0');
   if (sel) sel.value = channelId;
 
-  fetch('/api/voice/status')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      var currentlyPlaying = data.playing;
-      if (currentlyPlaying === channelId) {
-        return fetch('/api/voice/stop', {method:'POST'});
-      } else {
-        return fetch('/api/voice/select', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({channel: channelId}),
-        });
-      }
-    })
-    .catch(function(){})
-    .then(function() {
-      voicePollStatus();
-      voiceLoadChart(0);
-    });
+  // 如果已经是当前通道，停止播放（toggle）
+  if (_voiceAudioChannel === channelId) {
+    voiceStopSSE();
+    voicePollStatus();
+    voiceLoadChart(0);
+    return;
+  }
+
+  // 启动浏览器端 SSE 音频流
+  voiceStartSSE(channelId);
+  voicePollStatus();
+  voiceLoadChart(0);
 }
 
 // ═══════════════════════════════════════════════════════

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import socket
@@ -9,6 +10,7 @@ import struct
 import sys
 import threading
 import time
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -237,6 +239,12 @@ class VoiceReceiver:
         self._play_lock = threading.Lock()
         self._pygame_ok = False
         self._pygame_mixer_inited = False
+
+        # PCM 流缓冲（用于浏览器 SSE 流式播放）
+        # channel_id -> deque of (seq, pcm_bytes)
+        self._pcm_buffers: dict[int, deque] = {}
+        self._pcm_events: dict[int, threading.Event] = {}
+        self._pcm_seq: dict[int, int] = {}
 
         # 最近 3 秒内各通道的活跃标记（用于 Active 判定）
         self._activity_window: dict[int, list[float]] = {}
@@ -623,16 +631,25 @@ class VoiceReceiver:
             decoder = self._decoders[channel]
             pcm_data = decoder.decode_adpcm(adpcm_data)
 
-            # 播放：如果该通道已被选中且解码成功
-            if (
-                pcm_data
-                and self._play_lock.acquire(blocking=False)
-            ):
+            # 推入 PCM 流缓冲（供浏览器 SSE 使用）
+            if pcm_data and self._play_lock.acquire(blocking=False):
                 try:
-                    if self._playing_channel == channel and self._pygame_ok:
-                        self._play_pcm(pcm_data)
+                    if self._playing_channel == channel:
+                        if channel not in self._pcm_buffers:
+                            self._pcm_buffers[channel] = deque(maxlen=200)
+                            self._pcm_events[channel] = threading.Event()
+                            self._pcm_seq[channel] = 0
+                        buf = self._pcm_buffers[channel]
+                        seq = self._pcm_seq[channel]
+                        self._pcm_seq[channel] = seq + 1
+                        buf.append((seq, pcm_data))
+                        self._pcm_events[channel].set()
                 finally:
                     self._play_lock.release()
+
+            # （旧版）服务端本地播放 — 已废弃，改为浏览器 SSE 流式播放
+            if pcm_data and self._pygame_ok and self._playing_channel == channel:
+                self._play_pcm(pcm_data)
 
     def _periodic_housekeeping(self) -> None:
         """定期维护任务（在 socket timeout 时执行）"""
@@ -917,6 +934,40 @@ class VoiceReceiver:
             if self._db_flush_counter >= 10:
                 self._flush_durations_to_db()
                 self._db_flush_counter = 0
+
+    # ── 浏览器 SSE 流式播放 ──────────────────────────
+
+    def wait_pcm_data(self, channel: int, timeout: float = 0.5) -> list[tuple[int, bytes]] | None:
+        """等待并返回指定通道的新 PCM 数据块列表。
+        返回 [(seq, pcm_bytes), ...] 或超时返回 None。
+        """
+        ev = self._pcm_events.get(channel)
+        buf = self._pcm_buffers.get(channel)
+        if ev is None or buf is None:
+            ev = threading.Event()
+            self._pcm_events[channel] = ev
+            buf = deque(maxlen=200)
+            self._pcm_buffers[channel] = buf
+
+        if not buf:
+            ev.clear()
+            ev.wait(timeout=timeout)
+
+        if not buf:
+            return None
+        items = list(buf)
+        buf.clear()
+        return items
+
+    def clear_pcm_buffer(self, channel: int) -> None:
+        """清空指定通道的 PCM 缓冲（切换通道时调用）"""
+        buf = self._pcm_buffers.get(channel)
+        if buf:
+            buf.clear()
+        if channel in self._pcm_events:
+            self._pcm_events[channel].set()
+
+    # ── 旧版服务器本地播放 ──
 
     def _play_pcm(self, pcm_data: bytes) -> None:
         """通过 pygame 播放 PCM16 数据"""

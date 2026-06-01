@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, render_template, request, Response, send_file
 
 from .xlsx_writer import make_xlsx
 
@@ -734,6 +734,46 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
                 pass
 
         return jsonify(result)
+
+    @app.route("/api/voice/stream")
+    def api_voice_stream():
+        """SSE 端点：流式推送选中通道的 PCM 音频数据给浏览器"""
+        if voice_receiver is None:
+            return jsonify({"error": "voice not enabled"}), 400
+        channel_str = request.args.get("channel", "")
+        try:
+            channel_id = int(channel_str)
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid channel"}), 400
+
+        from .voice_receiver import make_wav
+
+        def generate():
+            seq_sent = -1
+            while True:
+                items = voice_receiver.wait_pcm_data(channel_id, timeout=1.0)
+                if items is None:
+                    # 超时，发送心跳保持连接
+                    yield ": heartbeat\n\n"
+                    continue
+                for seq, pcm_data in items:
+                    if seq <= seq_sent:
+                        continue
+                    seq_sent = seq
+                    # PCM16 → WAV → base64
+                    wav_data = make_wav(pcm_data, sample_rate=8000)
+                    b64 = base64.b64encode(wav_data).decode("ascii")
+                    yield f"data: {b64}\n\n"
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.route("/api/voice/recordings")
     def api_voice_recordings():
