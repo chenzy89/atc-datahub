@@ -578,77 +578,139 @@ class VoiceReceiver:
         if not sock:
             return
 
+        # 轮询器，用于监控 socket 是否可读
+        import select as _select
+        poller = _select.poll()
+        poller.register(sock, _select.POLLIN)
+
+        self._loop_iteration = 0
+        self._last_drain_warning = 0.0
+
         while self._running:
             try:
-                data, addr = sock.recvfrom(10240)
-            except socket.timeout:
-                # 心跳：定期做清理
-                self._periodic_housekeeping()
-                continue
+                events = poller.poll(500)  # 500ms timeout
             except Exception:
                 if self._running:
-                    logger.exception("voice receive error")
+                    logger.exception("voice select error")
                 continue
 
-            if len(data) < 10:
+            if not events:
+                # 心跳：定期做清理
+                self._periodic_housekeeping()
+
+                # 自愈检测：如果 socket 积压超过 100KB 且无活动
+                # 尝试 drain 积压数据
+                self._try_drain_buffer(sock)
                 continue
 
-            # 解析通道号 (前 2 字节, 小端序)
-            channel = struct.unpack("<H", data[0:2])[0] & 0xFFFF
-
-            # 只关心我们监控的 7 个通道
-            sector_code = CHANNEL_SECTORS.get(channel)
-            if not sector_code:
-                continue
-
-            # 记录活跃时间
-            clock_now = time.time()
-            mono_now = time.monotonic()
-            if channel not in self._activity_window:
-                self._activity_window[channel] = []
-            self._activity_window[channel].append(mono_now)
-            if len(self._activity_window[channel]) > 500:
-                self._activity_window[channel] = self._activity_window[channel][-250:]
-
-            # 更新状态
-            st = self._status.get(sector_code)
-            if st:
-                st.last_activity = mono_now
-                st.bytes_received += len(data)
-
-            # ── 通话时长统计 ──
-            self._track_duration(channel, clock_now)
-
-            # ── 语音文件保存 ──
-            # 提取 ADPCM 数据 (跳过前 2 字节通道号, 去掉末尾 8 字节)
-            adpcm_data = data[2 : len(data) - 8]
-            if adpcm_data:
-                self._save_adpcm_data(channel, adpcm_data, clock_now)
-
-            # 解码 PCM
-            if channel not in self._decoders:
-                self._decoders[channel] = ADPCMDecoder()
-            decoder = self._decoders[channel]
-            pcm_data = decoder.decode_adpcm(adpcm_data)
-
-            # 推入 PCM 流缓冲（供所有浏览器 SSE 使用，不限通道）
-            if pcm_data and self._play_lock.acquire(blocking=False):
+            # 持续 drain socket 直到清空或超时
+            drained = 0
+            while self._running:
                 try:
-                    if channel not in self._pcm_buffers:
-                        self._pcm_buffers[channel] = deque(maxlen=200)
-                        self._pcm_events[channel] = threading.Event()
-                        self._pcm_seq[channel] = 0
-                    buf = self._pcm_buffers[channel]
-                    seq = self._pcm_seq[channel]
-                    self._pcm_seq[channel] = seq + 1
-                    buf.append((seq, pcm_data))
-                    self._pcm_events[channel].set()
-                finally:
-                    self._play_lock.release()
+                    data, addr = sock.recvfrom(10240, socket.MSG_DONTWAIT)
+                except BlockingIOError:
+                    break  # 无更多数据
+                except socket.timeout:
+                    break
+                except Exception as e:
+                    if self._running:
+                        logger.exception("voice receive error")
+                    break
 
-            # （旧版）服务端本地播放 — 保持兼容
-            if pcm_data and self._pygame_ok and self._playing_channel == channel:
-                self._play_pcm(pcm_data)
+                drained += 1
+
+                if len(data) < 10:
+                    continue
+
+                # 解析通道号 (前 2 字节, 小端序)
+                channel = struct.unpack("<H", data[0:2])[0] & 0xFFFF
+
+                # 只关心我们监控的 7 个通道
+                sector_code = CHANNEL_SECTORS.get(channel)
+                if not sector_code:
+                    continue
+
+                # 记录活跃时间
+                clock_now = time.time()
+                mono_now = time.monotonic()
+                if channel not in self._activity_window:
+                    self._activity_window[channel] = []
+                self._activity_window[channel].append(mono_now)
+                if len(self._activity_window[channel]) > 500:
+                    self._activity_window[channel] = self._activity_window[channel][-250:]
+
+                # 更新状态
+                st = self._status.get(sector_code)
+                if st:
+                    st.last_activity = mono_now
+                    st.bytes_received += len(data)
+
+                # ── 通话时长统计 ──
+                self._track_duration(channel, clock_now)
+
+                # ── 语音文件保存 ──
+                adpcm_data = data[2 : len(data) - 8]
+                if adpcm_data:
+                    self._save_adpcm_data(channel, adpcm_data, clock_now)
+
+                # 解码 PCM
+                if channel not in self._decoders:
+                    self._decoders[channel] = ADPCMDecoder()
+                decoder = self._decoders[channel]
+                pcm_data = decoder.decode_adpcm(adpcm_data)
+
+                # 推入 PCM 流缓冲
+                if pcm_data and self._play_lock.acquire(blocking=False):
+                    try:
+                        if channel not in self._pcm_buffers:
+                            self._pcm_buffers[channel] = deque(maxlen=200)
+                            self._pcm_events[channel] = threading.Event()
+                            self._pcm_seq[channel] = 0
+                        buf = self._pcm_buffers[channel]
+                        seq = self._pcm_seq[channel]
+                        self._pcm_seq[channel] = seq + 1
+                        buf.append((seq, pcm_data))
+                        self._pcm_events[channel].set()
+                    finally:
+                        self._play_lock.release()
+
+                # 旧版本地播放
+                if pcm_data and self._pygame_ok and self._playing_channel == channel:
+                    self._play_pcm(pcm_data)
+
+            self._loop_iteration += 1
+
+    def _try_drain_buffer(self, sock) -> None:
+        """检测 socket 积压并尝试 drain，防止 rx_queue 填满"""
+        try:
+            # 尝试非阻塞读取 — 如果有数据，直接读取并丢弃
+            # 即使丢弃，也更新 activity_window 确保绿灯亮
+            drained = 0
+            for _ in range(200):
+                try:
+                    data, _ = sock.recvfrom(10240, socket.MSG_DONTWAIT)
+                except (BlockingIOError, socket.timeout):
+                    break
+                except Exception:
+                    break
+                drained += 1
+                if len(data) < 10:
+                    continue
+                ch = struct.unpack("<H", data[0:2])[0] & 0xFFFF
+                sc = CHANNEL_SECTORS.get(ch)
+                if sc:
+                    mono = time.monotonic()
+                    if ch not in self._activity_window:
+                        self._activity_window[ch] = []
+                    self._activity_window[ch].append(mono)
+                    st = self._status.get(sc)
+                    if st:
+                        st.last_activity = mono
+                        st.bytes_received += len(data)
+            if drained > 0:
+                logger.info("drained %d packets from voice rx buffer", drained)
+        except Exception:
+            pass
 
     def _periodic_housekeeping(self) -> None:
         """定期维护任务（在 socket timeout 时执行）"""
