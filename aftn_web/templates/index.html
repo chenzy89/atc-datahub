@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.25</title>
+<title>ATC AFTN WebHub v2.1.26</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.25</span>
+  <span class="badge">v2.1.26</span>
 </div>
 
 <div class="tabs">
@@ -668,21 +668,11 @@ canvas#radarMap {
       </div>
     </div>
 
-    <!-- ── 通话时长折线图 ── -->
-    <div class="voice-chart-section">
-      <div class="voice-chart-toolbar">
-        <h3>通话时长统计</h3>
-        <div class="voice-chart-controls">
-          <label><span>日期</span><input type="date" id="voiceChartDate"></label>
-          <label><span>通道</span><select id="voiceChartChannel"><option value="-1">— 选择通道 —</option></select></label>
-          <label><span>Y轴架次</span><input type="number" id="voiceChartFlightMax" value="18" min="1" max="200" style="width:60px;"></label>
-          <button class="btn btn-primary btn-sm" onclick="voiceLoadChart()">📊 查询</button>
-        </div>
-      </div>
-      <div class="voice-chart-wrap">
-        <canvas id="voiceChart" height="300"></canvas>
-        <div class="voice-chart-empty" id="voiceChartEmpty">点击通道卡片或选择通道后点「查询」</div>
-      </div>
+    <!-- ── 通话时长折线图（多实例容器）── -->
+    <div id="voiceChartContainer"></div>
+    <div class="voice-chart-actions" id="voiceChartActions">
+      <button class="btn btn-sm" onclick="voiceRemoveChart()" id="voiceChartRemoveBtn" disabled>−</button>
+      <button class="btn btn-primary btn-sm" onclick="voiceAddChart()">+</button>
     </div>
   </div>
 </div>
@@ -708,6 +698,10 @@ canvas#radarMap {
 .voice-chart-wrap { position:relative; }
 .voice-chart-wrap canvas { width:100%; height:300px; display:block; border-radius:4px; }
 .voice-chart-empty { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); color:var(--text-muted); font-size:14px; text-align:center; }
+.voice-chart-actions { display:flex; gap:8px; justify-content:center; padding:4px 0 16px; }
+.voice-chart-actions button { width:32px; height:32px; font-size:18px; line-height:1; border-radius:50%; border:1px solid var(--border); background:var(--bg-card); color:var(--text-primary); cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.voice-chart-actions button:disabled { opacity:0.4; cursor:default; }
+.voice-chart-actions button:not(:disabled):hover { border-color:var(--accent); background:var(--bg-hover); }
 .voice-channel-card { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:12px 14px; transition:.15s; cursor:pointer; }
 .voice-channel-card:hover { border-color:var(--accent); background:var(--bg-hover); }
 .voice-channel-card.selected { border-color:var(--accent); box-shadow:0 0 8px rgba(88,166,255,.3); }
@@ -3389,6 +3383,7 @@ function esc(s) {
 
 var voicePollTimer = null;
 var voiceChartTimer = null;
+var _voiceChartCount = 0;
 var _chSectorNames = {'38':'HN (ZGJDTM01)','42':'HE (ZGJDTM02)','50':'ARW (ZGJDTM03)','264':'AS (ZGJDTM04)','46':'AD (ZGJDTM05)','32':'ASL (ZGJDTM06)','54':'ARE/AA (ZGJDTM07)'};
 var _voiceConfig = null;
 var _currentAudioUrl = null;
@@ -3411,16 +3406,20 @@ function voiceInit() {
   voicePollStatus();
   if (voicePollTimer) clearInterval(voicePollTimer);
   voicePollTimer = setInterval(voicePollStatus, 2000);
-  if (voiceChartTimer) clearInterval(voiceChartTimer);
-  voiceChartTimer = setInterval(voiceLoadChart, 60000);
 
-  // 初始化日期为今天（UTC）
-  var d = new Date();
-  var todayUTC = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
+  // 渲染初始图表
+  voiceRenderChart(0, 38);
+
+  // 定时刷新所有图表
+  if (voiceChartTimer) clearInterval(voiceChartTimer);
+  voiceChartTimer = setInterval(voiceLoadAllCharts, 60000);
+
+  // 初始化回放日期为今天（UTC）
   var pd = document.getElementById('voicePlayDate');
-  if (pd) pd.value = todayUTC;
-  var cd = document.getElementById('voiceChartDate');
-  if (cd && !cd.value) cd.value = todayUTC;
+  if (pd) {
+    var d = new Date();
+    pd.value = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
+  }
 }
 
 function voicePollStatus() {
@@ -3445,6 +3444,7 @@ function voicePollStatus() {
 }
 
 function voiceRenderChannels(channels, playing) {
+  window._lastChannels = channels;
   var container = document.getElementById('voiceChannels');
   if (!container || !channels || !channels.length) return;
   var order = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
@@ -3488,22 +3488,30 @@ function voiceRenderChannels(channels, playing) {
   voiceSyncPlaySelect(channels);
 }
 
-function voiceSyncChartSelect(channels) {
-  var sel = document.getElementById('voiceChartChannel');
-  if (!sel) return;
-  var currentVal = sel.value;
-  sel.innerHTML = '<option value="-1">— 选择通道 —</option>';
+function voiceSyncChartSelect(channels, chartIdx) {
   var order = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
-  for (var oi = 0; oi < order.length; oi++) {
-    for (var ci = 0; ci < channels.length; ci++) {
-      if (channels[ci].sector_code === order[oi]) {
-        var opt = document.createElement('option');
-        opt.value = channels[ci].channel_id;
-        opt.textContent = order[oi] + ' (' + channels[ci].sector_name + ') CH' + channels[ci].channel_id;
-        if (String(channels[ci].channel_id) === currentVal) opt.selected = true;
-        sel.appendChild(opt);
-        break;
+  var doUpdate = function(sel) {
+    if (!sel) return;
+    var currentVal = sel.value;
+    sel.innerHTML = '<option value="-1">— 选择通道 —</option>';
+    for (var oi = 0; oi < order.length; oi++) {
+      for (var ci = 0; ci < channels.length; ci++) {
+        if (channels[ci].sector_code === order[oi]) {
+          var opt = document.createElement('option');
+          opt.value = channels[ci].channel_id;
+          opt.textContent = order[oi] + ' (' + channels[ci].sector_name + ') CH' + channels[ci].channel_id;
+          if (String(channels[ci].channel_id) === currentVal) opt.selected = true;
+          sel.appendChild(opt);
+          break;
+        }
       }
+    }
+  };
+  if (chartIdx !== undefined) {
+    doUpdate(document.getElementById('voiceChartChannel_' + chartIdx));
+  } else {
+    for (var i = 0; i < _voiceChartCount; i++) {
+      doUpdate(document.getElementById('voiceChartChannel_' + i));
     }
   }
 }
@@ -3529,12 +3537,12 @@ function voiceSyncPlaySelect(channels) {
 }
 
 function voiceSelectFromCard(channelId) {
-  var dateInput = document.getElementById('voiceChartDate');
+  var dateInput = document.getElementById('voiceChartDate_0');
   if (dateInput && !dateInput.value) {
     var d = new Date();
     dateInput.value = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
   }
-  var sel = document.getElementById('voiceChartChannel');
+  var sel = document.getElementById('voiceChartChannel_0');
   if (sel) sel.value = channelId;
 
   fetch('/api/voice/status')
@@ -3554,7 +3562,7 @@ function voiceSelectFromCard(channelId) {
     .catch(function(){})
     .then(function() {
       voicePollStatus();
-      voiceLoadChart();
+      voiceLoadChart(0);
     });
 }
 
@@ -3672,10 +3680,72 @@ function voiceAudioPaused() {
 // 通话时长折线图
 // ═══════════════════════════════════════════════════════
 
-function voiceLoadChart() {
-  var dateInput = document.getElementById('voiceChartDate');
-  var chSel = document.getElementById('voiceChartChannel');
-  var fmInput = document.getElementById('voiceChartFlightMax');
+function _chartID(prefix, idx) { return prefix + '_' + idx; }
+function _chartEl(prefix, idx) { return document.getElementById(_chartID(prefix, idx)); }
+
+function voiceAddChart() {
+  voiceRenderChart(_voiceChartCount);
+  _voiceChartCount++;
+  document.getElementById('voiceChartRemoveBtn').disabled = false;
+}
+
+function voiceRemoveChart() {
+  if (_voiceChartCount <= 1) return;
+  _voiceChartCount--;
+  var section = document.getElementById('voiceChartSection_' + _voiceChartCount);
+  if (section) section.remove();
+  document.getElementById('voiceChartRemoveBtn').disabled = (_voiceChartCount <= 1);
+}
+
+function voiceRenderChart(idx, channelId) {
+  var container = document.getElementById('voiceChartContainer');
+  var html = '<div class="voice-chart-section" id="voiceChartSection_' + idx + '">'
+    + '<div class="voice-chart-toolbar">'
+    + '  <h3>通话时长统计 #' + (idx + 1) + '</h3>'
+    + '  <div class="voice-chart-controls">'
+    + '    <label><span>日期</span><input type="date" id="voiceChartDate_' + idx + '"></label>'
+    + '    <label><span>通道</span><select id="voiceChartChannel_' + idx + '" onchange="voiceLoadChart(' + idx + ')"><option value="-1">— 选择通道 —</option></select></label>'
+    + '    <label><span>Y轴架次</span><input type="number" id="voiceChartFlightMax_' + idx + '" value="18" min="1" max="200" style="width:60px;"></label>'
+    + '    <button class="btn btn-primary btn-sm" onclick="voiceLoadChart(' + idx + ')">📊 查询</button>'
+    + '  </div>'
+    + '</div>'
+    + '<div class="voice-chart-wrap">'
+    + '  <canvas id="voiceChart_' + idx + '" height="300"></canvas>'
+    + '  <div class="voice-chart-empty" id="voiceChartEmpty_' + idx + '">选择通道后点「查询」</div>'
+    + '</div>'
+    + '</div>';
+  container.insertAdjacentHTML('beforeend', html);
+  _voiceChartCount = Math.max(_voiceChartCount, idx + 1);
+
+  // 初始化日期
+  var d = new Date();
+  var todayUTC = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
+  var dateInput = _chartEl('voiceChartDate', idx);
+  if (dateInput) dateInput.value = todayUTC;
+
+  // 填充通道选项
+  if (window._lastChannels) {
+    voiceSyncChartSelect(window._lastChannels, idx);
+  }
+
+  // 如果指定了通道号，选中并加载
+  if (channelId !== undefined && channelId >= 0) {
+    var sel = _chartEl('voiceChartChannel', idx);
+    if (sel) { sel.value = channelId; voiceLoadChart(idx); }
+  }
+}
+
+function voiceLoadAllCharts() {
+  for (var i = 0; i < _voiceChartCount; i++) {
+    voiceLoadChart(i);
+  }
+}
+
+function voiceLoadChart(idx) {
+  if (idx === undefined) idx = 0;
+  var dateInput = _chartEl('voiceChartDate', idx);
+  var chSel = _chartEl('voiceChartChannel', idx);
+  var fmInput = _chartEl('voiceChartFlightMax', idx);
   var dateStr = dateInput ? dateInput.value : '';
   var ch = chSel ? parseInt(chSel.value) : -1;
   var flightMax = fmInput ? parseInt(fmInput.value) || 18 : 18;
@@ -3687,14 +3757,13 @@ function voiceLoadChart() {
     dateInput.value = dateStr;
   }
 
+  var emptyEl = _chartEl('voiceChartEmpty', idx);
   if (!dateStr || ch < 0) {
-    document.getElementById('voiceChartEmpty').style.display = 'block';
-    document.getElementById('voiceChartEmpty').textContent = '请选择日期和通道';
+    if (emptyEl) { emptyEl.style.display = 'block'; emptyEl.textContent = '请选择日期和通道'; }
     return;
   }
 
-  document.getElementById('voiceChartEmpty').textContent = '加载中...';
-  document.getElementById('voiceChartEmpty').style.display = 'block';
+  if (emptyEl) { emptyEl.textContent = '加载中...'; emptyEl.style.display = 'block'; }
 
   // 判断是否为今天（UTC）— 需要获取昨日参考数据
   var now = new Date();
@@ -3707,21 +3776,24 @@ function voiceLoadChart() {
   fetch(url)
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      document.getElementById('voiceChartEmpty').style.display = 'none';
+      var emptyEl = _chartEl('voiceChartEmpty', idx);
+      if (emptyEl) emptyEl.style.display = 'none';
       var serverMax = data.flight_count_max || 18;
       var useMax = flightMax || serverMax;
       voiceDrawChart(
         data.duration || [], data.flight_count || [], dateStr, ch, data.terminal_code || '', useMax,
-        isToday, data.yesterday_duration || null, data.yesterday_flight_count || null
+        isToday, data.yesterday_duration || null, data.yesterday_flight_count || null, idx
       );
     })
     .catch(function() {
-      document.getElementById('voiceChartEmpty').textContent = '查询失败';
+      var emptyEl = _chartEl('voiceChartEmpty', idx);
+      if (emptyEl) emptyEl.textContent = '查询失败';
     });
 }
 
-function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCode, flightMax, isToday, yesterdayDuration, yesterdayFlight) {
-  var canvas = document.getElementById('voiceChart');
+function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCode, flightMax, isToday, yesterdayDuration, yesterdayFlight, canvasIdx) {
+  if (canvasIdx === undefined) canvasIdx = 0;
+  var canvas = document.getElementById('voiceChart_' + canvasIdx);
   if (!canvas || !durationData) return;
 
   var ctx = canvas.getContext('2d');
