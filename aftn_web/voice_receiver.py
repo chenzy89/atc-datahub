@@ -631,23 +631,22 @@ class VoiceReceiver:
             decoder = self._decoders[channel]
             pcm_data = decoder.decode_adpcm(adpcm_data)
 
-            # 推入 PCM 流缓冲（供浏览器 SSE 使用）
+            # 推入 PCM 流缓冲（供所有浏览器 SSE 使用，不限通道）
             if pcm_data and self._play_lock.acquire(blocking=False):
                 try:
-                    if self._playing_channel == channel:
-                        if channel not in self._pcm_buffers:
-                            self._pcm_buffers[channel] = deque(maxlen=200)
-                            self._pcm_events[channel] = threading.Event()
-                            self._pcm_seq[channel] = 0
-                        buf = self._pcm_buffers[channel]
-                        seq = self._pcm_seq[channel]
-                        self._pcm_seq[channel] = seq + 1
-                        buf.append((seq, pcm_data))
-                        self._pcm_events[channel].set()
+                    if channel not in self._pcm_buffers:
+                        self._pcm_buffers[channel] = deque(maxlen=200)
+                        self._pcm_events[channel] = threading.Event()
+                        self._pcm_seq[channel] = 0
+                    buf = self._pcm_buffers[channel]
+                    seq = self._pcm_seq[channel]
+                    self._pcm_seq[channel] = seq + 1
+                    buf.append((seq, pcm_data))
+                    self._pcm_events[channel].set()
                 finally:
                     self._play_lock.release()
 
-            # （旧版）服务端本地播放 — 已废弃，改为浏览器 SSE 流式播放
+            # （旧版）服务端本地播放 — 保持兼容
             if pcm_data and self._pygame_ok and self._playing_channel == channel:
                 self._play_pcm(pcm_data)
 

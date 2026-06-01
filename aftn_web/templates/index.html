@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.28</title>
+<title>ATC AFTN WebHub v2.1.29</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.28</span>
+  <span class="badge">v2.1.29</span>
 </div>
 
 <div class="tabs">
@@ -3384,6 +3384,7 @@ function esc(s) {
 var voicePollTimer = null;
 var voiceChartTimer = null;
 var _voiceChartCount = 0;
+var _voiceLocalPlaying = null;  // 本地浏览器正在监听的通道（不共享到服务器）
 var _chSectorNames = {'38':'HN (ZGJDTM01)','42':'HE (ZGJDTM02)','50':'ARW (ZGJDTM03)','264':'AS (ZGJDTM04)','46':'AD (ZGJDTM05)','32':'ASL (ZGJDTM06)','54':'ARE/AA (ZGJDTM07)'};
 var _voiceConfig = null;
 var _currentAudioUrl = null;
@@ -3461,7 +3462,8 @@ function voiceRenderChannels(channels, playing) {
   for (var i = 0; i < sorted.length; i++) {
     var c = sorted[i];
     var dotClass = c.active ? 'active' : 'inactive';
-    var isPlaying = playing === c.channel_id;
+    // 使用本地状态避免跨浏览器同步
+    var isPlaying = (_voiceLocalPlaying === c.channel_id);
     var selClass = isPlaying ? 'selected' : '';
     var bytesStr = c.bytes_received > 1024
       ? (c.bytes_received / 1024).toFixed(1) + ' KB'
@@ -3556,21 +3558,12 @@ function voiceStopSSE() {
     _voiceEventSource = null;
   }
   _voiceAudioChannel = -1;
-  // 通知服务端停止
-  fetch('/api/voice/stop', {method:'POST'}).catch(function(){});
 }
 
 function voiceStartSSE(channelId) {
   _ensureAudioCtx();
   voiceStopSSE();
   _voiceAudioChannel = channelId;
-
-  // 通知服务端选中通道 + 清空缓冲
-  fetch('/api/voice/select', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({channel: channelId}),
-  }).catch(function(){});
 
   // 连接 SSE
   _voiceEventSource = new EventSource('/api/voice/stream?channel=' + channelId);
@@ -3629,15 +3622,17 @@ function voiceSelectFromCard(channelId) {
 
   // 如果已经是当前通道，停止播放（toggle）
   if (_voiceAudioChannel === channelId) {
+    _voiceLocalPlaying = null;
     voiceStopSSE();
-    voicePollStatus();
     voiceLoadChart(0);
     return;
   }
 
+  // 本地记录播放状态（不共享到服务器，每个浏览器独立）
+  _voiceLocalPlaying = channelId;
+
   // 启动浏览器端 SSE 音频流
   voiceStartSSE(channelId);
-  voicePollStatus();
   voiceLoadChart(0);
 }
 
