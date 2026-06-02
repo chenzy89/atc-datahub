@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import math
 import os
 import socket
 import struct
@@ -57,6 +58,10 @@ SECTOR_CHANNELS: dict[str, int] = {
 
 # 通道号 → 扇区名
 CHANNEL_SECTORS: dict[int, str] = {v: k for k, v in SECTOR_CHANNELS.items()}
+
+# VAD (语音活动检测) 默认参数
+_VAD_ENERGY_THRESHOLD_DEFAULT = 0.005  # PCM 归一化 RMS 能量阈值，低于此视为静音
+_VAD_SILENCE_MS_DEFAULT = 1000        # 持续静音超过此值视为通话结束 (ms)
 
 
 @dataclass
@@ -209,6 +214,8 @@ class VoiceReceiver:
         db: Any = None,
         save_dir: str = "",
         retention_days: int = 30,
+        vad_energy_threshold: float = _VAD_ENERGY_THRESHOLD_DEFAULT,
+        vad_silence_ms: int = _VAD_SILENCE_MS_DEFAULT,
     ):
         self.multicast_group = multicast_group
         self.port = port
@@ -252,11 +259,16 @@ class VoiceReceiver:
         # ── 通话时长统计 ──
         self._duration_buckets: dict[str, dict[int, list[float]]] = {}
         self._burst_start: dict[int, float] = {}
+        self._burst_voice_duration: dict[int, float] = {}  # 当前突发的有效语音秒数
         self._last_data_time: dict[int, float] = {}
-        self._silence_threshold = 1.0  # 1 秒无数据视为一句话说完
+        self._silence_threshold = vad_silence_ms / 1000.0  # 静音阈值 (秒)
         self._today_date = datetime.now().strftime("%Y-%m-%d")
         self._duration_lock = threading.Lock()
         self._db_flush_counter = 0
+
+        # ── VAD (语音活动检测) ──
+        self._vad_energy_threshold = vad_energy_threshold
+        self._vad_silence_duration: dict[int, float] = {}  # channel/fs_key -> 连续静音秒数
 
         # ── 语音文件存储 ──
         # 当前突发缓冲：channel_id -> bytearray(adpcm_data)
@@ -645,19 +657,21 @@ class VoiceReceiver:
                     st.last_activity = mono_now
                     st.bytes_received += len(data)
 
-                # ── 通话时长统计 ──
-                self._track_duration(channel, clock_now)
-
-                # ── 语音文件保存 ──
+                # ── 提取 ADPCM 并提前解码 PCM（用于 VAD 能量检测） ──
                 adpcm_data = data[2 : len(data) - 8]
+                pcm_data = b""
                 if adpcm_data:
-                    self._save_adpcm_data(channel, adpcm_data, clock_now)
+                    if channel not in self._decoders:
+                        self._decoders[channel] = ADPCMDecoder()
+                    decoder = self._decoders[channel]
+                    pcm_data = decoder.decode_adpcm(adpcm_data)
 
-                # 解码 PCM
-                if channel not in self._decoders:
-                    self._decoders[channel] = ADPCMDecoder()
-                decoder = self._decoders[channel]
-                pcm_data = decoder.decode_adpcm(adpcm_data)
+                # ── 通话时长统计（VAD 能量检测） ──
+                self._track_duration(channel, clock_now, pcm_data)
+
+                # ── 语音文件保存（VAD 能量检测） ──
+                if adpcm_data:
+                    self._save_adpcm_data(channel, adpcm_data, clock_now, pcm_data)
 
                 # 推入 PCM 流缓冲
                 if pcm_data and self._play_lock.acquire(blocking=False):
@@ -716,18 +730,40 @@ class VoiceReceiver:
         """定期维护任务（在 socket timeout 时执行）"""
         # 清理过时的突发通话
         self._flush_stale_bursts()
+        # 清理过时的语音文件缓冲（数据流中断时的后备保障）
+        self._flush_stale_burst_files()
+
         # 检查是否需要清理过期文件（每日一次）
         today = datetime.now().strftime("%Y-%m-%d")
         if today != self._last_cleanup_date:
             self._last_cleanup_date = today
             self._cleanup_old_files()
 
-    def _track_duration(self, channel: int, clock_now: float) -> None:
-        """追踪通话突发时长，计入对应 10 分钟 bucket"""
-        with self._duration_lock:
-            last_data = self._last_data_time.get(channel, 0.0)
-            self._last_data_time[channel] = clock_now
+    @staticmethod
+    def _compute_pcm_energy(pcm_data: bytes) -> float:
+        """计算 PCM16 数据的 RMS 能量，归一化到 [0, 1]"""
+        if not pcm_data or len(pcm_data) < 2:
+            return 0.0
+        # PCM16 小端，每 2 字节一个 sample
+        samples = len(pcm_data) // 2
+        total = 0.0
+        for i in range(samples):
+            off = i * 2
+            sample = struct.unpack_from("<h", pcm_data, off)[0]
+            total += sample * sample
+        rms = math.sqrt(total / samples)
+        return rms / 32767.0  # 归一化
 
+    def _track_duration(self, channel: int, clock_now: float, pcm_data: bytes) -> None:
+        """能量检测 VAD → 追踪通话突发时长，计入对应 10 分钟 bucket
+
+        使用 PCM 能量判断语音/静音，替代原有的数据包间隔检测。
+        """
+        energy = self._compute_pcm_energy(pcm_data) if pcm_data else 0.0
+        pcm_duration = len(pcm_data) / 16000.0 if pcm_data else 0.0  # 8kHz 16bit
+
+        with self._duration_lock:
+            # 更新日期
             today = datetime.now().strftime("%Y-%m-%d")
             if today != self._today_date:
                 self._today_date = today
@@ -742,47 +778,77 @@ class VoiceReceiver:
             if channel not in day_buckets:
                 day_buckets[channel] = [0.0] * 144
 
-            if last_data > 0 and (clock_now - last_data) > self._silence_threshold:
-                burst_start = self._burst_start.pop(channel, None)
-                if burst_start is not None:
-                    duration = last_data - burst_start
-                    if duration > 0.5:
+            # ── VAD 判断 ──
+            is_voice = energy > self._vad_energy_threshold
+
+            if is_voice:
+                # 语音活动：重置静音计数器
+                self._vad_silence_duration[channel] = 0.0
+                # 如果尚无活跃突发，启动新突发
+                if channel not in self._burst_start:
+                    self._burst_start[channel] = clock_now
+                    self._burst_voice_duration[channel] = 0.0
+                # 累加有效语音时长
+                self._burst_voice_duration[channel] = \
+                    self._burst_voice_duration.get(channel, 0.0) + pcm_duration
+            else:
+                # 静音：累积静音时长
+                silence = self._vad_silence_duration.get(channel, 0.0) + pcm_duration
+                self._vad_silence_duration[channel] = silence
+
+                # 如果静音超过阈值，结束当前突发
+                if silence > self._silence_threshold:
+                    burst_start = self._burst_start.pop(channel, None)
+                    voice_dur = self._burst_voice_duration.pop(channel, None) or 0.0
+                    if burst_start is not None and voice_dur > 0.5:
                         dt = datetime.utcfromtimestamp(burst_start)
                         slot = (dt.hour * 60 + dt.minute) // 10
                         if 0 <= slot < 144:
-                            day_buckets[channel][slot] += duration
+                            day_buckets[channel][slot] += voice_dur
+                    # 重置静音计数器（避免反复触发）
+                    self._vad_silence_duration[channel] = 0.0
 
-            if channel not in self._burst_start:
-                self._burst_start[channel] = clock_now
+    def _save_adpcm_data(self, channel: int, adpcm_data: bytes, clock_now: float, pcm_data: bytes) -> None:
+        """保存 ADPCM 数据到文件（按语音活动检测分组）
 
-    def _save_adpcm_data(self, channel: int, adpcm_data: bytes, clock_now: float) -> None:
-        """保存 ADPCM 数据到文件（按突发分组）"""
+        使用能量检测 VAD 确定通话边界：语音开始时创建文件，
+        持续静音超过阈值时写入文件并关闭。
+        """
         if not self._save_dir:
             return
 
+        energy = self._compute_pcm_energy(pcm_data) if pcm_data else 0.0
+        pcm_duration = len(pcm_data) / 16000.0 if pcm_data else 0.0
+        is_voice = energy > self._vad_energy_threshold
+
         with self._file_lock:
-            last_data = self._last_data_time.get(channel, 0.0)
+            # VAD 静音计数器（独立于时长统计）
+            fs_key = -channel  # 文件保存用负通道号作为独立 key
+            silence_dur = self._vad_silence_duration.get(fs_key, 0.0)
 
-            # 检查是否是新突发（上次数据超过静默阈值）
-            if last_data > 0 and (clock_now - last_data) > self._silence_threshold:
-                # 结束当前突发 → 写入文件
+            if is_voice:
+                self._vad_silence_duration[fs_key] = 0.0
+            else:
+                self._vad_silence_duration[fs_key] = silence_dur + pcm_duration
+
+            # 如果处于静音状态且已超过阈值 → 结束当前突发文件
+            if not is_voice and silence_dur + pcm_duration > self._silence_threshold:
+                # 先写入这次的数据，然后 flush
+                if channel in self._burst_buffers:
+                    self._burst_buffers[channel].extend(adpcm_data)
                 self._flush_burst(channel)
-                # 如果没有活跃的突发缓冲，启动新突发
-                if channel not in self._burst_buffers:
-                    self._burst_buffers[channel] = bytearray()
-                    self._burst_start_ts[channel] = datetime.utcfromtimestamp(clock_now)
-                    self._burst_seq[channel] = 0
+                self._vad_silence_duration[fs_key] = 0.0
+                return  # 已 flush，不追加到新 buffer
 
-            # 确保突发缓冲存在
+            # 语音 → 确保有 buffer 并追加数据
             if channel not in self._burst_buffers:
                 self._burst_buffers[channel] = bytearray()
                 self._burst_start_ts[channel] = datetime.utcfromtimestamp(clock_now)
                 self._burst_seq[channel] = 0
 
-            # 追加数据到当前突发缓冲
             self._burst_buffers[channel].extend(adpcm_data)
 
-            # 上限 2MB（约 4 分钟连续语音），静默检测 + 大小双重保障
+            # 上限 2MB（约 4 分钟连续语音），大小保障
             if len(self._burst_buffers[channel]) > 2 * 1024 * 1024:
                 self._flush_burst(channel)
                 self._burst_buffers[channel] = bytearray()
@@ -970,31 +1036,44 @@ class VoiceReceiver:
                             pass
 
     def _flush_stale_bursts(self) -> None:
-        """清理超过静默阈值的突发通话（在 get_status 调用时执行）"""
-        now = time.time()
+        """清理超过静默阈值的突发通话（使用 VAD 静音计数器）
+
+        在 get_status 和定期维护时调用，作为 _track_duration 的后备保障。
+        """
         changed = False
         with self._duration_lock:
             for channel in list(self._burst_start.keys()):
-                last_data = self._last_data_time.get(channel, 0.0)
-                if last_data > 0 and (now - last_data) > self._silence_threshold:
+                # 检查 VAD 静音计数器
+                silence_dur = self._vad_silence_duration.get(channel, 0.0)
+                if silence_dur > self._silence_threshold:
                     burst_start = self._burst_start.pop(channel, None)
-                    if burst_start is not None:
-                        duration = last_data - burst_start
-                        if duration > 0.5:
-                            today = datetime.now().strftime("%Y-%m-%d")
-                            day_buckets = self._duration_buckets.get(today, {})
-                            if channel in day_buckets:
-                                dt = datetime.utcfromtimestamp(burst_start)
-                                slot = (dt.hour * 60 + dt.minute) // 10
-                                if 0 <= slot < 144:
-                                    day_buckets[channel][slot] += duration
+                    voice_dur = self._burst_voice_duration.pop(channel, None) or 0.0
+                    if burst_start is not None and voice_dur > 0.5:
+                        today = datetime.now().strftime("%Y-%m-%d")
+                        day_buckets = self._duration_buckets.get(today, {})
+                        if channel in day_buckets:
+                            dt = datetime.utcfromtimestamp(burst_start)
+                            slot = (dt.hour * 60 + dt.minute) // 10
+                            if 0 <= slot < 144:
+                                day_buckets[channel][slot] += voice_dur
                             changed = True
+                    self._vad_silence_duration[channel] = 0.0
         # 如果清理了突发，顺便刷到 DB
         if changed:
             self._db_flush_counter += 1
             if self._db_flush_counter >= 10:
                 self._flush_durations_to_db()
                 self._db_flush_counter = 0
+
+    def _flush_stale_burst_files(self) -> None:
+        """清理超过静默阈值的语音文件缓冲（数据流中断时的后备保障）"""
+        with self._file_lock:
+            for channel in list(self._burst_buffers.keys()):
+                fs_key = -channel
+                silence_dur = self._vad_silence_duration.get(fs_key, 0.0)
+                if silence_dur > self._silence_threshold:
+                    self._flush_burst(channel)
+                    self._vad_silence_duration[fs_key] = 0.0
 
     # ── 浏览器 SSE 流式播放 ──────────────────────────
 

@@ -182,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
             db=db,
             save_dir=voice_save_dir,
             retention_days=config.voice_data.retention_days,
+            vad_energy_threshold=config.voice_data.vad_energy_threshold,
+            vad_silence_ms=config.voice_data.vad_silence_ms,
         )
         voice_receiver.start()
         logger.info(
