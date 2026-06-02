@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.33</title>
+<title>ATC AFTN WebHub v2.1.34</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.33</span>
+  <span class="badge">v2.1.34</span>
 </div>
 
 <div class="tabs">
@@ -712,11 +712,8 @@ canvas#radarMap {
 .voice-channel-card .vc-ch { font-size:11px; color:var(--text-muted); margin-top:2px; }
 .voice-channel-card .vc-dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; transition:.3s; }
 .voice-channel-card .vc-dot.inactive { background:#2d333b; }
-.voice-channel-card .vc-dot.active { background:var(--accent-green); box-shadow:0 0 10px rgba(63,185,80,.6); animation:pulse-dot 1s ease-in-out infinite; }
-.voice-channel-card .vc-indicators { display:flex; gap:4px; align-items:center; }
-.voice-channel-card .vc-vad { width:12px; height:12px; border-radius:50%; flex-shrink:0; transition:.3s; }
-.voice-channel-card .vc-vad.vad-inactive { background:#2d333b; }
-.voice-channel-card .vc-vad.vad-active { background:var(--accent-purple); box-shadow:0 0 10px var(--accent-purple); animation:pulse-dot 1s ease-in-out infinite; }
+.voice-channel-card .vc-dot.carrier { background:var(--accent-orange); box-shadow:0 0 8px rgba(210,153,34,.5); }
+.voice-channel-card .vc-dot.voice { background:var(--accent-green); box-shadow:0 0 10px rgba(63,185,80,.6); animation:pulse-dot 1s ease-in-out infinite; }
 .voice-channel-card .vc-stats { font-size:11px; color:var(--text-muted); margin-top:6px; }
 .voice-channel-card .vc-dur { font-size:10px; color:var(--accent-orange); margin-top:1px; }
 .voice-channel-card .vc-saved { font-size:11px; color:var(--accent); margin-top:2px; }
@@ -3465,8 +3462,16 @@ function voiceRenderChannels(channels, playing) {
   var html = '';
   for (var i = 0; i < sorted.length; i++) {
     var c = sorted[i];
-    var dotClass = c.active ? 'active' : 'inactive';
-    var vadClass = c.vad_active ? 'vad-active' : 'vad-inactive';
+    // 单盏三色灯：绿=语音，黄=载波，黑=无数据
+    var dotClass = 'inactive';
+    var dotTitle = '无数据';
+    if (c.vad_active) {
+      dotClass = 'voice';
+      dotTitle = '语音中';
+    } else if (c.active) {
+      dotClass = 'carrier';
+      dotTitle = '仅有载波';
+    }
     // 使用本地状态避免跨浏览器同步
     var isPlaying = (_voiceLocalPlaying === c.channel_id);
     var selClass = isPlaying ? 'selected' : '';
@@ -3481,10 +3486,7 @@ function voiceRenderChannels(channels, playing) {
       + '  <div><div class="vc-name">' + c.sector_code + '</div>'
       + '    <div class="vc-sector">' + c.sector_name + '</div>'
       + '  </div>'
-      + '  <div class="vc-indicators">'
-      + '    <div class="vc-dot ' + dotClass + '" title="数据接收"></div>'
-      + '    <div class="vc-vad ' + vadClass + '" title="语音活动"></div>'
-      + '  </div>'
+      + '  <div class="vc-dot ' + dotClass + '" title="' + dotTitle + '"></div>'
       + '</div>'
       + '<div class="vc-freq">' + c.frequency + ' MHz</div>'
       + '<div class="vc-ch">内话通道 #' + c.channel_id + '</div>'
