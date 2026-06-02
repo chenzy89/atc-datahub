@@ -62,7 +62,7 @@ CHANNEL_SECTORS: dict[int, str] = {v: k for k, v in SECTOR_CHANNELS.items()}
 # VAD (语音活动检测) 默认参数
 _VAD_ENERGY_THRESHOLD_DEFAULT = 0.005  # PCM 归一化 RMS 能量阈值，低于此视为静音
 _VAD_SILENCE_MS_DEFAULT = 1000        # 持续静音超过此值视为通话结束 (ms)
-_VAD_NOISE_RATIO_DEFAULT = 2.0        # 能量高于噪声底噪多少倍视为语音
+_VAD_NOISE_RATIO_DEFAULT = 3.0        # 能量高于噪声底噪多少倍视为语音
 _VAD_MAX_BURST_SECONDS = 30.0         # 突发最长时间，超过则强制结束（防止持续载波导致无结束）
 
 
@@ -78,6 +78,8 @@ class ChannelStatus:
     bytes_saved: int = 0       # 已保存到文件的字节数
     active: bool = False       # 最近 3 秒是否有数据
     vad_active: bool = False   # 最近 3 秒 VAD 是否检测到语音
+    vad_energy: float = 0.0    # 当前音频能量值（归一化）
+    vad_noise_floor: float = 0.0  # 当前噪声底噪值
     selected: bool = False     # 是否被选中播放
 
     def to_dict(self) -> dict:
@@ -91,6 +93,8 @@ class ChannelStatus:
             "bytes_saved": self.bytes_saved,
             "active": self.active,
             "vad_active": self.vad_active,
+            "vad_energy": self.vad_energy,
+            "vad_noise_floor": self.vad_noise_floor,
             "selected": self.selected,
         }
 
@@ -278,6 +282,8 @@ class VoiceReceiver:
         self._vad_noise_samples: dict[int, deque] = {}  # channel -> 最近50个能量值，用于滚动噪声底噪
         self._vad_burst_start_time: dict[int, float] = {}  # channel -> 突发开始时 clock_now
         self._vad_last_voice_time: dict[int, float] = {}  # channel -> time.monotonic() 最后检测到语音的时间
+        self._vad_last_energy: dict[int, float] = {}  # channel -> 最后更新的音频能量
+        self._vad_last_noise_floor: dict[int, float] = {}  # channel -> 最后更新的噪声底噪
 
         # ── 语音文件存储 ──
         # 当前突发缓冲：channel_id -> bytearray(adpcm_data)
@@ -388,6 +394,8 @@ class VoiceReceiver:
             # 更新 VAD 活跃状态：3 秒内检测到语音则为活跃
             last_voice = self._vad_last_voice_time.get(ch_id, 0.0)
             st.vad_active = (last_voice > 0 and (now - last_voice) < 3.0)
+            st.vad_energy = self._vad_last_energy.get(ch_id, 0.0)
+            st.vad_noise_floor = self._vad_last_noise_floor.get(ch_id, 0.0)
             # 更新已保存字节数
             st.bytes_saved = self._get_channel_bytes_saved(ch_id)
             result.append(st.to_dict())
@@ -808,6 +816,9 @@ class VoiceReceiver:
             noise_floor = min(self._vad_noise_samples[channel])
             dynamic_threshold = max(self._vad_energy_threshold, noise_floor * self._vad_noise_ratio)
             is_voice = energy > dynamic_threshold
+            # 更新能量和噪声底噪（供前端显示）
+            self._vad_last_energy[channel] = energy
+            self._vad_last_noise_floor[channel] = noise_floor
 
             # 强制结束检测：突发超过最大时长
             burst_age = 0.0

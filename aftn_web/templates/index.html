@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.34</title>
+<title>ATC AFTN WebHub v2.1.35</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -320,7 +320,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.34</span>
+  <span class="badge">v2.1.35</span>
 </div>
 
 <div class="tabs">
@@ -715,6 +715,7 @@ canvas#radarMap {
 .voice-channel-card .vc-dot.carrier { background:var(--accent-orange); box-shadow:0 0 8px rgba(210,153,34,.5); }
 .voice-channel-card .vc-dot.voice { background:var(--accent-green); box-shadow:0 0 10px rgba(63,185,80,.6); animation:pulse-dot 1s ease-in-out infinite; }
 .voice-channel-card .vc-stats { font-size:11px; color:var(--text-muted); margin-top:6px; }
+.voice-channel-card .vc-vad-stats { font-size:11px; color:var(--text-muted); margin-top:2px; font-family:monospace; }
 .voice-channel-card .vc-dur { font-size:10px; color:var(--accent-orange); margin-top:1px; }
 .voice-channel-card .vc-saved { font-size:11px; color:var(--accent); margin-top:2px; }
 @keyframes pulse-dot {
@@ -3481,6 +3482,9 @@ function voiceRenderChannels(channels, playing) {
     var savedStr = c.bytes_saved > 1024
       ? (c.bytes_saved / 1024 / 1024).toFixed(1) + ' MB'
       : (c.bytes_saved / 1024).toFixed(1) + ' KB';
+    // 能量/底噪（保留3位小数）
+    var energyStr = 'E:' + (c.vad_energy || 0).toFixed(3);
+    var noiseStr = 'N:' + (c.vad_noise_floor || 0).toFixed(3);
     html += '<div class="voice-channel-card ' + selClass + '" onclick="voiceSelectFromCard(' + c.channel_id + ')">'
       + '<div class="vc-top">'
       + '  <div><div class="vc-name">' + c.sector_code + '</div>'
@@ -3491,6 +3495,7 @@ function voiceRenderChannels(channels, playing) {
       + '<div class="vc-freq">' + c.frequency + ' MHz</div>'
       + '<div class="vc-ch">内话通道 #' + c.channel_id + '</div>'
       + '<div class="vc-stats">已接收 ' + bytesStr + '</div>'
+      + '<div class="vc-vad-stats">' + energyStr + ' &nbsp; ' + noiseStr + '</div>'
       + '<div class="vc-saved">📁 已保存 ' + savedStr + '</div>'
       + '</div>';
   }
