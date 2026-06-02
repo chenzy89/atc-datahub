@@ -62,6 +62,8 @@ CHANNEL_SECTORS: dict[int, str] = {v: k for k, v in SECTOR_CHANNELS.items()}
 # VAD (语音活动检测) 默认参数
 _VAD_ENERGY_THRESHOLD_DEFAULT = 0.005  # PCM 归一化 RMS 能量阈值，低于此视为静音
 _VAD_SILENCE_MS_DEFAULT = 1000        # 持续静音超过此值视为通话结束 (ms)
+_VAD_NOISE_RATIO_DEFAULT = 2.0        # 能量高于噪声底噪多少倍视为语音
+_VAD_MAX_BURST_SECONDS = 30.0         # 突发最长时间，超过则强制结束（防止持续载波导致无结束）
 
 
 @dataclass
@@ -268,7 +270,11 @@ class VoiceReceiver:
 
         # ── VAD (语音活动检测) ──
         self._vad_energy_threshold = vad_energy_threshold
+        self._vad_noise_ratio = _VAD_NOISE_RATIO_DEFAULT  # 能量高于噪声底噪倍数视为语音
+        self._vad_max_burst_seconds = _VAD_MAX_BURST_SECONDS  # 突发强制结束时间
         self._vad_silence_duration: dict[int, float] = {}  # channel/fs_key -> 连续静音秒数
+        self._vad_noise_samples: dict[int, deque] = {}  # channel -> 最近50个能量值，用于滚动噪声底噪
+        self._vad_burst_start_time: dict[int, float] = {}  # channel -> 突发开始时 clock_now
 
         # ── 语音文件存储 ──
         # 当前突发缓冲：channel_id -> bytearray(adpcm_data)
@@ -631,68 +637,78 @@ class VoiceReceiver:
 
                 drained += 1
 
-                if len(data) < 10:
-                    continue
+                try:
+                    self._process_voice_packet(data)
+                except Exception:
+                    logger.exception("voice packet processing error (ch=%s)",
+                                     struct.unpack("<H", data[0:2])[0] & 0xFFFF if len(data) >= 2 else -1)
+                self._loop_iteration += 1
 
-                # 解析通道号 (前 2 字节, 小端序)
-                channel = struct.unpack("<H", data[0:2])[0] & 0xFFFF
+    def _process_voice_packet(self, data: bytes) -> None:
+        """处理一个语音数据包：解析通道、解码 PCM、跟踪时长、保存文件
 
-                # 只关心我们监控的 7 个通道
-                sector_code = CHANNEL_SECTORS.get(channel)
-                if not sector_code:
-                    continue
+        提取为独立方法，方便异常处理，避免单包异常导致整个接收线程崩溃。
+        """
+        if len(data) < 10:
+            return
 
-                # 记录活跃时间
-                clock_now = time.time()
-                mono_now = time.monotonic()
-                if channel not in self._activity_window:
-                    self._activity_window[channel] = []
-                self._activity_window[channel].append(mono_now)
-                if len(self._activity_window[channel]) > 500:
-                    self._activity_window[channel] = self._activity_window[channel][-250:]
+        # 解析通道号 (前 2 字节, 小端序)
+        channel = struct.unpack("<H", data[0:2])[0] & 0xFFFF
 
-                # 更新状态
-                st = self._status.get(sector_code)
-                if st:
-                    st.last_activity = mono_now
-                    st.bytes_received += len(data)
+        # 只关心我们监控的 7 个通道
+        sector_code = CHANNEL_SECTORS.get(channel)
+        if not sector_code:
+            return
 
-                # ── 提取 ADPCM 并提前解码 PCM（用于 VAD 能量检测） ──
-                adpcm_data = data[2 : len(data) - 8]
-                pcm_data = b""
-                if adpcm_data:
-                    if channel not in self._decoders:
-                        self._decoders[channel] = ADPCMDecoder()
-                    decoder = self._decoders[channel]
-                    pcm_data = decoder.decode_adpcm(adpcm_data)
+        # 记录活跃时间
+        clock_now = time.time()
+        mono_now = time.monotonic()
+        if channel not in self._activity_window:
+            self._activity_window[channel] = []
+        self._activity_window[channel].append(mono_now)
+        if len(self._activity_window[channel]) > 500:
+            self._activity_window[channel] = self._activity_window[channel][-250:]
 
-                # ── 通话时长统计（VAD 能量检测） ──
-                self._track_duration(channel, clock_now, pcm_data)
+        # 更新状态
+        st = self._status.get(sector_code)
+        if st:
+            st.last_activity = mono_now
+            st.bytes_received += len(data)
 
-                # ── 语音文件保存（VAD 能量检测） ──
-                if adpcm_data:
-                    self._save_adpcm_data(channel, adpcm_data, clock_now, pcm_data)
+        # ── 提取 ADPCM 并提前解码 PCM（用于 VAD 能量检测） ──
+        adpcm_data = data[2 : len(data) - 8]
+        pcm_data = b""
+        if adpcm_data:
+            if channel not in self._decoders:
+                self._decoders[channel] = ADPCMDecoder()
+            decoder = self._decoders[channel]
+            pcm_data = decoder.decode_adpcm(adpcm_data)
 
-                # 推入 PCM 流缓冲
-                if pcm_data and self._play_lock.acquire(blocking=False):
-                    try:
-                        if channel not in self._pcm_buffers:
-                            self._pcm_buffers[channel] = deque(maxlen=200)
-                            self._pcm_events[channel] = threading.Event()
-                            self._pcm_seq[channel] = 0
-                        buf = self._pcm_buffers[channel]
-                        seq = self._pcm_seq[channel]
-                        self._pcm_seq[channel] = seq + 1
-                        buf.append((seq, pcm_data))
-                        self._pcm_events[channel].set()
-                    finally:
-                        self._play_lock.release()
+        # ── 通话时长统计（VAD 能量检测） ──
+        self._track_duration(channel, clock_now, pcm_data)
 
-                # 旧版本地播放
-                if pcm_data and self._pygame_ok and self._playing_channel == channel:
-                    self._play_pcm(pcm_data)
+        # ── 语音文件保存（VAD 能量检测） ──
+        if adpcm_data:
+            self._save_adpcm_data(channel, adpcm_data, clock_now, pcm_data)
 
-            self._loop_iteration += 1
+        # 推入 PCM 流缓冲（用于浏览器 SSE 流式播放）
+        if pcm_data and self._play_lock.acquire(blocking=False):
+            try:
+                if channel not in self._pcm_buffers:
+                    self._pcm_buffers[channel] = deque(maxlen=200)
+                    self._pcm_events[channel] = threading.Event()
+                    self._pcm_seq[channel] = 0
+                buf = self._pcm_buffers[channel]
+                seq = self._pcm_seq[channel]
+                self._pcm_seq[channel] = seq + 1
+                buf.append((seq, pcm_data))
+                self._pcm_events[channel].set()
+            finally:
+                self._play_lock.release()
+
+        # 旧版本地播放
+        if pcm_data and self._pygame_ok and self._playing_channel == channel:
+            self._play_pcm(pcm_data)
 
     def _try_drain_buffer(self, sock) -> None:
         """检测 socket 积压并尝试 drain，防止 rx_queue 填满"""
@@ -778,8 +794,35 @@ class VoiceReceiver:
             if channel not in day_buckets:
                 day_buckets[channel] = [0.0] * 144
 
-            # ── VAD 判断 ──
-            is_voice = energy > self._vad_energy_threshold
+            # ── VAD 判断（自适应噪声底噪） ──
+            # 更新滚动能量样本（用于噪声底噪估计）
+            if channel not in self._vad_noise_samples:
+                self._vad_noise_samples[channel] = deque(maxlen=50)  # 约3秒窗口
+            self._vad_noise_samples[channel].append(energy)
+            noise_floor = min(self._vad_noise_samples[channel])
+            dynamic_threshold = max(self._vad_energy_threshold, noise_floor * self._vad_noise_ratio)
+            is_voice = energy > dynamic_threshold
+
+            # 强制结束检测：突发超过最大时长
+            burst_age = 0.0
+            if channel in self._burst_start:
+                burst_age = clock_now - self._burst_start[channel]
+                if burst_age > self._vad_max_burst_seconds and \
+                        self._burst_voice_duration.get(channel, 0.0) > 0.5:
+                    # 超长突发：强制结束
+                    burst_start = self._burst_start.pop(channel, None)
+                    voice_dur = self._burst_voice_duration.pop(channel, None) or 0.0
+                    if burst_start is not None and voice_dur > 0.5:
+                        dt = datetime.utcfromtimestamp(burst_start)
+                        slot = (dt.hour * 60 + dt.minute) // 10
+                        if 0 <= slot < 144:
+                            day_buckets[channel][slot] += voice_dur
+                    if channel in self._vad_silence_duration:
+                        self._vad_silence_duration[channel] = 0.0
+                    # 立即开始新突发
+                    self._burst_start[channel] = clock_now
+                    self._burst_voice_duration[channel] = 0.0
+                    return
 
             if is_voice:
                 # 语音活动：重置静音计数器
@@ -819,11 +862,18 @@ class VoiceReceiver:
 
         energy = self._compute_pcm_energy(pcm_data) if pcm_data else 0.0
         pcm_duration = len(pcm_data) / 16000.0 if pcm_data else 0.0
-        is_voice = energy > self._vad_energy_threshold
 
         with self._file_lock:
-            # VAD 静音计数器（独立于时长统计）
-            fs_key = -channel  # 文件保存用负通道号作为独立 key
+            # 自适应噪声底噪检测（文件保存独立副本）
+            fs_key = -channel
+            if fs_key not in self._vad_noise_samples:
+                self._vad_noise_samples[fs_key] = deque(maxlen=50)
+            self._vad_noise_samples[fs_key].append(energy)
+            noise_floor = min(self._vad_noise_samples[fs_key])
+            dynamic_threshold = max(self._vad_energy_threshold, noise_floor * self._vad_noise_ratio)
+            is_voice = energy > dynamic_threshold
+
+            # VAD 静音计数器
             silence_dur = self._vad_silence_duration.get(fs_key, 0.0)
 
             if is_voice:
