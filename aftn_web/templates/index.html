@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.38</title>
+<title>ATC AFTN WebHub v2.1.39</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -414,7 +414,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.38</span>
+  <span class="badge">v2.1.39</span>
 </div>
 
 <div class="tabs">
@@ -2303,6 +2303,8 @@ function esc(s) {
   // 飞行计划页 — 航班历史轨迹弹窗（maplist 背景 + 轨迹线）
   // ══════════════════════════════════════════════════════════════
   var _trailMapElements = [];
+  var _trailMapLayerData = {};  // { "China": { enabled:true, elements:[...] }, ... }
+  var _trailMapLayerOrder = [];
   var _trailGeo = null;
 
   // ── 射线法判断点是否在多边形内 ─────────────────────────
@@ -2461,20 +2463,23 @@ function esc(s) {
     var mapPromise = fetch('/api/maplist')
       .then(function(r) { return r.json(); })
       .then(function(fileList) {
-        if (fileList.length === 0) return [];
+        if (fileList.length === 0) return {order:[], layers:{}};
         var promises = fileList.map(function(entry) {
           return fetch('/api/map_file/' + encodeURIComponent(entry.name))
             .then(function(r) { return r.ok ? r.text() : ''; });
         });
         return Promise.all(promises).then(function(texts) {
-          var all = [];
-          for (var i = 0; i < texts.length; i++) {
-            if (texts[i]) {
-              var parsed = parseMapFile(texts[i]);
-              all = all.concat(parsed);
-            }
+          var order = [];
+          var layers = {};
+          for (var i = 0; i < fileList.length; i++) {
+            var name = fileList[i].name;
+            order.push(name);
+            layers[name] = {
+              enabled: !!(mapLayers[name] ? mapLayers[name].enabled : fileList[i].enabled),
+              elements: texts[i] ? parseMapFile(texts[i]) : []
+            };
           }
-          return all;
+          return {order: order, layers: layers};
         });
       });
 
@@ -2485,8 +2490,18 @@ function esc(s) {
     Promise.all([trailPromise, mapPromise, termPromise])
       .then(function(results) {
         var allPoints = results[0] || [];
+        var mapData = results[1] || {order:[], layers:{}};
+        _trailMapLayerOrder = mapData.order;
+        _trailMapLayerData = mapData.layers;
+        // 构建当前启用的平面数组（兼容原有 _trailState.mapElements 使用）
+        var flat = [];
+        for (var li = 0; li < _trailMapLayerOrder.length; li++) {
+          var lname = _trailMapLayerOrder[li];
+          var ld = _trailMapLayerData[lname];
+          if (ld && ld.enabled) flat = flat.concat(ld.elements);
+        }
         _trailState.allPoints = allPoints;
-        _trailState.mapElements = results[1] || [];
+        _trailState.mapElements = flat;
         _trailState.terminalConfig = results[2] || {};
 
         // 保证加载提示至少显示 500ms，避免闪一下就消失
@@ -2688,8 +2703,18 @@ function esc(s) {
     ctx.fillStyle = _MAP_BG;
     ctx.fillRect(0, 0, w, h);
 
-    for (var i = 0; i < _trailMapElements.length; i++) {
-      drawElement(ctx, _trailMapElements[i], _trailGeo);
+    // 按主雷达图的图层选择过滤地图元素
+    var trailElements = _trailMapElements;
+    if (Object.keys(_trailMapLayerData).length > 0) {
+      trailElements = [];
+      for (var li = 0; li < _trailMapLayerOrder.length; li++) {
+        var lname = _trailMapLayerOrder[li];
+        var ld = _trailMapLayerData[lname];
+        if (ld && ld.enabled) trailElements = trailElements.concat(ld.elements);
+      }
+    }
+    for (var i = 0; i < trailElements.length; i++) {
+      drawElement(ctx, trailElements[i], _trailGeo);
     }
 
     // 收集有效像素点
@@ -3023,7 +3048,12 @@ function esc(s) {
       checkboxes[ci].addEventListener('change', function(e) {
         var layerName = e.target.getAttribute('data-layer');
         if (mapLayers[layerName]) {
-          mapLayers[layerName].enabled = e.target.checked;
+          var en = e.target.checked;
+          mapLayers[layerName].enabled = en;
+          // 同步飞行轨迹弹窗的图层状态
+          if (_trailMapLayerData[layerName]) {
+            _trailMapLayerData[layerName].enabled = en;
+          }
           drawMap();
         }
       });
@@ -3037,12 +3067,15 @@ function esc(s) {
     if (overlay) overlay.classList.remove('show');
   }
 
-  // 点击遮罩关闭弹窗
+  // 点击遮罩关闭弹窗（只有点在外面才关）
   document.addEventListener('click', function(e) {
     var overlay = document.getElementById('mapLayersOverlay');
     var dialog = document.getElementById('mapLayersDialog');
+    var mapBtn = document.querySelector('.map-tool-btn');
     if (overlay && overlay.classList.contains('show') && dialog) {
-      if (!dialog.contains(e.target) && e.target !== overlay.querySelector('button')) {
+      // 如果点的是地图按钮本身，不干涉（openMapLayers 会处理）
+      if (e.target === mapBtn || mapBtn && mapBtn.contains(e.target)) return;
+      if (!dialog.contains(e.target)) {
         closeMapLayers();
       }
     }
