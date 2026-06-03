@@ -298,6 +298,7 @@ class VoiceReceiver:
         # 能量历史（用于前端波形图，采样于每次 get_status 调用）
         # deque(maxlen=30) ≈ 30 × 2s ≈ 1 分钟窗口
         self._vad_energy_history: dict[int, deque] = {}
+        self._vad_energy_history_last_sample: dict[int, float] = {}
 
         # ── 语音文件存储 ──
         # 当前突发缓冲：channel_id -> bytearray(adpcm_data)
@@ -410,14 +411,21 @@ class VoiceReceiver:
             st.vad_active = (last_voice > 0 and (now - last_voice) < 3.0)
             st.vad_energy = self._vad_last_energy.get(ch_id, 0.0)
             st.vad_noise_floor = self._vad_last_noise_floor.get(ch_id, 0.0)
-            # 更新能量历史（供前端波形图）
+            # 更新能量历史（所有通道统一每 ~1s 采样一次）
+            now_ts = time.time()
+            last_sample = self._vad_energy_history_last_sample.get(ch_id, now_ts)
             if ch_id not in self._vad_energy_history:
-                self._vad_energy_history[ch_id] = deque(maxlen=30)  # ~1分钟
-            self._vad_energy_history[ch_id].append(st.vad_energy)
+                self._vad_energy_history[ch_id] = deque(maxlen=60)
+            while now_ts - last_sample >= 1.0:
+                energy = self._vad_last_energy.get(ch_id, 0.0) if st.active else 0.0
+                self._vad_energy_history[ch_id].append(energy)
+                last_sample += 1.0
+            self._vad_energy_history_last_sample[ch_id] = last_sample
+
             # 更新已保存字节数
             st.bytes_saved = self._get_channel_bytes_saved(ch_id)
             d = st.to_dict()
-            d["energy_history"] = list(self._vad_energy_history[ch_id])
+            d["energy_history"] = list(self._vad_energy_history.get(ch_id, []))
             result.append(d)
         self._flush_stale_bursts()
         return result
