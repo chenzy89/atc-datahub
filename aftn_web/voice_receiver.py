@@ -901,13 +901,14 @@ class VoiceReceiver:
         pcm_duration = len(pcm_data) / 16000.0 if pcm_data else 0.0
 
         with self._file_lock:
+            # fs_key 用于文件保存的独立 VAD 静音计数器（始终定义，保证后续代码可用）
+            fs_key = -channel
             # VAD 判断（自适应噪声底噪，ch50 使用固定阈值）
             fixed_threshold = _VAD_FIXED_THRESHOLDS.get(channel)
             if fixed_threshold is not None:
                 is_voice = energy > fixed_threshold + _VAD_FIXED_THRESHOLD_MARGIN
             else:
                 # 自适应噪声底噪检测（文件保存独立副本）
-                fs_key = -channel
                 if fs_key not in self._vad_noise_samples:
                     self._vad_noise_samples[fs_key] = deque(maxlen=50)
                 self._vad_noise_samples[fs_key].append(energy)
