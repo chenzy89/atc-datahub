@@ -40,16 +40,22 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     @app.route("/api/maplist")
     def api_maplist():
-        """返回 maplist.txt 中定义的地图文件列表"""
+        """返回 maplist.txt 中定义的地图文件列表（含默认启用状态）"""
         map_dir = Path("/home/share/atc_aftn_web/map")
         lst = map_dir / "maplist.txt"
-        files: list[str] = []
+        entries: list[dict] = []
         if lst.exists():
             for line in lst.read_text("utf-8").splitlines():
                 line = line.strip()
-                if line and not line.startswith("#"):
-                    files.append(line)
-        return jsonify(files)
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                name = parts[0]
+                enabled = True
+                if len(parts) > 1:
+                    enabled = parts[1].lower() == "true"
+                entries.append({"name": name, "enabled": enabled})
+        return jsonify(entries)
 
     @app.route("/api/map_file/<name>")
     def api_map_file(name: str):

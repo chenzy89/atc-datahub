@@ -1,6 +1,7 @@
-China
-BORDER
-MC_A_16
-SD_A_23
-BACKGROUND
-NAV_FIX
+China	true
+BORDER	true
+OBST	false
+MC_A_16	true
+SD_A_23	true
+BACKGROUND	true
+NAV_FIX	true

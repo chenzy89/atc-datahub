@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.37</title>
+<title>ATC AFTN WebHub v2.1.38</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -119,6 +119,100 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .st-date-group { display:flex; align-items:center; gap:4px; }
 .st-date-sel { padding:6px 8px; border:1px solid var(--border); border-radius:4px; font-size:13px; background:var(--bg-input); color:var(--text-primary); outline:none; cursor:pointer; min-width:70px; }
 .st-date-sel:focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(88,166,255,.15); }
+
+/* ── 地图工具栏按钮 ── */
+.map-top-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  z-index: 20;
+  display: flex;
+  gap: 6px;
+}
+.map-tool-btn {
+  background: rgba(15,23,42,0.85);
+  border: 1px solid #1e3a5f;
+  border-radius: 4px;
+  color: #94a3b8;
+  font-size: 12px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: .15s;
+  font-family: inherit;
+}
+.map-tool-btn:hover {
+  background: rgba(30,58,95,0.8);
+  color: #e2e8f0;
+}
+
+/* ── 地图图层弹窗 ── */
+.map-layers-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,.55);
+  z-index: 3000;
+  align-items: center;
+  justify-content: center;
+}
+.map-layers-overlay.show {
+  display: flex;
+}
+.map-layers-dialog {
+  background: #0f1a2e;
+  border: 1px solid #1e3a5f;
+  border-radius: 10px;
+  padding: 20px 24px;
+  min-width: 260px;
+  max-width: 340px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  color: #e2e8f0;
+  font-size: 13px;
+}
+.map-layers-dialog h3 {
+  margin: 0 0 14px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.map-layer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  cursor: pointer;
+}
+.map-layer-item input[type="checkbox"] {
+  accent-color: #34d399;
+  cursor: pointer;
+}
+.map-layer-item label {
+  cursor: pointer;
+  color: #c8d0da;
+  user-select: none;
+}
+.map-layer-item:hover label {
+  color: #e2e8f0;
+}
+.map-layers-close {
+  margin-top: 14px;
+  text-align: right;
+}
+.map-layers-close button {
+  background: none;
+  border: 1px solid #1e3a5f;
+  border-radius: 4px;
+  color: #94a3b8;
+  font-size: 12px;
+  padding: 4px 16px;
+  cursor: pointer;
+  transition: .15s;
+  font-family: inherit;
+}
+.map-layers-close button:hover {
+  background: rgba(30,58,95,0.6);
+  color: #e2e8f0;
+}
 
 /* ── 雷达地图 ── */
 .map-container {
@@ -320,7 +414,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.37</span>
+  <span class="badge">v2.1.38</span>
 </div>
 
 <div class="tabs">
@@ -568,8 +662,21 @@ canvas#radarMap {
       <div class="rl-text">正在加载历史数据...</div>
       <div class="rl-bar-bg"><div class="rl-bar-fill" id="rlBarFill"></div></div>
     </div>
+    <div class="map-top-toolbar">
+      <button class="map-tool-btn" onclick="openMapLayers()">🗺 地图</button>
+    </div>
     <div class="map-time-label" id="mapTimeLabel">--:--:-- UTC</div>
     <div class="coord-bar" id="coordBar"></div>
+  </div>
+  <!-- ── 地图图层弹窗 ── -->
+  <div class="map-layers-overlay" id="mapLayersOverlay">
+    <div class="map-layers-dialog" id="mapLayersDialog">
+      <h3>地图图层</h3>
+      <div id="mapLayersList"></div>
+      <div class="map-layers-close">
+        <button onclick="closeMapLayers()">关闭</button>
+      </div>
+    </div>
   </div>
   <div class="playback-bar" id="playbackBar">
     <div class="playback-row">
@@ -1438,7 +1545,8 @@ function esc(s) {
 
   // ── GeoTransform ──
   var geo = null;
-  var mapElements = [];
+  var mapLayers = {};        // { "China": { enabled:true, name:"China", elements:[...] }, ... }
+  var mapLayerOrder = [];    // 保持 maplist.txt 顺序
   var isLoading = false;
   var mapError = null;
 
@@ -1866,13 +1974,24 @@ function esc(s) {
   }
 
   // ── 主绘制 ──
+  function _getEnabledElements() {
+    var all = [];
+    for (var i = 0; i < mapLayerOrder.length; i++) {
+      var l = mapLayers[mapLayerOrder[i]];
+      if (l && l.enabled) {
+        all = all.concat(l.elements);
+      }
+    }
+    return all;
+  }
+
   function drawMap() {
     var canvas = document.getElementById('radarMap');
     if (!canvas || !canvas.getContext) return;
 
     var container = canvas.parentElement;
     // 首次加载时取地图数据（按 maplist.txt 定义的文件名）
-    if (!isLoading && mapElements.length === 0 && !mapError) {
+    if (!isLoading && Object.keys(mapLayers).length === 0 && !mapError) {
       isLoading = true;
       fetch('/api/maplist')
         .then(function(r) {
@@ -1881,27 +2000,29 @@ function esc(s) {
         })
         .then(function(fileList) {
           if (fileList.length === 0) {
-            mapElements = [];
             isLoading = false;
             drawMap();
             return;
           }
-          var promises = fileList.map(function(name) {
-            return fetch('/api/map_file/' + encodeURIComponent(name))
+          var promises = fileList.map(function(entry) {
+            return fetch('/api/map_file/' + encodeURIComponent(entry.name))
               .then(function(r) {
-                if (!r.ok) return '';
+                if (!r.ok) return null;
                 return r.text();
               });
           });
           return Promise.all(promises).then(function(texts) {
-            var all = [];
-            for (var i = 0; i < texts.length; i++) {
-              if (texts[i]) {
-                var parsed = parseMapFile(texts[i]);
-                all = all.concat(parsed);
-              }
+            mapLayerOrder = [];
+            mapLayers = {};
+            for (var i = 0; i < fileList.length; i++) {
+              var name = fileList[i].name;
+              mapLayerOrder.push(name);
+              mapLayers[name] = {
+                enabled: fileList[i].enabled,
+                name: name,
+                elements: texts[i] ? parseMapFile(texts[i]) : []
+              };
             }
-            mapElements = all;
             isLoading = false;
             drawMap();
           });
@@ -1952,7 +2073,8 @@ function esc(s) {
     ctx.setLineDash([]);
     ctx.strokeRect(0, 0, displayW, displayH);
 
-    // ── 地图元素 ──
+    // ── 地图元素（仅启用图层） ──
+    var mapElements = _getEnabledElements();
     for (var i = 0; i < mapElements.length; i++) {
       drawElement(ctx, mapElements[i]);
     }
@@ -2340,8 +2462,8 @@ function esc(s) {
       .then(function(r) { return r.json(); })
       .then(function(fileList) {
         if (fileList.length === 0) return [];
-        var promises = fileList.map(function(name) {
-          return fetch('/api/map_file/' + encodeURIComponent(name))
+        var promises = fileList.map(function(entry) {
+          return fetch('/api/map_file/' + encodeURIComponent(entry.name))
             .then(function(r) { return r.ok ? r.text() : ''; });
         });
         return Promise.all(promises).then(function(texts) {
@@ -2873,6 +2995,61 @@ function esc(s) {
       })
       .catch(function() { /* 静默 */ });
   }
+  // ── 地图图层弹窗 ──
+  function openMapLayers() {
+    var overlay = document.getElementById('mapLayersOverlay');
+    var listEl = document.getElementById('mapLayersList');
+    if (!overlay || !listEl) return;
+
+    var html = '';
+    for (var i = 0; i < mapLayerOrder.length; i++) {
+      var name = mapLayerOrder[i];
+      var layer = mapLayers[name];
+      if (!layer) continue;
+      var checked = layer.enabled ? 'checked' : '';
+      // 取中文描述（文件名去掉扩展名）
+      var label = name;
+      html += '<div class="map-layer-item">'
+        + '<input type="checkbox" id="ml_' + i + '" '
+        + 'data-layer="' + name.replace(/"/g,'&quot;') + '" ' + checked + '>'
+        + '<label for="ml_' + i + '">' + label + '</label>'
+        + '</div>';
+    }
+    listEl.innerHTML = html;
+
+    // 绑定点击事件
+    var checkboxes = listEl.querySelectorAll('input[type="checkbox"]');
+    for (var ci = 0; ci < checkboxes.length; ci++) {
+      checkboxes[ci].addEventListener('change', function(e) {
+        var layerName = e.target.getAttribute('data-layer');
+        if (mapLayers[layerName]) {
+          mapLayers[layerName].enabled = e.target.checked;
+          drawMap();
+        }
+      });
+    }
+
+    overlay.classList.add('show');
+  }
+
+  function closeMapLayers() {
+    var overlay = document.getElementById('mapLayersOverlay');
+    if (overlay) overlay.classList.remove('show');
+  }
+
+  // 点击遮罩关闭弹窗
+  document.addEventListener('click', function(e) {
+    var overlay = document.getElementById('mapLayersOverlay');
+    var dialog = document.getElementById('mapLayersDialog');
+    if (overlay && overlay.classList.contains('show') && dialog) {
+      if (!dialog.contains(e.target) && e.target !== overlay.querySelector('button')) {
+        closeMapLayers();
+      }
+    }
+  });
+
+  window.openMapLayers = openMapLayers;
+  window.closeMapLayers = closeMapLayers;
   window.fetchTracks = fetchTracks;
   window.drawMap = drawMap;
   function startTrackRefresh() {
