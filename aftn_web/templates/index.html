@@ -3640,6 +3640,7 @@ function voiceSelectFromCard(channelId) {
     _voiceLocalPlaying = null;
     voiceStopSSE();
     voiceLoadChart(0);
+    voiceRenderChannels(window._lastChannels);  // 立即刷新高亮
     return;
   }
 
@@ -3649,6 +3650,7 @@ function voiceSelectFromCard(channelId) {
   // 启动浏览器端 SSE 音频流
   voiceStartSSE(channelId);
   voiceLoadChart(0);
+  voiceRenderChannels(window._lastChannels);  // 立即刷新高亮
 }
 
 // ═══════════════════════════════════════════════════════
