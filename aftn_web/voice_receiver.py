@@ -284,6 +284,7 @@ class VoiceReceiver:
         self._today_date = datetime.now().strftime("%Y-%m-%d")
         self._duration_lock = threading.Lock()
         self._db_flush_counter = 0
+        self._last_db_flush_time = time.monotonic()
 
         # ── VAD (语音活动检测) ──
         self._vad_energy_threshold = vad_energy_threshold
@@ -790,6 +791,12 @@ class VoiceReceiver:
         self._flush_stale_bursts()
         # 清理过时的语音文件缓冲（数据流中断时的后备保障）
         self._flush_stale_burst_files()
+
+        # 定期将通话时长刷到 DB（每 30 秒），防止重启丢失
+        now = time.monotonic()
+        if now - self._last_db_flush_time >= 30.0:
+            self._flush_durations_to_db()
+            self._last_db_flush_time = now
 
         # 检查是否需要清理过期文件（每日一次）
         today = datetime.now().strftime("%Y-%m-%d")
