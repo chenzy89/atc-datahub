@@ -72,6 +72,10 @@ _VAD_FIXED_THRESHOLDS: dict[int, float] = {
     50: 0.071,  # ch50: 无通话时固定噪音强度 0.071，通话时上下波动
 }
 
+# 固定阈值的容差 margin（防止 RMS 浮点计算略微高于阈值导致 VAD 永不静音）
+# 实际判定为 `energy > threshold + margin`
+_VAD_FIXED_THRESHOLD_MARGIN = 0.0005
+
 
 @dataclass
 class ChannelStatus:
@@ -818,8 +822,8 @@ class VoiceReceiver:
             # ── VAD 判断（自适应噪声底噪，ch50 使用固定阈值） ──
             fixed_threshold = _VAD_FIXED_THRESHOLDS.get(channel)
             if fixed_threshold is not None:
-                # 固定阈值模式：直接比较，不依赖噪声底噪
-                is_voice = energy > fixed_threshold
+                # 固定阈值模式：加 margin 避免浮点略微高于阈值导致 VAD 永不静音
+                is_voice = energy > fixed_threshold + _VAD_FIXED_THRESHOLD_MARGIN
                 self._vad_last_energy[channel] = energy
                 self._vad_last_noise_floor[channel] = 0.0  # 固定阈值模式下无意义
             else:
@@ -900,7 +904,7 @@ class VoiceReceiver:
             # VAD 判断（自适应噪声底噪，ch50 使用固定阈值）
             fixed_threshold = _VAD_FIXED_THRESHOLDS.get(channel)
             if fixed_threshold is not None:
-                is_voice = energy > fixed_threshold
+                is_voice = energy > fixed_threshold + _VAD_FIXED_THRESHOLD_MARGIN
             else:
                 # 自适应噪声底噪检测（文件保存独立副本）
                 fs_key = -channel
