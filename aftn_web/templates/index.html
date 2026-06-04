@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.41</title>
+<title>ATC AFTN WebHub v2.1.42</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.41</span>
+  <span class="badge">v2.1.42</span>
 </div>
 
 <div class="tabs">
@@ -742,7 +742,6 @@ canvas#radarMap {
   <div class="voice-status-bar">
     <span id="voiceRecvStatus" class="voice-recv-off">● 接收中...</span>
     <span class="voice-info">组播 229.34.34.34:34034</span>
-    <span class="voice-retention-info" id="voiceRetentionInfo"></span>
   </div>
 
   <div class="voice-controls">
@@ -3614,8 +3613,7 @@ function voiceInit() {
     .then(function(r){ return r.json(); })
     .then(function(cfg) {
       _voiceConfig = cfg;
-      var ri = document.getElementById('voiceRetentionInfo');
-      if (ri) ri.textContent = 'VST=' + cfg.retention_days + '天';
+
       var fm = document.getElementById('voiceChartFlightMax');
       if (fm) fm.value = cfg.flight_count_max || 18;
     })
