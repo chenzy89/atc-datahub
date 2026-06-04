@@ -276,7 +276,6 @@ class VoiceReceiver:
         self._silence_threshold = vad_silence_ms / 1000.0  # 静音阈值 (秒)
         self._today_date = datetime.now().strftime("%Y-%m-%d")
         self._duration_lock = threading.Lock()
-        self._db_flush_counter = 0
         self._last_db_flush_time = time.monotonic()
 
         # ── VAD (语音活动检测) ──
@@ -350,6 +349,9 @@ class VoiceReceiver:
 
     def stop(self) -> None:
         self._running = False
+        # 保存所有通话时长到 DB，防止重启丢失 last burst 数据
+        self._flush_stale_bursts()
+        self._flush_durations_to_db()
         if self._socket:
             try:
                 self._socket.close()
@@ -677,6 +679,12 @@ class VoiceReceiver:
                         slot = (dt.hour * 60 + dt.minute) // 10
                         if 0 <= slot < 144:
                             day_buckets[channel][slot] += voice_dur
+                            if self._db:
+                                try:
+                                    db_save_today = self._today_date
+                                    self._db.save_voice_duration(db_save_today, channel, slot, day_buckets[channel][slot])
+                                except Exception:
+                                    pass
                     if channel in self._vad_silence_duration:
                         self._vad_silence_duration[channel] = 0.0
                     # 立即开始新突发
@@ -710,6 +718,12 @@ class VoiceReceiver:
                         slot = (dt.hour * 60 + dt.minute) // 10
                         if 0 <= slot < 144:
                             day_buckets[channel][slot] += voice_dur
+                            # 突发结束 → 立即刷到 DB（防止重启丢失）
+                            if self._db:
+                                try:
+                                    self._db.save_voice_duration(today, channel, slot, day_buckets[channel][slot])
+                                except Exception:
+                                    pass
                     # 重置静音计数器（避免反复触发）
                     self._vad_silence_duration[channel] = 0.0
 
@@ -772,14 +786,14 @@ class VoiceReceiver:
                             slot = (dt.hour * 60 + dt.minute) // 10
                             if 0 <= slot < 144:
                                 day_buckets[channel][slot] += voice_dur
+                                if self._db:
+                                    try:
+                                        db_save_today = datetime.now().strftime("%Y-%m-%d")
+                                        self._db.save_voice_duration(db_save_today, channel, slot, day_buckets[channel][slot])
+                                    except Exception:
+                                        pass
                             changed = True
                     self._vad_silence_duration[channel] = 0.0
-        # 如果清理了突发，顺便刷到 DB
-        if changed:
-            self._db_flush_counter += 1
-            if self._db_flush_counter >= 10:
-                self._flush_durations_to_db()
-                self._db_flush_counter = 0
 
     # ── 浏览器 SSE 流式播放 ──────────────────────────
 
