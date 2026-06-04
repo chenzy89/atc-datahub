@@ -3,5 +3,5 @@ BORDER	true
 OBST	false
 MC_A_16	true
 SD_A_23	true
-BACKGROUND	true
+BACKGROUND	false
 NAV_FIX	true

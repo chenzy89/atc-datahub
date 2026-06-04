@@ -170,18 +170,11 @@ def main(argv: list[str] | None = None) -> int:
     # 语音数据接收器（可选）
     voice_receiver: VoiceReceiver | None = None
     if config.voice.enabled:
-        # 计算语音数据保存目录
-        voice_save_dir = config.voice_data.save_dir
-        if not voice_save_dir:
-            voice_save_dir = str(Path(config.db_path).parent / "voice")
-        voice_save_dir = str(Path(voice_save_dir).resolve())
         voice_receiver = VoiceReceiver(
             multicast_group=config.voice.multicast_group,
             port=config.voice.port,
             interface_ip=config.voice.interface_ip,
             db=db,
-            save_dir=voice_save_dir,
-            retention_days=config.voice_data.retention_days,
             vad_energy_threshold=config.voice_data.vad_energy_threshold,
             vad_silence_ms=config.voice_data.vad_silence_ms,
         )

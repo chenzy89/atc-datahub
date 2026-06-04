@@ -668,14 +668,8 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             return jsonify({"error": "invalid channel"}), 400
         return jsonify({"ok": True, "channel": channel})
 
-    _voice_save_dir = config.voice_data.save_dir if hasattr(config, "voice_data") and config.voice_data.save_dir else ""
-    if not _voice_save_dir:
-        _voice_save_dir = str(Path(config.db_path).parent / "voice")
-    _voice_save_dir = str(Path(_voice_save_dir).resolve())
     _voice_config = {
-        "retention_days": config.voice_data.retention_days if hasattr(config, "voice_data") else 30,
         "flight_count_max": config.voice_data.flight_count_max if hasattr(config, "voice_data") else 18,
-        "save_dir": _voice_save_dir,
     }
 
     @app.route("/api/voice/config")
@@ -781,86 +775,6 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
                 "X-Accel-Buffering": "no",
             },
         )
-
-    @app.route("/api/voice/recordings")
-    def api_voice_recordings():
-        """返回指定日期和通道的录音文件列表"""
-        if voice_receiver is None:
-            return jsonify({"error": "voice not enabled"}), 400
-        date_str = request.args.get("date", "")
-        channel_str = request.args.get("channel", "")
-        if not date_str or not channel_str:
-            return jsonify({"error": "date and channel required"}), 400
-        try:
-            channel_id = int(channel_str)
-        except (ValueError, TypeError):
-            return jsonify({"error": "invalid channel"}), 400
-
-        recordings = voice_receiver.list_recordings(date_str, channel_id)
-        total_size = sum(r["size"] for r in recordings)
-        return jsonify({
-            "date": date_str,
-            "channel": channel_id,
-            "recordings": recordings,
-            "count": len(recordings),
-            "total_size": total_size,
-            "total_size_str": voice_receiver._format_size(total_size),
-        })
-
-    @app.route("/api/voice/play_file")
-    def api_voice_play_file():
-        """返回指定日期/通道/时间范围的录音，解码为 WAV 流
-
-        Query params:
-            date: UTC 日期 YYYY-MM-DD
-            channel: 通道号
-            from: 起始时间 (UTC)，格式 HH:MM 或 HHMMSS
-            duration: 时长（分钟），默认10
-        """
-        if voice_receiver is None:
-            return jsonify({"error": "voice not enabled"}), 400
-        date_str = request.args.get("date", "")
-        channel_str = request.args.get("channel", "")
-        from_time = request.args.get("from", "")
-        duration_str = request.args.get("duration", "10")
-        if not date_str or not channel_str:
-            return jsonify({"error": "date and channel required"}), 400
-        try:
-            channel_id = int(channel_str)
-        except (ValueError, TypeError):
-            return jsonify({"error": "invalid channel"}), 400
-        try:
-            duration = max(1, min(1440, int(duration_str)))
-        except (ValueError, TypeError):
-            duration = 10
-
-        wav_data = voice_receiver.get_recording_data(
-            date_str, channel_id, from_time=from_time, duration_minutes=duration
-        )
-        if not wav_data:
-            return jsonify({"error": "no recordings found"}), 404
-
-        from io import BytesIO
-        buf = BytesIO(wav_data)
-        return send_file(
-            buf,
-            mimetype="audio/wav",
-            as_attachment=False,
-            download_name=f"voice_{date_str}_ch{channel_id}.wav",
-        )
-
-    @app.route("/api/voice/dates")
-    def api_voice_dates():
-        """返回指定通道下有录音的日期列表"""
-        if voice_receiver is None:
-            return jsonify({"error": "voice not enabled"}), 400
-        channel_str = request.args.get("channel", "")
-        try:
-            channel_id = int(channel_str)
-        except (ValueError, TypeError):
-            return jsonify({"error": "invalid channel"}), 400
-        dates = voice_receiver.list_dates(channel_id)
-        return jsonify({"dates": dates})
 
     @app.route("/api/voice/stop", methods=["POST"])
     def api_voice_stop():

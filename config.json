@@ -35,6 +35,6 @@
     "host": "0.0.0.0",
     "port": 5000,
     "debug": false,
-    "map_background_color": "#0a1628"
+    "map_background_color": "#10223b"
   }
 }

@@ -31,9 +31,7 @@ class WebConfig:
 
 @dataclass
 class VoiceDataConfig:
-    """语音数据存储配置"""
-    save_dir: str = ""
-    retention_days: int = 30                 # VST：保存语音的天数
+    """语音数据配置"""
     flight_count_max: int = 18               # 通话时长统计图右Y轴架次最大值
     vad_energy_threshold: float = 0.005      # VAD (语音活动检测) 能量阈值，低于此视为静音
     vad_silence_ms: int = 1000               # 持续静音超过此值视为通话结束 (毫秒)
@@ -110,8 +108,6 @@ def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
             enabled=bool(voice_raw.get("enabled", False)),
         ),
         voice_data=VoiceDataConfig(
-            save_dir=voice_data_raw.get("save_dir", ""),
-            retention_days=int(voice_data_raw.get("retention_days", 30)),
             flight_count_max=int(voice_data_raw.get("flight_count_max", 18)),
             vad_energy_threshold=float(voice_data_raw.get("vad_energy_threshold", 0.005)),
             vad_silence_ms=int(voice_data_raw.get("vad_silence_ms", 1000)),
