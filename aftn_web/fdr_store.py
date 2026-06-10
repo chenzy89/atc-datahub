@@ -274,13 +274,41 @@ class FDRStore:
             # 1. 清理超时
             expired = [k for k, r in self._records.items()
                        if now - r.last_update > FDR_TTL_SECONDS]
+            # 1a. 已落地但没有终端退出时间的：暂不删，查ATA补退出时间
+            fill_ata_keys = []
             for k in expired:
-                del self._records[k]
+                r = self._records[k]
+                if r._landed and not r.terminal_exit_ts and r.callsign:
+                    fill_ata_keys.append(k)
+            # 1b. 正常过期立即删除
+            for k in expired:
+                if k not in fill_ata_keys:
+                    del self._records[k]
             if expired:
-                logger.debug("FDR cleanup: removed %d expired records", len(expired))
+                logger.debug(
+                    "FDR cleanup: removed %d expired records (%d 需补ATA)",
+                    len(expired) - len(fill_ata_keys), len(fill_ata_keys),
+                )
 
-            # 2. 收集需要处理的记录快照
+            # 2. 收集需要处理的记录快照（含暂存的补ATA记录）
             candidates = [r for r in self._records.values() if r.callsign]
+
+        # 2b. 对已落地缺退出时间的记录查ATA补值
+        for rec in candidates:
+            if rec._landed and not rec.terminal_exit_ts:
+                try:
+                    plan = db.find_flight_plan(
+                        rec.callsign, rec.adep, rec.adest,
+                        exclude_cancelled=True,
+                    )
+                    if plan and plan.get("ata"):
+                        rec.terminal_exit_ts = plan["ata"]
+                        logger.info(
+                            "[TERM] %s FDR删除时从ATA补终端退出时间: %s",
+                            rec.callsign, plan["ata"],
+                        )
+                except Exception:
+                    pass
 
         # 3. 逐条更新飞行计划
         radar_updated = 0
@@ -322,6 +350,12 @@ class FDRStore:
                 if error_count <= 3:
                     logger.warning("[FDR] %s 更新失败（已累计 %d 次）",
                                    rec.callsign, error_count)
+
+        # 5. 删除已补ATA的过期记录（处理完这一轮才真正清理）
+        if fill_ata_keys:
+            with self._lock:
+                for k in fill_ata_keys:
+                    self._records.pop(k, None)
 
         if radar_updated:
             logger.info("[FDR] 更新 %d 条跑道/程序", radar_updated)
