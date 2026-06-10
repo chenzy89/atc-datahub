@@ -878,10 +878,19 @@ canvas#radarMap {
 
     <!-- ── 扇区语音识别实时结果 ── -->
     <div class="asr-live-card" id="asrLiveCard">
-      <div class="asr-live-header">🎙 扇区语音识别实时结果</div>
-      <div class="asr-live-grid" id="asrLiveGrid">
-        <!-- JS 动态生成 -->
+      <div class="asr-live-header">
+        <span>🎙 扇区语音识别实时结果</span>
+        <select id="asrLiveSector" onchange="asrLiveSwitchSector()" style="margin-left:12px;font-size:12px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);">
+          <option value="ZGJDTM01">ZGJDTM01 (HN)</option>
+          <option value="ZGJDTM02">ZGJDTM02 (HE)</option>
+          <option value="ZGJDTM03">ZGJDTM03 (ARW)</option>
+          <option value="ZGJDTM04">ZGJDTM04 (AS)</option>
+          <option value="ZGJDTM05">ZGJDTM05 (AD)</option>
+          <option value="ZGJDTM06">ZGJDTM06 (ASL)</option>
+          <option value="ZGJDTM07">ZGJDTM07 (ARE/AA)</option>
+        </select>
       </div>
+      <div class="asr-live-body" id="asrLiveBody"><pre class="asr-live-pre">等待数据...</pre></div>
     </div>
     <style>
     .asr-live-card {
@@ -897,48 +906,22 @@ canvas#radarMap {
       font-weight: 600;
       border-bottom: 1px solid var(--border);
       color: var(--text-primary);
-    }
-    .asr-live-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 8px;
-      padding: 12px 14px;
-    }
-    .asr-live-item {
-      background: rgba(210,153,34,0.06);
-      border: 1px solid rgba(210,153,34,0.2);
-      border-radius: 6px;
-      padding: 8px 10px;
-      transition: .15s;
-    }
-    .asr-live-item._active {
-      border-color: var(--accent-orange);
-      background: rgba(210,153,34,0.12);
-    }
-    .asr-live-item .ali-top {
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      margin-bottom: 4px;
     }
-    .asr-live-item .ali-code {
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--accent);
+    .asr-live-body {
+      padding: 10px 14px;
+      max-height: 280px;
+      overflow-y: auto;
     }
-    .asr-live-item .ali-callsign {
-      font-size: 11px;
-      color: var(--text-secondary);
-    }
-    .asr-live-item .ali-text {
+    .asr-live-pre {
+      margin: 0;
+      font-family: 'Courier New', monospace;
       font-size: 13px;
+      line-height: 1.6;
       color: var(--accent-orange);
-      line-height: 1.4;
+      white-space: pre-wrap;
       word-break: break-all;
-    }
-    .asr-live-item .ali-empty {
-      font-size: 12px;
-      color: var(--text-muted);
     }
     </style>
 
@@ -946,7 +929,7 @@ canvas#radarMap {
     <div class="voice-chart-toolbar" style="margin-bottom:16px;">
       <h3>📝 语音识别历史记录</h3>
       <div class="voice-chart-controls">
-        <label><span>扇区</span><select id="asrQuerySector" onchange="asrPollLive();asrQueryRecords();">
+        <label><span>扇区</span><select id="asrQuerySector" onchange="asrQueryRecords();">
           <option value="">全部</option>
           <option value="ZGJDTM01">ZGJDTM01 (HN)</option>
           <option value="ZGJDTM02">ZGJDTM02 (HE)</option>
@@ -973,10 +956,9 @@ canvas#radarMap {
           <th style="padding:8px 10px;text-align:left;">说话人</th>
           <th style="padding:8px 10px;text-align:left;">时长(秒)</th>
           <th style="padding:8px 10px;text-align:left;">识别文本</th>
-          <th style="padding:8px 10px;text-align:left;">接收时间</th>
         </tr></thead>
         <tbody id="asrQueryTbody">
-          <tr><td colspan="8" class="loading">选择条件后点查询</td></tr>
+          <tr><td colspan="7" class="loading">选择条件后点查询</td></tr>
         </tbody>
       </table>
     </div>
@@ -4436,55 +4418,52 @@ var _asrLiveTimer = null;
 var _asrSectorOrder = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
 var _asrSectorNames = {'ZGJDTM01':'HN','ZGJDTM02':'HE','ZGJDTM03':'ARW','ZGJDTM04':'AS','ZGJDTM05':'AD','ZGJDTM06':'ASL','ZGJDTM07':'ARE'};
 
-function asrPollLive() {
-  fetch('/api/asr/status')
+function asrLiveSwitchSector() {
+  // 历史查询同步切换扇区
+  var sel = document.getElementById('asrLiveSector');
+  var querySel = document.getElementById('asrQuerySector');
+  if (sel && querySel) querySel.value = sel.value;
+  asrFetchLive();
+  asrQueryRecords();
+}
+
+function asrFetchLive() {
+  var sel = document.getElementById('asrLiveSector');
+  if (!sel) return;
+  var sector = sel.value;
+  // 通过历史查询 API 拿最近 10 条
+  var body = document.getElementById('asrLiveBody');
+  if (!body) return;
+
+  var shortName = _asrSectorNames[sector];
+  var url = '/api/asr/records?sector=' + encodeURIComponent(shortName) + '&limit=10';
+
+  fetch(url)
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      if (!data.enabled) return;
-      var grid = document.getElementById('asrLiveGrid');
-      if (!grid) return;
-      var latest = data.latest || {};
-
-      // 已选择的扇区（高亮）
-      var selSector = document.getElementById('asrQuerySector').value;
-
-      var h = '';
-      for (var i = 0; i < _asrSectorOrder.length; i++) {
-        var code = _asrSectorOrder[i];
-        var shortName = _asrSectorNames[code];
-        var entry = latest[code] || latest[shortName] || null;
-
-        var activeClass = (selSector === code) ? ' _active' : '';
-        h += '<div class="asr-live-item' + activeClass + '">' +
-          '<div class="ali-top">' +
-          '  <span class="ali-code">' + code + ' (' + shortName + ')</span>';
-        if (entry) {
-          h += '  <span class="ali-callsign">' + _escapeHtml(entry.callsign || '') + '</span>';
-        }
-        h += '</div>';
-        if (entry) {
-          h += '<div class="ali-text">' + _escapeHtml(entry.processedCommand || '') + '</div>';
-        } else {
-          h += '<div class="ali-empty">等待数据...</div>';
-        }
-        h += '</div>';
+      var records = data.records || [];
+      if (records.length === 0) {
+        body.innerHTML = '<pre class="asr-live-pre">暂无数据</pre>';
+        return;
       }
-      grid.innerHTML = h;
+      var lines = [];
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
+        var wt = (r.wavbegintime || r.received_at || '').trim();
+        if (wt.length >= 19) wt = wt.slice(0, 19);
+        lines.push(wt + '  ' + (r.processedCommand || ''));
+      }
+      body.innerHTML = '<pre class="asr-live-pre">' + _escapeHtml(lines.join('\n')) + '</pre>';
+      // 自动滚动到底部（最新的在最下面）
+      body.scrollTop = body.scrollHeight;
     })
     .catch(function() {});
 }
 
 function asrStartLivePoll() {
-  asrPollLive();
+  asrFetchLive();
   if (_asrLiveTimer) clearInterval(_asrLiveTimer);
-  _asrLiveTimer = setInterval(asrPollLive, 2000);
-}
-
-function asrStopLivePoll() {
-  if (_asrLiveTimer) {
-    clearInterval(_asrLiveTimer);
-    _asrLiveTimer = null;
-  }
+  _asrLiveTimer = setInterval(asrFetchLive, 3000);
 }
 
 function asrQueryRecords() {
@@ -4512,7 +4491,7 @@ function asrQueryRecords() {
 
       var tbody = document.getElementById('asrQueryTbody');
       if (records.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--text-muted);">无匹配记录</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text-muted);">无匹配记录</td></tr>';
         return;
       }
       var h = '';
@@ -4521,8 +4500,6 @@ function asrQueryRecords() {
         var wavTime = (r.wavbegintime || '').trim();
         if (!wavTime) wavTime = (r.received_at || '').trim();
         if (wavTime.length >= 19) wavTime = wavTime.slice(0, 19);
-        var recvTime = r.received_at || '';
-        if (recvTime.length >= 19) recvTime = recvTime.slice(0, 19);
         h += '<tr>' +
           '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);font-size:11px;">' + r.id + '</td>' +
           '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--accent);font-weight:500;">' + _escapeHtml(r.sector || '') + '</td>' +
@@ -4531,7 +4508,6 @@ function asrQueryRecords() {
           '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-secondary);">' + _escapeHtml(r.speaker || '') + '</td>' +
           '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);text-align:right;">' + (r.duration || 0) + '</td>' +
           '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--accent-orange);max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + _escapeHtml(r.processedCommand || '') + '">' + _escapeHtml(r.processedCommand || '') + '</td>' +
-          '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);font-size:11px;font-family:monospace;">' + _escapeHtml(recvTime) + '</td>' +
           '</tr>';
       }
       tbody.innerHTML = h;
