@@ -846,6 +846,26 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             limit=min(limit, 500),
             offset=offset,
         )
+        # 如果精确查询没结果，尝试用短名再查一次
+        if sector and not records:
+            short_name = _SECTOR_CODE_TO_SHORT.get(sector)
+            if short_name:
+                records = db.query_asr_text(
+                    sector=short_name,
+                    date_from=date_from,
+                    date_to=date_to,
+                    callsign=callsign,
+                    limit=min(limit, 500),
+                    offset=offset,
+                )
+                total = db.count_asr_text(
+                    sector=short_name,
+                    date_from=date_from,
+                    date_to=date_to,
+                    callsign=callsign,
+                )
+                return jsonify({"total": total, "records": records})
+
         total = db.count_asr_text(
             sector=sector,
             date_from=date_from,

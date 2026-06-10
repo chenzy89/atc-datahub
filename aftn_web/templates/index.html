@@ -750,58 +750,6 @@ canvas#radarMap {
       <!-- JS 动态生成 -->
     </div>
 
-    <!-- ── ASR 语音识别文本（实时） ── -->
-    <div class="voice-asr-section" id="voiceAsrSection" style="margin-bottom:20px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
-      <div class="voice-chart-toolbar" style="padding:10px 14px;border-bottom:1px solid var(--border);">
-        <h3>📝 语音识别文本 (ASR)</h3>
-      </div>
-      <div id="voiceAsrTableWrap" style="overflow-x:auto;max-height:300px;overflow-y:auto;">
-        <table style="width:100%;font-size:12px;border-collapse:collapse;">
-          <thead><tr style="position:sticky;top:0;background:#1c2333;z-index:1;">
-            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-secondary);">扇区</th>
-            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-secondary);">时间</th>
-            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-secondary);">航班号</th>
-            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-secondary);">说话人</th>
-            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-secondary);">识别文本</th>
-          </tr></thead>
-          <tbody id="voiceAsrTbody">
-            <tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text-muted);">等待 ASR 数据...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- ── 语音回放 ── -->
-    <div class="voice-playback-section" style="margin-bottom:20px;">
-      <div class="voice-chart-toolbar">
-        <h3>🎧 录音回放 (UTC)</h3>
-        <div class="voice-chart-controls">
-          <label><span>日期</span><input type="date" id="voicePlayDate"></label>
-          <label><span>通道</span><select id="voicePlayChannel"><option value="-1">— 选择通道 —</option></select></label>
-          <label><span>起始(UTC)</span><input type="time" id="voicePlayFrom" value="00:00" step="1" style="width:130px;"></label>
-          <label><span>时长(分)</span><input type="number" id="voicePlayDuration" value="10" min="1" max="1440" style="width:70px;"></label>
-          <button class="btn btn-primary btn-sm" onclick="voiceLoadRecordings()">📂 查询录音</button>
-        </div>
-      </div>
-      <div id="voicePlaybackInfo" style="padding:8px 0;font-size:12px;color:var(--text-muted);display:none;"></div>
-      <div id="voicePlaybackControl" style="display:none;">
-        <audio id="voiceAudioPlayer" controls autoplay style="width:100%;margin-bottom:6px;" onplay="voiceAudioPlaying()" onpause="voiceAudioPaused()"></audio>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-          <span id="voicePlayFileInfo" style="font-size:12px;color:var(--text-secondary);"></span>
-        </div>
-      </div>
-      <div id="voiceRecordingsList" style="max-height:200px;overflow-y:auto;margin-top:10px;border:1px solid var(--border);border-radius:6px;display:none;">
-        <table style="width:100%;font-size:12px;border-collapse:collapse;">
-          <thead><tr>
-            <th style="padding:6px 10px;background:#1c2333;color:var(--text-secondary);border-bottom:1px solid var(--border);text-align:left;">时间</th>
-            <th style="padding:6px 10px;background:#1c2333;color:var(--text-secondary);border-bottom:1px solid var(--border);text-align:right;">时长</th>
-            <th style="padding:6px 10px;background:#1c2333;color:var(--text-secondary);border-bottom:1px solid var(--border);text-align:right;">大小</th>
-          </tr></thead>
-          <tbody id="voiceRecTbody"></tbody>
-        </table>
-      </div>
-    </div>
-
     <!-- ── 通话时长折线图（多实例容器）── -->
     <div id="voiceChartContainer"></div>
     <div class="voice-chart-actions" id="voiceChartActions">
@@ -3684,8 +3632,6 @@ var _voiceChartCount = 0;
 var _voiceLocalPlaying = null;  // 本地浏览器正在监听的通道（不共享到服务器）
 var _chSectorNames = {'38':'HN (ZGJDTM01)','42':'HE (ZGJDTM02)','50':'ARW (ZGJDTM03)','264':'AS (ZGJDTM04)','46':'AD (ZGJDTM05)','32':'ASL (ZGJDTM06)','54':'ARE/AA (ZGJDTM07)'};
 var _voiceConfig = null;
-var _currentAudioUrl = null;
-
 function _zp(n) { return n < 10 ? '0' + n : '' + n; }
 
 function _escapeHtml(s) {
@@ -3723,13 +3669,6 @@ function voiceInit() {
   // 定时刷新所有图表
   if (voiceChartTimer) clearInterval(voiceChartTimer);
   voiceChartTimer = setInterval(voiceLoadAllCharts, 60000);
-
-  // 初始化回放日期为今天（UTC）
-  var pd = document.getElementById('voicePlayDate');
-  if (pd) {
-    var d = new Date();
-    pd.value = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
-  }
 }
 
 function voicePollStatus() {
@@ -3746,7 +3685,6 @@ function voicePollStatus() {
       document.getElementById('voiceRecvStatus').textContent = '● 接收中';
       document.getElementById('voiceRecvStatus').style.color = 'var(--accent-green)';
       voiceRenderChannels(data.channels, data.playing);
-      voiceRenderAsrTable(data.channels);
     })
     .catch(function() {
       var el = document.getElementById('voiceRecvStatus');
@@ -3813,41 +3751,6 @@ function voiceRenderChannels(channels, playing) {
 
   voiceSyncChartSelect(channels);
   voiceDrawWaveforms(channels);
-}
-
-function voiceRenderAsrTable(channels) {
-  var tbody = document.getElementById('voiceAsrTbody');
-  if (!tbody) return;
-  var order = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
-  var sorted = [];
-  for (var oi = 0; oi < order.length; oi++) {
-    for (var ci = 0; ci < channels.length; ci++) {
-      if (channels[ci].sector_code === order[oi] && channels[ci].asr_text) {
-        sorted.push(channels[ci]);
-        break;
-      }
-    }
-  }
-  if (sorted.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text-muted);">暂无 ASR 数据</td></tr>';
-    return;
-  }
-  var h = '';
-  for (var i = 0; i < sorted.length; i++) {
-    var c = sorted[i];
-    // 对时间友好显示
-    var timeStr = c.asr_wavbegintime || '';
-    if (timeStr.length >= 19) timeStr = timeStr.slice(0, 19);
-    else if (timeStr.length >= 16) timeStr = timeStr.slice(0, 16);
-    h += '<tr>' +
-      '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--accent);font-weight:500;">' + c.sector_code + '</td>' +
-      '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-secondary);font-family:monospace;font-size:11px;">' + _escapeHtml(timeStr) + '</td>' +
-      '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-primary);">' + _escapeHtml(c.asr_callsign || '') + '</td>' +
-      '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-secondary);">' + _escapeHtml(c.asr_speaker || '') + '</td>' +
-      '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--accent-orange);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + _escapeHtml(c.asr_text) + '">' + _escapeHtml(c.asr_text) + '</td>' +
-      '</tr>';
-  }
-  tbody.innerHTML = h;
 }
 
 function voiceDrawWaveforms(channels) {
@@ -4066,116 +3969,6 @@ function voiceSelectFromCard(channelId) {
   voiceStartSSE(channelId);
   voiceLoadChart(0);
   voiceRenderChannels(window._lastChannels);  // 立即刷新高亮
-}
-
-// ═══════════════════════════════════════════════════════
-// 录音回放 — 查询录音 / 播放
-// ═══════════════════════════════════════════════════════
-
-function voiceLoadRecordings() {
-  var dateEl = document.getElementById('voicePlayDate');
-  var chEl = document.getElementById('voicePlayChannel');
-  var durEl = document.getElementById('voicePlayDuration');
-  var dateStr = dateEl ? dateEl.value : '';
-  var ch = chEl ? parseInt(chEl.value) : -1;
-  var dur = durEl ? parseInt(durEl.value) || 10 : 10;
-
-  if (!dateStr || ch < 0) {
-    alert('请选择日期和通道');
-    return;
-  }
-
-  var infoEl = document.getElementById('voicePlaybackInfo');
-  infoEl.style.display = 'block';
-  infoEl.textContent = '查询录音中 (UTC) ...';
-
-  fetch('/api/voice/recordings?date=' + encodeURIComponent(dateStr) + '&channel=' + ch)
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      var recs = data.recordings || [];
-      infoEl.textContent = '共 ' + data.count + ' 段录音，总计 ' + (data.total_size_str || '0 B') + ' (UTC)';
-
-      var tbody = document.getElementById('voiceRecTbody');
-      if (recs.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" style="padding:12px;text-align:center;color:var(--text-muted);">该通道当天无录音数据</td></tr>';
-      } else {
-        var h = '';
-        for (var i = 0; i < recs.length; i++) {
-          var r = recs[i];
-          var st = r.start_time;
-          var stDisplay = st.slice(0,2) + ':' + st.slice(2,4) + ':' + st.slice(4,6);
-          h += '<tr onclick="voicePlayRecording(\'' + dateStr + '\',' + ch + ',' + dur + ')" style="cursor:pointer;">' +
-            '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-primary);">' + stDisplay + ' UTC</td>' +
-            '<td style="padding:4px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + r.duration + 's</td>' +
-            '<td style="padding:4px 10px;border-bottom:1px solid var(--border);text-align:right;color:var(--text-secondary);">' + r.size_str + '</td>' +
-            '</tr>';
-        }
-        tbody.innerHTML = h;
-      }
-
-      document.getElementById('voiceRecordingsList').style.display = 'block';
-      document.getElementById('voicePlaybackControl').style.display = 'block';
-
-      // 自动播放
-      voicePlayRecording(dateStr, ch, dur);
-    })
-    .catch(function(e) {
-      infoEl.textContent = '查询失败: ' + e.message;
-    });
-}
-
-function voicePlayRecording(dateStr, channelId, durationMin) {
-  var fromEl = document.getElementById('voicePlayFrom');
-  var fromTime = fromEl ? fromEl.value : '00:00';
-
-  if (_currentAudioUrl) {
-    URL.revokeObjectURL(_currentAudioUrl);
-    _currentAudioUrl = null;
-  }
-
-  var audio = document.getElementById('voiceAudioPlayer');
-  var infoEl = document.getElementById('voicePlayFileInfo');
-  var infoEl2 = document.getElementById('voicePlaybackInfo');
-  infoEl2.textContent = '加载录音 (UTC ' + fromTime + ', ' + durationMin + 'min) ...';
-
-  var url = '/api/voice/play_file?date=' + encodeURIComponent(dateStr)
-    + '&channel=' + channelId
-    + '&from=' + encodeURIComponent(fromTime)
-    + '&duration=' + durationMin;
-
-  fetch(url)
-    .then(function(r) {
-      if (!r.ok) throw new Error('无录音数据');
-      return r.blob();
-    })
-    .then(function(blob) {
-      var objUrl = URL.createObjectURL(blob);
-      _currentAudioUrl = objUrl;
-      audio.src = objUrl;
-      audio.play();
-      if (infoEl) {
-        var sizeMB = (blob.size / (1024 * 1024)).toFixed(1);
-        var durSeconds = Math.round(blob.size / (8000 * 2));
-        var durMin = Math.floor(durSeconds / 60);
-        var durSec = durSeconds % 60;
-        infoEl.textContent = '📊 WAV ' + sizeMB + ' MB, 约' + durMin + 'm' + durSec + 's';
-      }
-      infoEl2.textContent = '🎧 播放中 (UTC): ' + fromTime + ', ' + durationMin + 'min';
-    })
-    .catch(function(e) {
-      infoEl2.textContent = '❌ ' + e.message;
-      if (infoEl) infoEl.textContent = '';
-    });
-}
-
-function voiceAudioPlaying() {
-  var infoEl = document.getElementById('voicePlayFileInfo');
-  if (infoEl) infoEl.innerHTML = '▶ 播放中';
-}
-
-function voiceAudioPaused() {
-  var infoEl = document.getElementById('voicePlayFileInfo');
-  if (infoEl) infoEl.innerHTML = '⏸ 已暂停';
 }
 
 // ═══════════════════════════════════════════════════════
@@ -4599,7 +4392,8 @@ function asrQueryRecords() {
       var h = '';
       for (var i = 0; i < records.length; i++) {
         var r = records[i];
-        var wavTime = r.wavbegintime || '';
+        var wavTime = (r.wavbegintime || '').trim();
+        if (!wavTime) wavTime = (r.received_at || '').trim();
         if (wavTime.length >= 19) wavTime = wavTime.slice(0, 19);
         var recvTime = r.received_at || '';
         if (recvTime.length >= 19) recvTime = recvTime.slice(0, 19);
