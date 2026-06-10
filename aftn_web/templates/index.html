@@ -951,7 +951,7 @@ canvas#radarMap {
         <thead><tr>
           <th style="padding:8px 10px;text-align:left;">ID</th>
           <th style="padding:8px 10px;text-align:left;">扇区</th>
-          <th style="padding:8px 10px;text-align:left;">接收时间</th>
+          <th style="padding:8px 10px;text-align:left;">开始时间</th>
           <th style="padding:8px 10px;text-align:left;">航班号</th>
           <th style="padding:8px 10px;text-align:left;">说话人</th>
           <th style="padding:8px 10px;text-align:left;">时长(秒)</th>
@@ -4456,7 +4456,9 @@ function asrFetchLive() {
       for (var i = 0; i < records.length; i++) {
         var r = records[i];
         var wt = (r.wavbegintime || r.received_at || '').trim();
-        if (wt.length >= 19) wt = wt.slice(0, 19);
+        // 格式化为 MM-dd HH:mm:ss
+        if (wt.length >= 19) wt = wt.slice(5, 19);
+        else if (wt.length >= 16) wt = wt.slice(5, 16);
         lines.push(wt + '  ' + (r.processedCommand || ''));
       }
       body.innerHTML = '<pre class="asr-live-pre">' + _escapeHtml(lines.join('\n')) + '</pre>';
@@ -4505,7 +4507,9 @@ function asrQueryRecords() {
         var r = records[i];
         var wavTime = (r.wavbegintime || '').trim();
         if (!wavTime) wavTime = (r.received_at || '').trim();
-        if (wavTime.length >= 19) wavTime = wavTime.slice(0, 19);
+        // 格式化为 MM-dd HH:mm:ss
+        if (wavTime.length >= 19) wavTime = wavTime.slice(5, 19);
+        else if (wavTime.length >= 16) wavTime = wavTime.slice(5, 16);
         h += '<tr>' +
           '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);font-size:11px;">' + r.id + '</td>' +
           '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--accent);font-weight:500;">' + _escapeHtml(r.sector || '') + '</td>' +
