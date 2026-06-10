@@ -42,6 +42,13 @@ class AsrReceiver:
         self._total_parsed = 0
         self._total_errors = 0
 
+        # 启动时回填已有记录的 wavbegintime
+        if self._db:
+            try:
+                self._db.backfill_asr_wavbegintime()
+            except Exception:
+                logger.exception("ASR wavbegintime backfill error")
+
     # ── 生命周期 ──────────────────────────────────────
 
     def start(self) -> None:
@@ -179,6 +186,43 @@ class AsrReceiver:
                 self._total_errors += 1
                 logger.exception("ASR processing error from %s", addr)
 
+    @staticmethod
+    def _extract_wavbegintime(processedCommand: str) -> str:
+        """从 processedCommand 文本中提取语音开始时间
+
+        预期格式（在文本开头）:
+          [HH:mm:ss] 或 [HH:mm] → 如 [10:14:23]文字
+          HH:mm:ss → 纯时间开头
+        取当天 UTC 日期拼成 YYYY-MM-DD HH:mm:ss
+        """
+        if not processedCommand:
+            return ""
+        import re
+
+        # 格式1: [HH:mm:ss] 或 [HH:mm]
+        m = re.match(r'^\[(\d{2}:\d{2}(?::\d{2})?)\]', processedCommand)
+        if m:
+            time_part = m.group(1)
+            if len(time_part) == 5:
+                time_part += ":00"
+            from datetime import datetime as _dt
+            now = _dt.utcnow()
+            return f"{now.strftime('%Y-%m-%d')} {time_part}"
+
+        # 格式2: HH:mm:ss 开头（无括号）
+        m = re.match(r'^(\d{2}:\d{2}:\d{2})\s', processedCommand)
+        if m:
+            from datetime import datetime as _dt
+            now = _dt.utcnow()
+            return f"{now.strftime('%Y-%m-%d')} {m.group(1)}"
+
+        # 格式3: 完整日期时间 YYYY-MM-DD HH:mm:ss 开头
+        m = re.match(r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', processedCommand)
+        if m:
+            return m.group(1)
+
+        return ""
+
     def _process_asr_payload(self, payload: dict) -> None:
         """处理单条 ASR 文本
 
@@ -195,6 +239,10 @@ class AsrReceiver:
         if not sector:
             logger.debug("ASR: 缺少 sector 字段，忽略")
             return
+
+        # 如果 JSON 中的 wavbegintime 为空，尝试从 processedCommand 文本中提取
+        if not wavbegintime:
+            wavbegintime = self._extract_wavbegintime(processedCommand)
 
         self._total_parsed += 1
 

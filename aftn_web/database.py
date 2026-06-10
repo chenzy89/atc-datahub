@@ -1087,6 +1087,20 @@ class Database:
         row = conn.execute(f"SELECT COUNT(*) FROM asr_text {where}", params).fetchone()
         return row[0] if row else 0
 
+    def backfill_asr_wavbegintime(self) -> int:
+        """回填 asr_text 中 wavbegintime 为空的记录，从 received_at 补"""
+        conn = self._get_conn()
+        result = conn.execute(
+            "UPDATE asr_text SET wavbegintime = received_at "
+            "WHERE (wavbegintime IS NULL OR wavbegintime = '') "
+            "AND received_at IS NOT NULL AND received_at != ''"
+        )
+        conn.commit()
+        affected = result.rowcount
+        if affected > 0:
+            logger.info("ASR wavbegintime backfill: %d records updated", affected)
+        return affected
+
     def record_sector_flight_10min(self, dof: str,
                                      terminal_code: str, slot: int) -> bool:
         """更新 10 分钟粒度扇区飞行架次（由上游去重，直接累加）"""
