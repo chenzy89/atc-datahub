@@ -646,6 +646,16 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     # ── 语音数据 ──────────────────────────────────────────
 
+    _SECTOR_CODE_TO_SHORT = {
+        "ZGJDTM01": "HN",
+        "ZGJDTM02": "HE",
+        "ZGJDTM03": "ARW",
+        "ZGJDTM04": "AS",
+        "ZGJDTM05": "AD",
+        "ZGJDTM06": "ASL",
+        "ZGJDTM07": "ARE",
+    }
+
     @app.route("/api/voice/status")
     def api_voice_status():
         """返回语音通道状态（含 ASR 文本）"""
@@ -653,16 +663,23 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             return jsonify({"enabled": False, "channels": []})
         channels = voice_receiver.get_status()
 
-        # 附带 ASR 语音识别文本
+        # 附带 ASR 语音识别文本（ASR 使用短扇区名如 ARW/ARE，需映射）
         if asr_receiver is not None:
             asr_all = asr_receiver.get_latest_asr_all()
             for ch in channels:
                 code = ch.get("sector_code", "")
-                if code in asr_all:
-                    ch["asr_text"] = asr_all[code].get("processedCommand", "")
-                    ch["asr_callsign"] = asr_all[code].get("callsign", "")
-                    ch["asr_speaker"] = asr_all[code].get("speaker", "")
-                    ch["asr_wavbegintime"] = asr_all[code].get("wavbegintime", "")
+                # 尝试精确匹配
+                asr_entry = asr_all.get(code)
+                # 尝试短名称匹配
+                if not asr_entry:
+                    short_name = _SECTOR_CODE_TO_SHORT.get(code)
+                    if short_name and short_name in asr_all:
+                        asr_entry = asr_all[short_name]
+                if asr_entry:
+                    ch["asr_text"] = asr_entry.get("processedCommand", "")
+                    ch["asr_callsign"] = asr_entry.get("callsign", "")
+                    ch["asr_speaker"] = asr_entry.get("speaker", "")
+                    ch["asr_wavbegintime"] = asr_entry.get("wavbegintime", "")
 
         return jsonify({
             "enabled": True,
