@@ -943,6 +943,7 @@ canvas#radarMap {
         <label><span>起始</span><input type="date" id="asrQueryDateFrom"></label>
         <label><span>截止</span><input type="date" id="asrQueryDateTo"></label>
         <button class="btn btn-primary btn-sm" onclick="asrQueryRecords()">🔍 查询</button>
+        <button class="btn btn-sm" onclick="asrExport()" style="background:var(--accent-green);color:#fff;border-color:var(--accent-green);">📥 导出TXT</button>
       </div>
     </div>
     <div id="asrQueryInfo" style="padding:8px 0;font-size:12px;color:var(--text-muted);display:none;"></div>
@@ -3801,9 +3802,9 @@ function voiceRenderChannels(channels, playing) {
       + '<div class="vc-wave-wrap"><canvas class="vc-wave" data-channel-id="' + c.channel_id + '"></canvas></div>'
       + '<div class="vc-en-stats">E:' + (c.vad_energy || 0).toFixed(3) + '</div>'
       + (c.asr_text
-        ? '<div class="vc-asr-text" title="' + _escapeHtml(c.asr_text) + '">'
+        ? '<div class="vc-asr-text" title="' + _escapeHtml(_cleanAsrText(c.asr_text)) + '">'
           + '<span class="vc-asr-label">🗣</span> '
-          + _truncateText(_escapeHtml(c.asr_text), 30)
+          + _truncateText(_escapeHtml(_cleanAsrText(c.asr_text)), 30)
           + '</div>'
         : '')
       + '</div>';
@@ -4424,6 +4425,12 @@ voiceInit();
 
 var _asrLiveTimer = null;
 
+function _cleanAsrText(txt) {
+  // 去掉开头的 [xxx]：或 [xxx]: 部分
+  if (!txt) return '';
+  return txt.replace(/^\[[^\]]*\][：:]\s*/, '').trim();
+}
+
 function asrLiveSwitchSector() {
   // 历史查询同步切换扇区
   var sel = document.getElementById('asrLiveSector');
@@ -4459,7 +4466,7 @@ function asrFetchLive() {
         // 格式化为 MM-dd HH:mm:ss
         if (wt.length >= 19) wt = wt.slice(5, 19);
         else if (wt.length >= 16) wt = wt.slice(5, 16);
-        lines.push(wt + '  ' + (r.processedCommand || ''));
+        lines.push(wt + '  ' + _cleanAsrText(r.processedCommand || ''));
       }
       body.innerHTML = '<pre class="asr-live-pre">' + _escapeHtml(lines.join('\n')) + '</pre>';
       // 自动滚动到底部（最新的在最下面）
@@ -4517,13 +4524,70 @@ function asrQueryRecords() {
           '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-primary);">' + _escapeHtml(r.callsign || '') + '</td>' +
           '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-secondary);">' + _escapeHtml(r.speaker || '') + '</td>' +
           '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);text-align:right;">' + (r.duration || 0) + '</td>' +
-          '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--accent-orange);max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + _escapeHtml(r.processedCommand || '') + '">' + _escapeHtml(r.processedCommand || '') + '</td>' +
+          '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--accent-orange);max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + _escapeHtml(_cleanAsrText(r.processedCommand || '')) + '">' + _escapeHtml(_cleanAsrText(r.processedCommand || '')) + '</td>' +
           '</tr>';
       }
       tbody.innerHTML = h;
     })
     .catch(function(e) {
       infoEl.textContent = '查询失败: ' + e.message;
+    });
+}
+
+function asrExport() {
+  // 用当前查询条件重新拉完整数据
+  var sector = document.getElementById('asrQuerySector').value;
+  var callsign = document.getElementById('asrQueryCallsign').value.trim();
+  var dateFrom = document.getElementById('asrQueryDateFrom').value;
+  var dateTo = document.getElementById('asrQueryDateTo').value;
+
+  var url = '/api/asr/records?';
+  if (sector) url += 'sector=' + encodeURIComponent(sector) + '&';
+  if (callsign) url += 'callsign=' + encodeURIComponent(callsign) + '&';
+  if (dateFrom) url += 'date_from=' + encodeURIComponent(dateFrom) + '&';
+  if (dateTo) url += 'date_to=' + encodeURIComponent(dateTo) + '&';
+  url += 'limit=5000';
+
+  var infoEl = document.getElementById('asrQueryInfo');
+  infoEl.style.display = 'block';
+  infoEl.textContent = '导出中...';
+
+  fetch(url)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var records = data.records || [];
+      if (records.length === 0) {
+        infoEl.textContent = '无数据可导出';
+        return;
+      }
+
+      var lines = [];
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
+        var wt = (r.wavbegintime || r.received_at || '').trim();
+        if (wt.length >= 19) wt = wt.slice(5, 19);
+        else if (wt.length >= 16) wt = wt.slice(5, 16);
+        var speaker = r.speaker || '';
+        var text = _cleanAsrText(r.processedCommand || '');
+        lines.push(wt + '  ' + speaker + '  ' + text);
+      }
+
+      var content = lines.join('\n');
+      var blob = new Blob([content], {type: 'text/plain;charset=utf-8'});
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      var now = new Date();
+      var filename = 'asr_' + now.getUTCFullYear() + _zp(now.getUTCMonth()+1) + _zp(now.getUTCDate()) + '_' + _zp(now.getUTCHours()) + _zp(now.getUTCMinutes()) + '.txt';
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+
+      infoEl.textContent = '导出完成: ' + records.length + ' 条 → ' + filename;
+    })
+    .catch(function(e) {
+      infoEl.textContent = '导出失败: ' + e.message;
     });
 }
 
