@@ -299,6 +299,7 @@ class FDRStore:
                 try:
                     plan = db.find_flight_plan(
                         rec.callsign, rec.adep, rec.adest,
+                        dof=datetime.utcnow().date(),
                         exclude_cancelled=True,
                     )
                     if plan and plan.get("ata"):
