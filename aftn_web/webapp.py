@@ -22,9 +22,10 @@ logger = logging.getLogger("aftn_web.webapp")
 
 
 from .radar_history import RadarHistoryStore
+from .asr_receiver import AsrReceiver
 from .voice_receiver import VoiceReceiver
 
-def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = None, radar_history_store: RadarHistoryStore | None = None, voice_receiver: VoiceReceiver | None = None) -> Flask:
+def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = None, radar_history_store: RadarHistoryStore | None = None, voice_receiver: VoiceReceiver | None = None, asr_receiver: AsrReceiver | None = None) -> Flask:
     _RADAR_MAP_VERSION = "v0.1"
     _config_file = config.config_file
     app = Flask(
@@ -647,13 +648,26 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     @app.route("/api/voice/status")
     def api_voice_status():
-        """返回语音通道状态"""
+        """返回语音通道状态（含 ASR 文本）"""
         if voice_receiver is None:
             return jsonify({"enabled": False, "channels": []})
+        channels = voice_receiver.get_status()
+
+        # 附带 ASR 语音识别文本
+        if asr_receiver is not None:
+            asr_all = asr_receiver.get_latest_asr_all()
+            for ch in channels:
+                code = ch.get("sector_code", "")
+                if code in asr_all:
+                    ch["asr_text"] = asr_all[code].get("processedCommand", "")
+                    ch["asr_callsign"] = asr_all[code].get("callsign", "")
+                    ch["asr_speaker"] = asr_all[code].get("speaker", "")
+                    ch["asr_wavbegintime"] = asr_all[code].get("wavbegintime", "")
+
         return jsonify({
             "enabled": True,
             "playing": voice_receiver.get_playing_channel(),
-            "channels": voice_receiver.get_status(),
+            "channels": channels,
         })
 
     @app.route("/api/voice/select", methods=["POST"])
@@ -783,6 +797,45 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             return jsonify({"error": "voice not enabled"}), 400
         voice_receiver.select_channel(-1)
         return jsonify({"ok": True})
+
+    # ── ASR 语音识别文本 ─────────────────────────────────
+
+    @app.route("/api/asr/status")
+    def api_asr_status():
+        """返回 ASR 接收器状态"""
+        if asr_receiver is None:
+            return jsonify({"enabled": False})
+        return jsonify({
+            "enabled": True,
+            "latest": asr_receiver.get_latest_asr_all(),
+            "stats": asr_receiver.get_stats(),
+        })
+
+    @app.route("/api/asr/records")
+    def api_asr_records():
+        """查询 ASR 历史记录"""
+        sector = _req_str("sector")
+        date_from = _req_str("date_from")
+        date_to = _req_str("date_to")
+        callsign = _req_str("callsign")
+        limit = request.args.get("limit", 100, type=int)
+        offset = request.args.get("offset", 0, type=int)
+
+        records = db.query_asr_text(
+            sector=sector,
+            date_from=date_from,
+            date_to=date_to,
+            callsign=callsign,
+            limit=min(limit, 500),
+            offset=offset,
+        )
+        total = db.count_asr_text(
+            sector=sector,
+            date_from=date_from,
+            date_to=date_to,
+            callsign=callsign,
+        )
+        return jsonify({"total": total, "records": records})
 
     # ── 禁用浏览器缓存 API 响应 ──────────────────────────
     @app.after_request

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.42</title>
+<title>ATC AFTN WebHub v2.1.43</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.42</span>
+  <span class="badge">v2.1.43</span>
 </div>
 
 <div class="tabs">
@@ -429,6 +429,7 @@ canvas#radarMap {
   <button class="tab-btn" onclick="switchTab('stats')">数据统计</button>
   <button class="tab-btn" onclick="switchTab('map')">雷达地图</button>
   <button class="tab-btn" onclick="switchTab('voice')">通话负荷</button>
+  <button class="tab-btn" onclick="switchTab('asr')">语音识别</button>
 </div>
 
 <!-- ════════════════════════════════════════════════════════
@@ -749,6 +750,27 @@ canvas#radarMap {
       <!-- JS 动态生成 -->
     </div>
 
+    <!-- ── ASR 语音识别文本（实时） ── -->
+    <div class="voice-asr-section" id="voiceAsrSection" style="margin-bottom:20px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+      <div class="voice-chart-toolbar" style="padding:10px 14px;border-bottom:1px solid var(--border);">
+        <h3>📝 语音识别文本 (ASR)</h3>
+      </div>
+      <div id="voiceAsrTableWrap" style="overflow-x:auto;max-height:300px;overflow-y:auto;">
+        <table style="width:100%;font-size:12px;border-collapse:collapse;">
+          <thead><tr style="position:sticky;top:0;background:#1c2333;z-index:1;">
+            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-secondary);">扇区</th>
+            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-secondary);">时间</th>
+            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-secondary);">航班号</th>
+            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-secondary);">说话人</th>
+            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);color:var(--text-secondary);">识别文本</th>
+          </tr></thead>
+          <tbody id="voiceAsrTbody">
+            <tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text-muted);">等待 ASR 数据...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- ── 语音回放 ── -->
     <div class="voice-playback-section" style="margin-bottom:20px;">
       <div class="voice-chart-toolbar">
@@ -832,6 +854,8 @@ canvas#radarMap {
 .voice-channel-card .vc-wave-wrap canvas { display:block; width:100%; height:28px; border-radius:3px; background:var(--bg-canvas, #0d1117); }
 .voice-channel-card .vc-dur { font-size:10px; color:var(--accent-orange); margin-top:1px; }
 .voice-channel-card .vc-saved { font-size:11px; color:var(--accent); margin-top:2px; }
+.voice-channel-card .vc-asr-text { font-size:11px; color:var(--accent-orange); margin-top:4px; padding:3px 6px; background:rgba(210,153,34,0.08); border-radius:4px; line-height:1.3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:default; }
+.voice-channel-card .vc-asr-label { font-size:11px; }
 @keyframes pulse-dot {
   0%, 100% { opacity:1; transform:scale(1); }
   50% { opacity:.6; transform:scale(1.3); }
@@ -898,6 +922,51 @@ canvas#radarMap {
   </div>
 </div>
 
+<!-- ════════════════════════════════════════════════════════
+     Tab 6: 语音识别 (ASR) 历史查询
+     ════════════════════════════════════════════════════════ -->
+<div class="panel" id="panel-asr">
+  <div class="voice-controls">
+    <div class="voice-chart-toolbar" style="margin-bottom:16px;">
+      <h3>📝 语音识别历史记录</h3>
+      <div class="voice-chart-controls">
+        <label><span>扇区</span><select id="asrQuerySector">
+          <option value="">全部</option>
+          <option value="ZGJDTM01">ZGJDTM01 (HN)</option>
+          <option value="ZGJDTM02">ZGJDTM02 (HE)</option>
+          <option value="ZGJDTM03">ZGJDTM03 (ARW)</option>
+          <option value="ZGJDTM04">ZGJDTM04 (AS)</option>
+          <option value="ZGJDTM05">ZGJDTM05 (AD)</option>
+          <option value="ZGJDTM06">ZGJDTM06 (ASL)</option>
+          <option value="ZGJDTM07">ZGJDTM07 (ARE/AA)</option>
+        </select></label>
+        <label><span>航班号</span><input type="text" id="asrQueryCallsign" placeholder="输入呼号" style="width:120px;"></label>
+        <label><span>起始</span><input type="date" id="asrQueryDateFrom"></label>
+        <label><span>截止</span><input type="date" id="asrQueryDateTo"></label>
+        <button class="btn btn-primary btn-sm" onclick="asrQueryRecords()">🔍 查询</button>
+      </div>
+    </div>
+    <div id="asrQueryInfo" style="padding:8px 0;font-size:12px;color:var(--text-muted);display:none;"></div>
+    <div class="table-wrap" style="max-height:65vh;">
+      <table>
+        <thead><tr>
+          <th style="padding:8px 10px;text-align:left;">ID</th>
+          <th style="padding:8px 10px;text-align:left;">扇区</th>
+          <th style="padding:8px 10px;text-align:left;">开始时间</th>
+          <th style="padding:8px 10px;text-align:left;">航班号</th>
+          <th style="padding:8px 10px;text-align:left;">说话人</th>
+          <th style="padding:8px 10px;text-align:left;">时长(秒)</th>
+          <th style="padding:8px 10px;text-align:left;">识别文本</th>
+          <th style="padding:8px 10px;text-align:left;">接收时间</th>
+        </tr></thead>
+        <tbody id="asrQueryTbody">
+          <tr><td colspan="8" class="loading">选择条件后点查询</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <script>
 var _MAP_BG = '#0a1628';  // 默认值，加载后从 API 更新
 // 异步获取配置中的背景色（改 config.json 刷新页面即生效，无需重启进程）
@@ -915,10 +984,22 @@ function switchTab(n) {
   document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
   document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
   var btns = document.querySelectorAll('.tab-btn');
-  var idx = {'msgs':0, 'plans':1, 'stats':2, 'map':3, 'voice':4}[n] || 0;
+  var idx = {'msgs':0, 'plans':1, 'stats':2, 'map':3, 'voice':4, 'asr':5}[n] || 0;
   btns[idx].classList.add('active');
   document.getElementById('panel-'+n).classList.add('active');
 }
+
+// ═══════════════════════════════════════════════════════
+// Init ASR date fields
+// ═══════════════════════════════════════════════════════
+(function() {
+  var d = new Date();
+  var today = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
+  var df = document.getElementById('asrQueryDateFrom');
+  var dt = document.getElementById('asrQueryDateTo');
+  if (df) df.value = today;
+  if (dt) dt.value = today;
+})();
 
 // ═══════════════════════════════════════════════════════
 // Load Stats
@@ -3607,6 +3688,19 @@ var _currentAudioUrl = null;
 
 function _zp(n) { return n < 10 ? '0' + n : '' + n; }
 
+function _escapeHtml(s) {
+  if (!s) return '';
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode(s));
+  return div.innerHTML;
+}
+
+function _truncateText(s, maxLen) {
+  if (!s) return '';
+  if (s.length <= maxLen) return s;
+  return s.substring(0, maxLen - 2) + '…';
+}
+
 function voiceInit() {
   // 获取语音配置
   fetch('/api/voice/config')
@@ -3652,6 +3746,7 @@ function voicePollStatus() {
       document.getElementById('voiceRecvStatus').textContent = '● 接收中';
       document.getElementById('voiceRecvStatus').style.color = 'var(--accent-green)';
       voiceRenderChannels(data.channels, data.playing);
+      voiceRenderAsrTable(data.channels);
     })
     .catch(function() {
       var el = document.getElementById('voiceRecvStatus');
@@ -3706,12 +3801,53 @@ function voiceRenderChannels(channels, playing) {
       + '<div class="vc-ch">内话通道 #' + c.channel_id + '</div>'
       + '<div class="vc-wave-wrap"><canvas class="vc-wave" data-channel-id="' + c.channel_id + '"></canvas></div>'
       + '<div class="vc-en-stats">E:' + (c.vad_energy || 0).toFixed(3) + '</div>'
+      + (c.asr_text
+        ? '<div class="vc-asr-text" title="' + _escapeHtml(c.asr_text) + '">'
+          + '<span class="vc-asr-label">🗣</span> '
+          + _truncateText(_escapeHtml(c.asr_text), 30)
+          + '</div>'
+        : '')
       + '</div>';
   }
   container.innerHTML = html;
 
   voiceSyncChartSelect(channels);
   voiceDrawWaveforms(channels);
+}
+
+function voiceRenderAsrTable(channels) {
+  var tbody = document.getElementById('voiceAsrTbody');
+  if (!tbody) return;
+  var order = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
+  var sorted = [];
+  for (var oi = 0; oi < order.length; oi++) {
+    for (var ci = 0; ci < channels.length; ci++) {
+      if (channels[ci].sector_code === order[oi] && channels[ci].asr_text) {
+        sorted.push(channels[ci]);
+        break;
+      }
+    }
+  }
+  if (sorted.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--text-muted);">暂无 ASR 数据</td></tr>';
+    return;
+  }
+  var h = '';
+  for (var i = 0; i < sorted.length; i++) {
+    var c = sorted[i];
+    // 对时间友好显示
+    var timeStr = c.asr_wavbegintime || '';
+    if (timeStr.length >= 19) timeStr = timeStr.slice(0, 19);
+    else if (timeStr.length >= 16) timeStr = timeStr.slice(0, 16);
+    h += '<tr>' +
+      '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--accent);font-weight:500;">' + c.sector_code + '</td>' +
+      '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-secondary);font-family:monospace;font-size:11px;">' + _escapeHtml(timeStr) + '</td>' +
+      '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-primary);">' + _escapeHtml(c.asr_callsign || '') + '</td>' +
+      '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-secondary);">' + _escapeHtml(c.asr_speaker || '') + '</td>' +
+      '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--accent-orange);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + _escapeHtml(c.asr_text) + '">' + _escapeHtml(c.asr_text) + '</td>' +
+      '</tr>';
+  }
+  tbody.innerHTML = h;
 }
 
 function voiceDrawWaveforms(channels) {
@@ -4427,6 +4563,63 @@ function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCo
 
 // 启动轮询
 voiceInit();
+
+// ═══════════════════════════════════════════════════════
+// ASR 历史查询
+// ═══════════════════════════════════════════════════════
+
+function asrQueryRecords() {
+  var sector = document.getElementById('asrQuerySector').value;
+  var callsign = document.getElementById('asrQueryCallsign').value.trim();
+  var dateFrom = document.getElementById('asrQueryDateFrom').value;
+  var dateTo = document.getElementById('asrQueryDateTo').value;
+
+  var url = '/api/asr/records?';
+  if (sector) url += 'sector=' + encodeURIComponent(sector) + '&';
+  if (callsign) url += 'callsign=' + encodeURIComponent(callsign) + '&';
+  if (dateFrom) url += 'date_from=' + encodeURIComponent(dateFrom) + '&';
+  if (dateTo) url += 'date_to=' + encodeURIComponent(dateTo) + '&';
+  url += 'limit=200';
+
+  var infoEl = document.getElementById('asrQueryInfo');
+  infoEl.style.display = 'block';
+  infoEl.textContent = '查询中...';
+
+  fetch(url)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var records = data.records || [];
+      infoEl.textContent = '共 ' + data.total + ' 条记录';
+
+      var tbody = document.getElementById('asrQueryTbody');
+      if (records.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--text-muted);">无匹配记录</td></tr>';
+        return;
+      }
+      var h = '';
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
+        var wavTime = r.wavbegintime || '';
+        if (wavTime.length >= 19) wavTime = wavTime.slice(0, 19);
+        var recvTime = r.received_at || '';
+        if (recvTime.length >= 19) recvTime = recvTime.slice(0, 19);
+        h += '<tr>' +
+          '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);font-size:11px;">' + r.id + '</td>' +
+          '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--accent);font-weight:500;">' + _escapeHtml(r.sector || '') + '</td>' +
+          '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-secondary);font-family:monospace;font-size:11px;">' + _escapeHtml(wavTime) + '</td>' +
+          '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-primary);">' + _escapeHtml(r.callsign || '') + '</td>' +
+          '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-secondary);">' + _escapeHtml(r.speaker || '') + '</td>' +
+          '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);text-align:right;">' + (r.duration || 0) + '</td>' +
+          '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--accent-orange);max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + _escapeHtml(r.processedCommand || '') + '">' + _escapeHtml(r.processedCommand || '') + '</td>' +
+          '<td style="padding:4px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);font-size:11px;font-family:monospace;">' + _escapeHtml(recvTime) + '</td>' +
+          '</tr>';
+      }
+      tbody.innerHTML = h;
+    })
+    .catch(function(e) {
+      infoEl.textContent = '查询失败: ' + e.message;
+    });
+}
 
 </script>
 </body>

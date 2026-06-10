@@ -54,11 +54,20 @@ class VoiceEndpointConfig:
 
 
 @dataclass
+class AsrEndpointConfig:
+    multicast_group: str = "229.33.33.33"
+    port: int = 33033
+    interface_ip: str = "0.0.0.0"
+    enabled: bool = False
+
+
+@dataclass
 class AppConfig:
     system_name: str = "ATC AFTN WebHub"
     aftn: EndpointConfig = field(default_factory=EndpointConfig)
     radar: RadarEndpointConfig = field(default_factory=RadarEndpointConfig)
     voice: VoiceEndpointConfig = field(default_factory=VoiceEndpointConfig)
+    asr: AsrEndpointConfig = field(default_factory=AsrEndpointConfig)
     voice_data: VoiceDataConfig = field(default_factory=VoiceDataConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     web: WebConfig = field(default_factory=WebConfig)
@@ -83,6 +92,7 @@ def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
     net = raw.get("network", {}).get("aftn", {})
     radar_raw = raw.get("network", {}).get("radar", {})
     voice_raw = raw.get("network", {}).get("voice", {})
+    asr_raw = raw.get("network", {}).get("asr", {})
     voice_data_raw = raw.get("voice_data", {})
     db = raw.get("database", {})
     web = raw.get("web", {})
@@ -106,6 +116,12 @@ def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
             port=int(voice_raw.get("port", 34034)),
             interface_ip=voice_raw.get("interface_ip", "0.0.0.0"),
             enabled=bool(voice_raw.get("enabled", False)),
+        ),
+        asr=AsrEndpointConfig(
+            multicast_group=asr_raw.get("multicast_group", "229.33.33.33"),
+            port=int(asr_raw.get("port", 33033)),
+            interface_ip=asr_raw.get("interface_ip", "0.0.0.0"),
+            enabled=bool(asr_raw.get("enabled", False)),
         ),
         voice_data=VoiceDataConfig(
             flight_count_max=int(voice_data_raw.get("flight_count_max", 18)),

@@ -161,6 +161,26 @@ class Database:
             pass
         conn.commit()
 
+        # ── ASR 语音识别文本表 ──
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS asr_text (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wavbegintime TEXT NOT NULL,
+                processedCommand TEXT NOT NULL DEFAULT '',
+                callsign TEXT NOT NULL DEFAULT '',
+                sector TEXT NOT NULL DEFAULT '',
+                speaker TEXT NOT NULL DEFAULT '',
+                duration REAL NOT NULL DEFAULT 0,
+                wavfilepath TEXT NOT NULL DEFAULT '',
+                received_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_asr_sector
+                ON asr_text(sector, wavbegintime);
+            CREATE INDEX IF NOT EXISTS idx_asr_time
+                ON asr_text(received_at);
+        """)
+        conn.commit()
+
         # ── 回填：从 sector_flights 填充 sector_traffic_10min ──
         # 覆盖所有 sector_flights 中存在但 sector_traffic_10min 中缺失的日期
         try:
@@ -995,6 +1015,77 @@ class Database:
             if 0 <= s < 144:
                 result[s] = r["duration"]
         return result
+
+    # ── ASR 语音识别文本 ──────────────────────────────────
+
+    def save_asr_text(self, wavbegintime: str, processedCommand: str,
+                      callsign: str, sector: str, speaker: str,
+                      duration: float, wavfilepath: str) -> int:
+        """保存 ASR 语音识别结果到数据库"""
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT INTO asr_text
+               (wavbegintime, processedCommand, callsign, sector, speaker,
+                duration, wavfilepath, received_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (wavbegintime, processedCommand, callsign.upper(), sector,
+             speaker, duration, wavfilepath, now),
+        )
+        conn.commit()
+        return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def query_asr_text(self, sector: str | None = None,
+                       date_from: str | None = None,
+                       date_to: str | None = None,
+                       callsign: str | None = None,
+                       limit: int = 100, offset: int = 0) -> list[dict]:
+        """查询 ASR 历史记录"""
+        conn = self._get_conn()
+        conditions: list[str] = []
+        params: list = []
+        if sector:
+            conditions.append("sector = ?")
+            params.append(sector)
+        if date_from:
+            conditions.append("received_at >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("received_at <= ?")
+            params.append(date_to + " 23:59:59")
+        if callsign:
+            conditions.append("callsign LIKE ?")
+            params.append(f"%{callsign.upper()}%")
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        rows = conn.execute(
+            f"SELECT * FROM asr_text {where} ORDER BY wavbegintime DESC LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_asr_text(self, sector: str | None = None,
+                       date_from: str | None = None,
+                       date_to: str | None = None,
+                       callsign: str | None = None) -> int:
+        """统计 ASR 记录数"""
+        conn = self._get_conn()
+        conditions: list[str] = []
+        params: list = []
+        if sector:
+            conditions.append("sector = ?")
+            params.append(sector)
+        if date_from:
+            conditions.append("received_at >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("received_at <= ?")
+            params.append(date_to + " 23:59:59")
+        if callsign:
+            conditions.append("callsign LIKE ?")
+            params.append(f"%{callsign.upper()}%")
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        row = conn.execute(f"SELECT COUNT(*) FROM asr_text {where}", params).fetchone()
+        return row[0] if row else 0
 
     def record_sector_flight_10min(self, dof: str,
                                      terminal_code: str, slot: int) -> bool:

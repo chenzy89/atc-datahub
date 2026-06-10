@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import Thread
 
+from .asr_receiver import AsrReceiver
 from .config import load_config
 from .database import Database, _fmt_dt, _pick_closest_datetime
 from .fdr_store import FDRStore, PROCESS_INTERVAL_SECONDS
@@ -185,6 +186,23 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         logger.info("voice receiver: disabled")
+
+    # ASR 语音识别文本接收器（可选）
+    asr_receiver: AsrReceiver | None = None
+    if config.asr.enabled:
+        asr_receiver = AsrReceiver(
+            multicast_group=config.asr.multicast_group,
+            port=config.asr.port,
+            interface_ip=config.asr.interface_ip,
+            db=db,
+        )
+        asr_receiver.start()
+        logger.info(
+            "ASR receiver: %s:%d (enabled)",
+            config.asr.multicast_group, config.asr.port,
+        )
+    else:
+        logger.info("ASR receiver: disabled")
 
     # 雷达 CAT062 接收器（可选）
     fdr_store: FDRStore | None = None
@@ -489,7 +507,7 @@ def main(argv: list[str] | None = None) -> int:
     receiver.start()
 
     # Flask web 服务
-    app = create_app(config, db, fdr_store=fdr_store, radar_history_store=radar_history_store, voice_receiver=voice_receiver)
+    app = create_app(config, db, fdr_store=fdr_store, radar_history_store=radar_history_store, voice_receiver=voice_receiver, asr_receiver=asr_receiver)
     web_host = config.web.host
     web_port = config.web.port
 
@@ -523,6 +541,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Web 页面: http://{web_host}:{web_port}")
     if config.voice.enabled:
         print(f"  语音接收: {config.voice.multicast_group}:{config.voice.port}")
+    if config.asr.enabled:
+        print(f"  ASR接收:  {config.asr.multicast_group}:{config.asr.port}")
     print(f"  数据库:   {config.db_path}")
     print(f"{'='*50}\n")
 
