@@ -985,7 +985,15 @@ function switchTab(n) {
   var idx = {'msgs':0, 'plans':1, 'stats':2, 'map':3, 'voice':4, 'asr':5}[n] || 0;
   btns[idx].classList.add('active');
   document.getElementById('panel-'+n).classList.add('active');
+  // 切换到 ASR 页时强制刷新
+  if (n === 'asr') { setTimeout(asrFetchLive, 100); }
 }
+
+// ═══════════════════════════════════════════════════════
+// ASR constants (must be before the init IIFE that calls asrFetchLive)
+// ═══════════════════════════════════════════════════════
+var _asrSectorOrder = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
+var _asrSectorNames = {'ZGJDTM01':'HN','ZGJDTM02':'HE','ZGJDTM03':'ARW','ZGJDTM04':'AS','ZGJDTM05':'AD','ZGJDTM06':'ASL','ZGJDTM07':'ARE'};
 
 // ═══════════════════════════════════════════════════════
 // Init ASR date fields
@@ -4415,8 +4423,6 @@ voiceInit();
 // ═══════════════════════════════════════════════════════
 
 var _asrLiveTimer = null;
-var _asrSectorOrder = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
-var _asrSectorNames = {'ZGJDTM01':'HN','ZGJDTM02':'HE','ZGJDTM03':'ARW','ZGJDTM04':'AS','ZGJDTM05':'AD','ZGJDTM06':'ASL','ZGJDTM07':'ARE'};
 
 function asrLiveSwitchSector() {
   // 历史查询同步切换扇区
