@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.43</title>
+<title>ATC AFTN WebHub v2.1.44</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.43</span>
+  <span class="badge">v2.1.44</span>
 </div>
 
 <div class="tabs">
@@ -875,10 +875,78 @@ canvas#radarMap {
      ════════════════════════════════════════════════════════ -->
 <div class="panel" id="panel-asr">
   <div class="voice-controls">
+
+    <!-- ── 扇区语音识别实时结果 ── -->
+    <div class="asr-live-card" id="asrLiveCard">
+      <div class="asr-live-header">🎙 扇区语音识别实时结果</div>
+      <div class="asr-live-grid" id="asrLiveGrid">
+        <!-- JS 动态生成 -->
+      </div>
+    </div>
+    <style>
+    .asr-live-card {
+      margin-bottom: 20px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .asr-live-header {
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-primary);
+    }
+    .asr-live-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 8px;
+      padding: 12px 14px;
+    }
+    .asr-live-item {
+      background: rgba(210,153,34,0.06);
+      border: 1px solid rgba(210,153,34,0.2);
+      border-radius: 6px;
+      padding: 8px 10px;
+      transition: .15s;
+    }
+    .asr-live-item._active {
+      border-color: var(--accent-orange);
+      background: rgba(210,153,34,0.12);
+    }
+    .asr-live-item .ali-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .asr-live-item .ali-code {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+    .asr-live-item .ali-callsign {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .asr-live-item .ali-text {
+      font-size: 13px;
+      color: var(--accent-orange);
+      line-height: 1.4;
+      word-break: break-all;
+    }
+    .asr-live-item .ali-empty {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    </style>
+
+    <!-- ── 语音识别历史记录 ── -->
     <div class="voice-chart-toolbar" style="margin-bottom:16px;">
       <h3>📝 语音识别历史记录</h3>
       <div class="voice-chart-controls">
-        <label><span>扇区</span><select id="asrQuerySector">
+        <label><span>扇区</span><select id="asrQuerySector" onchange="asrPollLive();asrQueryRecords();">
           <option value="">全部</option>
           <option value="ZGJDTM01">ZGJDTM01 (HN)</option>
           <option value="ZGJDTM02">ZGJDTM02 (HE)</option>
@@ -947,6 +1015,9 @@ function switchTab(n) {
   var dt = document.getElementById('asrQueryDateTo');
   if (df) df.value = today;
   if (dt) dt.value = today;
+  // 启动 ASR 实时轮询 + 加载全部记录
+  asrStartLivePoll();
+  setTimeout(asrQueryRecords, 500);
 })();
 
 // ═══════════════════════════════════════════════════════
@@ -4358,8 +4429,63 @@ function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCo
 voiceInit();
 
 // ═══════════════════════════════════════════════════════
-// ASR 历史查询
+// ASR 实时结果 / 历史查询
 // ═══════════════════════════════════════════════════════
+
+var _asrLiveTimer = null;
+var _asrSectorOrder = ['ZGJDTM01','ZGJDTM02','ZGJDTM03','ZGJDTM04','ZGJDTM05','ZGJDTM06','ZGJDTM07'];
+var _asrSectorNames = {'ZGJDTM01':'HN','ZGJDTM02':'HE','ZGJDTM03':'ARW','ZGJDTM04':'AS','ZGJDTM05':'AD','ZGJDTM06':'ASL','ZGJDTM07':'ARE'};
+
+function asrPollLive() {
+  fetch('/api/asr/status')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.enabled) return;
+      var grid = document.getElementById('asrLiveGrid');
+      if (!grid) return;
+      var latest = data.latest || {};
+
+      // 已选择的扇区（高亮）
+      var selSector = document.getElementById('asrQuerySector').value;
+
+      var h = '';
+      for (var i = 0; i < _asrSectorOrder.length; i++) {
+        var code = _asrSectorOrder[i];
+        var shortName = _asrSectorNames[code];
+        var entry = latest[code] || latest[shortName] || null;
+
+        var activeClass = (selSector === code) ? ' _active' : '';
+        h += '<div class="asr-live-item' + activeClass + '">' +
+          '<div class="ali-top">' +
+          '  <span class="ali-code">' + code + ' (' + shortName + ')</span>';
+        if (entry) {
+          h += '  <span class="ali-callsign">' + _escapeHtml(entry.callsign || '') + '</span>';
+        }
+        h += '</div>';
+        if (entry) {
+          h += '<div class="ali-text">' + _escapeHtml(entry.processedCommand || '') + '</div>';
+        } else {
+          h += '<div class="ali-empty">等待数据...</div>';
+        }
+        h += '</div>';
+      }
+      grid.innerHTML = h;
+    })
+    .catch(function() {});
+}
+
+function asrStartLivePoll() {
+  asrPollLive();
+  if (_asrLiveTimer) clearInterval(_asrLiveTimer);
+  _asrLiveTimer = setInterval(asrPollLive, 2000);
+}
+
+function asrStopLivePoll() {
+  if (_asrLiveTimer) {
+    clearInterval(_asrLiveTimer);
+    _asrLiveTimer = null;
+  }
+}
 
 function asrQueryRecords() {
   var sector = document.getElementById('asrQuerySector').value;
