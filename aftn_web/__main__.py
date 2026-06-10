@@ -355,13 +355,27 @@ def main(argv: list[str] | None = None) -> int:
                 # FPL：同 DOF 已有有效计划则 upsert，已取消则新建
                 existing = db.find_flight_plan(plan.callsign, plan.adep, plan.adest, plan.dof, exclude_cancelled=True)
                 if existing:
-                    db.upsert_flight_plan(plan)
-                    total_parsed[0] += 1
-                    logger.info(
-                        "[FPL] %s %s->%s DOF=%s 已存在，upsert (total: recv=%d, parsed=%d)",
-                        plan.callsign, plan.adep, plan.adest, plan.dof,
-                        total_received[0], total_parsed[0],
-                    )
+                    # 已执飞（有 ATD 或 ATA）：重复 FPL 仅记录报文标签，不覆盖计划字段
+                    if existing.get("atd") or existing.get("ata"):
+                        db.update_flight_plan_message_only(
+                            existing["id"], "FPL",
+                            raw_message_text=plan.raw_message_text or "",
+                            last_message_time=plan.last_message_time,
+                        )
+                        total_parsed[0] += 1
+                        logger.info(
+                            "[FPL] %s %s->%s DOF=%s 已执飞，忽略重复 FPL (total: recv=%d, parsed=%d)",
+                            plan.callsign, plan.adep, plan.adest, plan.dof,
+                            total_received[0], total_parsed[0],
+                        )
+                    else:
+                        db.upsert_flight_plan(plan)
+                        total_parsed[0] += 1
+                        logger.info(
+                            "[FPL] %s %s->%s DOF=%s 已存在，upsert (total: recv=%d, parsed=%d)",
+                            plan.callsign, plan.adep, plan.adest, plan.dof,
+                            total_received[0], total_parsed[0],
+                        )
                 else:
                     # 有同 key 的已取消计划 → 删旧建新（UNIQUE 约束不允许同 etd 存在两条）
                     cancelled = db.find_flight_plan(

@@ -799,6 +799,40 @@ class Database:
                 if not match:
                     return 0
 
+                # ── 终端时长恢复守护 ──────────────────────────────
+                # FDR 重启后 terminal_accum_seconds 归零会导致写入 0。
+                # 1) 单调性保护：不覆盖已有的大值
+                # 2) 已结束航班：从 entry→exit/ata 补算
+                if entry_time and terminal_flight_time >= 0:
+                    _cur = conn.execute(
+                        "SELECT terminal_flight_time, exit_time, ata FROM flight_plans WHERE id=?",
+                        (match["id"],),
+                    ).fetchone()
+                    if _cur:
+                        # 单调性：保留更大的已有值
+                        if _cur["terminal_flight_time"] > terminal_flight_time:
+                            terminal_flight_time = _cur["terminal_flight_time"]
+                        # 回填：entry_time 有值、航班已结束、时长为 0
+                        if terminal_flight_time == 0:
+                            _end = _cur["exit_time"] or _cur["ata"] or ""
+                            if _end:
+                                try:
+                                    from datetime import datetime as _dt2, timezone as _tz2
+                                    _e = _dt2.fromisoformat(entry_time.replace("Z", "+00:00"))
+                                    _x = _dt2.fromisoformat(str(_end))
+                                    if _x.tzinfo is None:
+                                        _x = _x.replace(tzinfo=_tz2.utc)
+                                    _computed = max(0, int((_x - _e).total_seconds()))
+                                    if _computed > 0:
+                                        terminal_flight_time = _computed
+                                        logger.info(
+                                            "[TERM] %s 回填终端时长: %ds (entry→%s)",
+                                            callsign, _computed,
+                                            "exit" if _cur["exit_time"] else "ata",
+                                        )
+                                except Exception as _ex:
+                                    logger.debug("[TERM] %s 补算失败: %s", callsign, _ex)
+
                 now = _fmt_dt(datetime.utcnow())
                 cur = conn.execute(
                     "UPDATE flight_plans SET"
@@ -1492,6 +1526,28 @@ class Database:
         if new_type not in types:
             types.append(new_type)
         return ",".join(types)
+
+    def update_flight_plan_message_only(self, fpl_id: int, source_type: str,
+                                        raw_message_text: str = "",
+                                        last_message_time: datetime | None = None) -> bool:
+        """仅更新飞行计划的报文类型、原文、时间戳，不修改其他计划字段
+        用于已执飞计划收到重复 FPL 时的轻量记录"""
+        now = _fmt_dt(datetime.utcnow())
+        conn = self._get_conn()
+        existing = conn.execute(
+            "SELECT message_types FROM flight_plans WHERE id=?", (fpl_id,)
+        ).fetchone()
+        if not existing:
+            return False
+        msg_types = self._merge_message_type(existing["message_types"] or "", source_type)
+        lmt = _fmt_dt(last_message_time) if last_message_time else now
+        conn.execute(
+            "UPDATE flight_plans SET message_types=?, raw_message_text=?, "
+            "last_message_time=?, updated_at=? WHERE id=?",
+            (msg_types, raw_message_text, lmt, now, fpl_id),
+        )
+        conn.commit()
+        return True
 
 
 def _build_fpl_conditions(
