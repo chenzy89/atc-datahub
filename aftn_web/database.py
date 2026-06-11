@@ -1200,7 +1200,7 @@ class Database:
             ).fetchone()
         else:
             row = conn.execute(
-                "SELECT id, message_types FROM flight_plans WHERE callsign=? AND adep=? AND adest=?",
+                "SELECT id, message_types FROM flight_plans WHERE callsign=? AND adep=? AND adest=? ORDER BY id DESC LIMIT 1",
                 (cs, ad, ae),
             ).fetchone()
         if not row:
