@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.50</title>
+<title>ATC AFTN WebHub v2.1.51</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.50</span>
+  <span class="badge">v2.1.51</span>
 </div>
 
 <div class="tabs">
@@ -4472,7 +4472,8 @@ function asrFetchLive() {
         return;
       }
       var lines = [];
-      for (var i = 0; i < records.length; i++) {
+      // DB 返回 wavbegintime DESC（最新在前），倒序遍历使最新显示在最下面
+      for (var i = records.length - 1; i >= 0; i--) {
         var r = records[i];
         var wt = (r.wavbegintime || r.received_at || '').trim();
         // 格式化为 MM-dd HH:mm:ss
