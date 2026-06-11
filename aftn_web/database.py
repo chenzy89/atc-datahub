@@ -1092,7 +1092,7 @@ class Database:
             params.append(f"%{callsign.upper()}%")
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         rows = conn.execute(
-            f"SELECT * FROM asr_text {where} ORDER BY wavbegintime DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM asr_text {where} ORDER BY received_at DESC LIMIT ? OFFSET ?",
             params + [limit, offset],
         ).fetchall()
         return [dict(r) for r in rows]
