@@ -1207,6 +1207,29 @@ class Database:
                 result[s] = r["count"]
         return result
 
+    def _get_codes_to_merge(
+        self, terminal_code: str, slot: int,
+        voice_active_map: dict[str, list[bool]],
+        merge_parent_map: dict[str, str],
+    ) -> set[str]:
+        """递归收集需要合并到当前扇区的所有终端代码（含自身）
+
+        规则：
+        - 如果子扇区在该 slot 无通话，子扇区及其子扇区全部合并进来
+        - 递归地查找无通话的子扇区
+        """
+        codes = {terminal_code}
+        children = [
+            c for c, p in merge_parent_map.items() if p == terminal_code
+        ]
+        for child in children:
+            child_voice = voice_active_map.get(child, [True] * 144)
+            if not child_voice[slot]:
+                # 子扇区无通话：递归合并该子扇区及其子扇区
+                sub = self._get_codes_to_merge(child, slot, voice_active_map, merge_parent_map)
+                codes.update(sub)
+        return codes
+
     def get_merged_sector_traffic_10min(
         self, date_str: str, terminal_code: str,
         voice_active_map: dict[str, list[bool]],
@@ -1218,49 +1241,39 @@ class Database:
         merge_parent_map: {child_terminal_code: parent_terminal_code} — 合并规则
 
         逻辑：
-        - 如果子扇区某 slot 无通话，子扇区的航班架次合并到父扇区（去重）
-        - 如果扇区自身无通话，其飞行架次设为 0（视为关闭）
-        - 父扇区架次 = 自身架次 + 所有合并进来的子扇区航班（去重）
+        - 如果子扇区某 slot 无通话，递归收集所有无通话子链，合并架次（去重）
+        - 如果扇区自身无通话且有父扇区，其飞行架次设为 0（视为关闭）
         """
-        # 先获取本扇区 raw counts
         raw_counts = self.query_sector_traffic_10min(date_str, terminal_code)
-
-        # 找出本扇区的所有子扇区
-        children = [c for c, p in merge_parent_map.items() if p == terminal_code]
-
-        # 找出本扇区的父扇区（如果有，本扇区可能被合并到父扇区）
         parent = merge_parent_map.get(terminal_code)
-
         result = [0] * 144
         conn = self._get_conn()
 
         for slot in range(144):
-            # 本扇区在该 slot 是否有通话
-            sector_voice = voice_active_map.get(terminal_code, [True] * 144)[slot] if terminal_code in voice_active_map else True
+            va = voice_active_map.get(terminal_code, [True] * 144)
+            sector_voice = va[slot] if len(va) > slot else True
 
             if not sector_voice and parent is not None:
                 # 本扇区关闭（无通话且可被合并到父扇区），架次为 0
                 result[slot] = 0
                 continue
 
-            # 基础：本扇区的 raw 架次
             base = raw_counts[slot]
 
-            # 收集所有需要合并进来的子扇区航班
-            merging_children = [
-                c for c in children
-                if not voice_active_map.get(c, [True] * 144)[slot]
-            ]
+            # 递归收集所有无通话的子扇区链
+            merge_codes = self._get_codes_to_merge(
+                terminal_code, slot, voice_active_map, merge_parent_map
+            )
 
-            if not merging_children:
+            if len(merge_codes) <= 1:
+                # 没有需要合并的子扇区
                 result[slot] = base
                 continue
 
-            # 合并去重：查询本扇区 + 所有合并子扇区的 callsign，取 UNION
-            params = [date_str, slot]
-            placeholders = ','.join(['?'] * (len(merging_children) + 1))
-            codes = [terminal_code] + merging_children
-            params.extend(codes)
+            # 合并去重：查询所有合并扇区的 callsign，取 UNION
+            merge_list = list(merge_codes)
+            params = [date_str, slot] + merge_list
+            placeholders = ','.join(['?'] * len(merge_list))
 
             try:
                 rows = conn.execute(
@@ -1269,9 +1282,23 @@ class Database:
                     f"AND terminal_code IN ({placeholders})",
                     params,
                 ).fetchall()
-                result[slot] = len(rows)
+                merged = len(rows)
+                # 安全保护：如果 detail 表还没有该 slot 的数据，回退到直接相加
+                if merged == 0 and base > 0:
+                    child_raw_sum = 0
+                    for mc in merge_list:
+                        if mc == terminal_code:
+                            continue
+                        cr = conn.execute(
+                            "SELECT count FROM sector_traffic_10min "
+                            "WHERE date=? AND terminal_code=? AND slot=?",
+                            (date_str, mc, slot),
+                        ).fetchone()
+                        if cr:
+                            child_raw_sum += cr["count"]
+                    merged = base + child_raw_sum
+                result[slot] = merged
             except Exception:
-                # fallback: 无详细数据时直接用 raw
                 result[slot] = base
 
         return result
