@@ -434,22 +434,55 @@ class VoiceReceiver:
         return result
 
     def get_channel_duration(self, date_str: str, channel_id: int) -> list[float]:
-        """返回指定日期指定通道的 144 个 10 分钟时段的通话秒数"""
+        """返回指定日期指定通道的 144 个 10 分钟时段的通话秒数
+
+        优先从内存读取，缺失时从 DB 加载并缓存。
+        """
         with self._duration_lock:
-            day_data = self._duration_buckets.get(date_str, {})
-            return day_data.get(channel_id, [0.0] * 144)
+            day_data = self._duration_buckets.get(date_str)
+            if day_data is not None:
+                return day_data.get(channel_id, [0.0] * 144)
+
+        # 内存中没有，从 DB 加载
+        if self._db is not None:
+            try:
+                loaded: dict[int, list[float]] = {}
+                for ch in SECTOR_CHANNELS.values():
+                    loaded[ch] = self._db.load_voice_durations(date_str, ch)
+                with self._duration_lock:
+                    self._duration_buckets[date_str] = loaded
+                return loaded.get(channel_id, [0.0] * 144)
+            except Exception:
+                pass
+
+        return [0.0] * 144
 
     def build_voice_activity_map(self, date_str: str) -> dict[str, list[bool]]:
         """构建扇区通话活动映射
 
         返回 {terminal_code: [144 bool]}，True 表示该 slot 有通话
         基于 voice_duration 来判断：duration > 0 = 有通话
+
+        注意：如果某个扇区在该日期没有任何语音数据（从未录制过），
+        所有 slot 返回 True（视为活跃，避免误判为扇区关闭）
         """
         result: dict[str, list[bool]] = {}
+        has_any_data = False
+        durations_by_code: dict[str, list[float]] = {}
+
         for ch_id, sector_code in CHANNEL_SECTORS.items():
             durations = self.get_channel_duration(date_str, ch_id)
-            terminal_code = sector_code
-            result[terminal_code] = [d > 0 for d in durations]
+            durations_by_code[sector_code] = durations
+            if any(d > 0 for d in durations):
+                has_any_data = True
+
+        for sector_code, durations in durations_by_code.items():
+            if not has_any_data:
+                # 没有任何扇区有语音数据 → 无法判断，全部视为活跃
+                result[sector_code] = [True] * 144
+            else:
+                result[sector_code] = [d > 0 for d in durations]
+
         return result
 
     def get_playing_channel(self) -> Optional[int]:
