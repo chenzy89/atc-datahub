@@ -73,6 +73,17 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_st10m_terminal
                 ON sector_traffic_10min(date, terminal_code);
 
+            CREATE TABLE IF NOT EXISTS sector_callsigns_10min (
+                date TEXT NOT NULL,
+                terminal_code TEXT NOT NULL,
+                slot INTEGER NOT NULL,
+                callsign TEXT NOT NULL,
+                dof TEXT NOT NULL,
+                PRIMARY KEY (date, terminal_code, slot, callsign)
+            );
+            CREATE INDEX IF NOT EXISTS idx_sc_merge
+                ON sector_callsigns_10min(date, slot, terminal_code);
+
             CREATE TABLE IF NOT EXISTS aftn_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 raw_text TEXT NOT NULL DEFAULT '',
@@ -1157,6 +1168,29 @@ class Database:
                 return False
         return False
 
+    def record_sector_flight_10min_detail(self, date_str: str,
+                                            terminal_code: str,
+                                            slot: int,
+                                            callsign: str,
+                                            dof: str) -> None:
+        """记录航班在 10 分钟 slot 的扇区归属（用于合并去重）"""
+        for retry in range(3):
+            try:
+                conn = self._get_conn()
+                conn.execute(
+                    "INSERT OR IGNORE INTO sector_callsigns_10min "
+                    "(date, terminal_code, slot, callsign, dof) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (date_str, terminal_code, slot, callsign.upper(), dof),
+                )
+                conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and retry < 2:
+                    time.sleep(0.1)
+                    continue
+                return
+
     def query_sector_traffic_10min(self, date_str: str,
                                     terminal_code: str) -> list[int]:
         """查询指定日期扇区的 144 个 10 分钟 slot 飞行架次"""
@@ -1171,6 +1205,75 @@ class Database:
             s = r["slot"]
             if 0 <= s < 144:
                 result[s] = r["count"]
+        return result
+
+    def get_merged_sector_traffic_10min(
+        self, date_str: str, terminal_code: str,
+        voice_active_map: dict[str, list[bool]],
+        merge_parent_map: dict[str, str],
+    ) -> list[int]:
+        """查询指定扇区的合并飞行架次（考虑扇区合并去重）
+
+        voice_active_map: {terminal_code: [144 bool]} — 每 slot 是否有通话
+        merge_parent_map: {child_terminal_code: parent_terminal_code} — 合并规则
+
+        逻辑：
+        - 如果子扇区某 slot 无通话，子扇区的航班架次合并到父扇区（去重）
+        - 如果扇区自身无通话，其飞行架次设为 0（视为关闭）
+        - 父扇区架次 = 自身架次 + 所有合并进来的子扇区航班（去重）
+        """
+        # 先获取本扇区 raw counts
+        raw_counts = self.query_sector_traffic_10min(date_str, terminal_code)
+
+        # 找出本扇区的所有子扇区
+        children = [c for c, p in merge_parent_map.items() if p == terminal_code]
+
+        # 找出本扇区的父扇区（如果有，本扇区可能被合并到父扇区）
+        parent = merge_parent_map.get(terminal_code)
+
+        result = [0] * 144
+        conn = self._get_conn()
+
+        for slot in range(144):
+            # 本扇区在该 slot 是否有通话
+            sector_voice = voice_active_map.get(terminal_code, [True] * 144)[slot] if terminal_code in voice_active_map else True
+
+            if not sector_voice and parent is not None:
+                # 本扇区关闭（无通话且可被合并到父扇区），架次为 0
+                result[slot] = 0
+                continue
+
+            # 基础：本扇区的 raw 架次
+            base = raw_counts[slot]
+
+            # 收集所有需要合并进来的子扇区航班
+            merging_children = [
+                c for c in children
+                if not voice_active_map.get(c, [True] * 144)[slot]
+            ]
+
+            if not merging_children:
+                result[slot] = base
+                continue
+
+            # 合并去重：查询本扇区 + 所有合并子扇区的 callsign，取 UNION
+            params = [date_str, slot]
+            placeholders = ','.join(['?'] * (len(merging_children) + 1))
+            codes = [terminal_code] + merging_children
+            params.extend(codes)
+
+            try:
+                rows = conn.execute(
+                    f"SELECT DISTINCT callsign FROM sector_callsigns_10min "
+                    f"WHERE date=? AND slot=? "
+                    f"AND terminal_code IN ({placeholders})",
+                    params,
+                ).fetchall()
+                result[slot] = len(rows)
+            except Exception:
+                # fallback: 无详细数据时直接用 raw
+                result[slot] = base
+
         return result
 
     def delete_by_key(self, callsign: str, adep: str, adest: str) -> bool:

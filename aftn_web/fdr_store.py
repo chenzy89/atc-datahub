@@ -445,6 +445,10 @@ class FDRStore:
                 # 10 分钟粒度使用 UTC
                 try:
                     db.record_sector_flight_10min(utc_dof, terminal_code, utc_slot)
+                    # 记录 callsign 详情（用于扇区合并去重）
+                    db.record_sector_flight_10min_detail(
+                        utc_dof, terminal_code, utc_slot, callsign, dof
+                    )
                 except Exception:
                     pass
             except Exception:

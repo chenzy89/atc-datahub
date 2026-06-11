@@ -710,7 +710,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     @app.route("/api/voice/duration")
     def api_voice_duration():
-        """返回指定通道在指定日期的 144 个通话时长 + 扇区飞行架次
+        """返回指定通道在指定日期的 144 个通话时长 + 扇区飞行架次（含扇区合并）
 
         Query params:
             include_yesterday: 1 时额外返回昨日参考数据
@@ -725,17 +725,30 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             return jsonify({"error": "invalid channel"}), 400
 
         # 通道号 → 终端扇区代码
-        from .voice_receiver import CHANNEL_SECTORS
+        from .voice_receiver import CHANNEL_SECTORS, SECTOR_MERGE_RULES
         terminal_code = CHANNEL_SECTORS.get(channel_id, "")
 
         # 语音时长
         duration_data = voice_receiver.get_channel_duration(date_str, channel_id)
 
-        # 扇区飞行架次（10 分钟粒度）
+        # 构建通话活动映射（所有扇区）
+        voice_active_map = voice_receiver.build_voice_activity_map(date_str)
+
+        # 扇区飞行架次（10 分钟粒度）— 考虑合并去重
         flight_data = []
         if terminal_code:
             try:
-                flight_data = db.query_sector_traffic_10min(date_str, terminal_code)
+                flight_data = db.get_merged_sector_traffic_10min(
+                    date_str, terminal_code, voice_active_map, SECTOR_MERGE_RULES
+                )
+            except Exception:
+                pass
+
+        # raw 架次（合并前，供参考/调试）
+        raw_flight_data = []
+        if terminal_code:
+            try:
+                raw_flight_data = db.query_sector_traffic_10min(date_str, terminal_code)
             except Exception:
                 pass
 
@@ -745,6 +758,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             "terminal_code": terminal_code,
             "duration": duration_data,
             "flight_count": flight_data,
+            "flight_count_raw": raw_flight_data,
             "flight_count_max": _voice_config["flight_count_max"],
         }
 
@@ -755,10 +769,15 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
                 dt = datetime.strptime(date_str, "%Y-%m-%d")
                 yesterday_str = (dt - timedelta(days=1)).strftime("%Y-%m-%d")
                 result["yesterday_duration"] = voice_receiver.get_channel_duration(yesterday_str, channel_id)
+
+                # 昨日也要考虑合并
+                yesterday_voice_map = voice_receiver.build_voice_activity_map(yesterday_str)
                 yesterday_flight = []
                 if terminal_code:
                     try:
-                        yesterday_flight = db.query_sector_traffic_10min(yesterday_str, terminal_code)
+                        yesterday_flight = db.get_merged_sector_traffic_10min(
+                            yesterday_str, terminal_code, yesterday_voice_map, SECTOR_MERGE_RULES
+                        )
                     except Exception:
                         pass
                 result["yesterday_flight_count"] = yesterday_flight

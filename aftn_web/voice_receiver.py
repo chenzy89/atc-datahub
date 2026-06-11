@@ -57,6 +57,31 @@ SECTOR_CHANNELS: dict[str, int] = {
 # 通道号 → 扇区名
 CHANNEL_SECTORS: dict[int, str] = {v: k for k, v in SECTOR_CHANNELS.items()}
 
+# 终端代码 → 短扇区名
+SECTOR_CODE_TO_SHORT: dict[str, str] = {
+    "ZGJDTM01": "HN",
+    "ZGJDTM02": "HE",
+    "ZGJDTM03": "ARW",
+    "ZGJDTM04": "AS",
+    "ZGJDTM05": "AD",
+    "ZGJDTM06": "ASL",
+    "ZGJDTM07": "ARE",
+}
+
+# 扇区合并规则（子扇区 terminal_code → 父扇区 terminal_code）
+# 子扇区 10 分钟无通话时，其航班架次合并入父扇区（去重）
+SECTOR_MERGE_RULES: dict[str, str] = {
+    "ZGJDTM06": "ZGJDTM04",  # ASL → AS
+    "ZGJDTM01": "ZGJDTM04",  # HN → AS
+    "ZGJDTM04": "ZGJDTM02",  # AS → HE
+    "ZGJDTM07": "ZGJDTM03",  # ARE/AA → ARW (ARE 和 AA 共用 ZGJDTM07)
+    "ZGJDTM05": "ZGJDTM03",  # AD → ARW
+    "ZGJDTM03": "ZGJDTM02",  # ARW → HE
+}
+
+# 终端代码 → 内话通道号（反向查找）
+CODE_TO_CHANNEL: dict[str, int] = {v: k for k, v in SECTOR_CHANNELS.items()}
+
 # VAD (语音活动检测) 默认参数
 _VAD_ENERGY_THRESHOLD_DEFAULT = 0.005  # PCM 归一化 RMS 能量阈值，低于此视为静音
 _VAD_SILENCE_MS_DEFAULT = 1000        # 持续静音超过此值视为通话结束 (ms)
@@ -413,6 +438,19 @@ class VoiceReceiver:
         with self._duration_lock:
             day_data = self._duration_buckets.get(date_str, {})
             return day_data.get(channel_id, [0.0] * 144)
+
+    def build_voice_activity_map(self, date_str: str) -> dict[str, list[bool]]:
+        """构建扇区通话活动映射
+
+        返回 {terminal_code: [144 bool]}，True 表示该 slot 有通话
+        基于 voice_duration 来判断：duration > 0 = 有通话
+        """
+        result: dict[str, list[bool]] = {}
+        for ch_id, sector_code in CHANNEL_SECTORS.items():
+            durations = self.get_channel_duration(date_str, ch_id)
+            terminal_code = sector_code
+            result[terminal_code] = [d > 0 for d in durations]
+        return result
 
     def get_playing_channel(self) -> Optional[int]:
         return self._playing_channel
