@@ -97,7 +97,8 @@ def _remove_pid_file() -> None:
 
 
 def _backfill_sector_traffic_10min(db: Database) -> None:
-    """回填今日 sector_traffic_10min（从 sector_flights 重建丢失的 slot 数据）
+    """回填今日 sector_traffic_10min + sector_callsigns_10min
+    （从 sector_flights 重建丢失的 slot/callsign 数据）
     使用 UTC 时间与语音折线图对齐。
     通过 sf.created_at（UTC）过滤来对齐 UTC 日期，而非 sf.dof（北京时）。"""
     try:
@@ -106,6 +107,7 @@ def _backfill_sector_traffic_10min(db: Database) -> None:
         today_utc = utc_now.strftime("%Y-%m-%d")
         tomorrow_utc = (utc_now + _dt.timedelta(days=1)).strftime("%Y-%m-%d")
         conn = db._get_conn()
+        # 回填 counts 表
         conn.executescript(
             "INSERT OR IGNORE INTO sector_traffic_10min (date, terminal_code, slot, count) "
             "SELECT '" + today_utc + "', sf.terminal_code, "
@@ -116,6 +118,18 @@ def _backfill_sector_traffic_10min(db: Database) -> None:
             "WHERE sf.created_at >= '" + today_utc + " 00:00:00' "
             "  AND sf.created_at < '" + tomorrow_utc + " 00:00:00' "
             "GROUP BY sf.terminal_code, slot"
+        )
+        # 回填 callsign 详情表（用于扇区合并去重）
+        conn.executescript(
+            "INSERT OR IGNORE INTO sector_callsigns_10min "
+            "(date, terminal_code, slot, callsign, dof) "
+            "SELECT '" + today_utc + "', sf.terminal_code, "
+            "  (CAST(strftime('%H', sf.created_at) AS INTEGER) * 60 + "
+            "   CAST(strftime('%M', sf.created_at) AS INTEGER)) / 10, "
+            "  sf.callsign, sf.dof "
+            "FROM sector_flights sf "
+            "WHERE sf.created_at >= '" + today_utc + " 00:00:00' "
+            "  AND sf.created_at < '" + tomorrow_utc + " 00:00:00'"
         )
         conn.commit()
     except Exception:
@@ -133,6 +147,11 @@ def main(argv: list[str] | None = None) -> int:
         "--log-dir",
         default=None,
         help="日志目录 (默认: 不写文件日志)",
+    )
+    parser.add_argument(
+        "--backfill-sector-all",
+        action="store_true",
+        help="回填全部历史扇区 callsign 数据到 sector_callsigns_10min（从 sector_flights 重建，一次性操作）",
     )
     args = parser.parse_args(argv)
 
@@ -161,6 +180,54 @@ def main(argv: list[str] | None = None) -> int:
                 pass  # 列已存在
     except Exception:
         pass
+
+    # ═══════════════════════════════════════════════════════════
+    # 一次性回填：全部历史 sector_flights → sector_callsigns_10min
+    # ═══════════════════════════════════════════════════════════
+    if args.backfill_sector_all:
+        logger.info("开始回填全部历史扇区 callsign 数据...")
+        try:
+            # 先获取 sector_flights 的最大 ID
+            conn = db._get_conn()
+            max_id_row = conn.execute(
+                "SELECT COALESCE(MAX(id), 0) as mx FROM sector_flights"
+            ).fetchone()
+            max_id = max_id_row["mx"] if max_id_row else 0
+            if max_id == 0:
+                logger.info("sector_flights 表为空，无需回填")
+                return 0
+            # 分批回填
+            last_id = 0
+            while last_id < max_id:
+                chunk_end = min(last_id + 5000, max_id)
+                conn.execute(
+                    "INSERT OR IGNORE INTO sector_callsigns_10min "
+                    "(date, terminal_code, slot, callsign, dof) "
+                    "SELECT DATE(sf.created_at), sf.terminal_code, "
+                    "  (CAST(strftime('%%H', sf.created_at) AS INTEGER) * 60 + "
+                    "   CAST(strftime('%%M', sf.created_at) AS INTEGER)) / 10, "
+                    "  sf.callsign, sf.dof "
+                    "FROM sector_flights sf "
+                    "WHERE sf.id > ? AND sf.id <= ?",
+                    (last_id, chunk_end),
+                )
+                conn.commit()
+                last_id = chunk_end
+                if last_id % 50000 == 0:
+                    logger.info("回填进度: %d / %d", last_id, max_id)
+            total = conn.execute(
+                "SELECT COUNT(*) as n FROM sector_callsigns_10min"
+            ).fetchone()["n"]
+            logger.info("扇区 callsign 回填完成，共 %d 条", total)
+        except Exception as e:
+            logger.error("扇区 callsign 回填失败: %s", e)
+        finally:
+            # 清理 PID 文件（此模式不会启动 Web 服务）
+            try:
+                PID_FILE.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return 0
 
     # AFTN 解析器
     parser_aftn = AftnParser()

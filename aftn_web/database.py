@@ -1053,80 +1053,152 @@ class Database:
         conn = self._get_conn()
 
         try:
-            d = datetime.strptime(date_from, "%Y-%m-%d").date()
+            cur = datetime.strptime(date_from, "%Y-%m-%d").date()
             end = datetime.strptime(date_to, "%Y-%m-%d").date()
         except ValueError:
             return result
 
-        while d <= end:
-            date_str = d.strftime("%Y-%m-%d")
+        # ── 判断用哪种数据源 ──
+        has_detail = conn.execute(
+            "SELECT 1 FROM sector_callsigns_10min WHERE date >= ? AND date <= ? LIMIT 1",
+            (date_from, date_to),
+        ).fetchone() is not None
 
-            # ── 1. 加载语音活跃度：{terminal_code: [144 bool]} ──
-            sector_active_slot: dict[str, list[bool]] = {
-                c: [False] * 144 for c in sector_codes
-            }
-            has_any_voice = False
+        if has_detail:
+            # ═══════════════════════════════════════════════════════
+            # 路径 A：有 sector_callsigns_10min → slot 级合并逻辑
+            # ═══════════════════════════════════════════════════════
+            while cur <= end:
+                date_str = cur.strftime("%Y-%m-%d")
 
-            for code, ch_id in sector_channels.items():
-                durations = self.load_voice_durations(date_str, ch_id)
-                for s in range(144):
-                    if durations[s] > 0:
-                        sector_active_slot[code][s] = True
-                        has_any_voice = True
+                # 1. 加载语音活跃度
+                sector_active_slot: dict[str, list[bool]] = {
+                    c: [False] * 144 for c in sector_codes
+                }
+                has_any_voice = False
+                for code, ch_id in sector_channels.items():
+                    durations = self.load_voice_durations(date_str, ch_id)
+                    for s in range(144):
+                        if durations[s] > 0:
+                            sector_active_slot[code][s] = True
+                            has_any_voice = True
 
-            # 无任何语音数据 → 全部视为活跃
-            if not has_any_voice:
-                for code in sector_codes:
-                    sector_active_slot[code] = [True] * 144
+                if not has_any_voice:
+                    for code in sector_codes:
+                        sector_active_slot[code] = [True] * 144
 
-            # ── 2. 对每个U T C小时，按6个slot计算合并架次 ──
-            for hour in range(24):
-                slot_start = hour * 6
-
-                # 对于每个扇区，收集该小时所有6个slot中去重的callsign
-                for code in sector_codes:
-                    # 检查本扇区该小时是否有通话（任意slot有语音就算活跃）
-                    has_voice = any(
-                        sector_active_slot[code][slot_start + i]
-                        for i in range(6)
-                    )
-                    parent = merge_parent_map.get(code)
-
-                    if not has_voice and parent is not None:
-                        # 本扇区无通话且有父扇区 → 该小时架次为0
-                        continue
-
-                    # 收集该小时6个slot中，所有需要合并到此扇区的callsign
-                    all_cs: set[str] = set()
-                    for i in range(6):
-                        slot = slot_start + i
-                        # 构建当前slot需要合并的扇区集合
-                        merged_set = self._collect_merged_sectors_for_slot(
-                            code, slot, sector_active_slot, merge_parent_map
+                # 2. 对每个 U T C 小时，按6个slot计算合并架次
+                for hour in range(24):
+                    slot_start = hour * 6
+                    for code in sector_codes:
+                        has_voice = any(
+                            sector_active_slot[code][slot_start + i]
+                            for i in range(6)
                         )
-                        if len(merged_set) <= 1:
-                            # 仅自身，从 sector_callsigns_10min 查
-                            rows = conn.execute(
-                                "SELECT DISTINCT callsign FROM sector_callsigns_10min "
-                                "WHERE date=? AND slot=? AND terminal_code=?",
-                                (date_str, slot, code),
-                            ).fetchall()
-                        else:
-                            # 查所有合并扇区的 callsign 并集
-                            merge_list = list(merged_set)
-                            placeholders = ','.join(['?'] * len(merge_list))
-                            rows = conn.execute(
-                                f"SELECT DISTINCT callsign FROM sector_callsigns_10min "
-                                f"WHERE date=? AND slot=? "
-                                f"AND terminal_code IN ({placeholders})",
-                                [date_str, slot] + merge_list,
-                            ).fetchall()
-                        for r in rows:
-                            all_cs.add(r["callsign"])
+                        parent = merge_parent_map.get(code)
+                        if not has_voice and parent is not None:
+                            continue
+                        all_cs: set[str] = set()
+                        for i in range(6):
+                            slot = slot_start + i
+                            merged_set = self._collect_merged_sectors_for_slot(
+                                code, slot, sector_active_slot, merge_parent_map
+                            )
+                            if len(merged_set) <= 1:
+                                rows = conn.execute(
+                                    "SELECT DISTINCT callsign FROM sector_callsigns_10min "
+                                    "WHERE date=? AND slot=? AND terminal_code=?",
+                                    (date_str, slot, code),
+                                ).fetchall()
+                            else:
+                                merge_list = list(merged_set)
+                                placeholders = ','.join(['?'] * len(merge_list))
+                                rows = conn.execute(
+                                    f"SELECT DISTINCT callsign FROM sector_callsigns_10min "
+                                    f"WHERE date=? AND slot=? "
+                                    f"AND terminal_code IN ({placeholders})",
+                                    [date_str, slot] + merge_list,
+                                ).fetchall()
+                            for r in rows:
+                                all_cs.add(r["callsign"])
+                        result[code][hour] += len(all_cs)
+                cur += timedelta(days=1)
 
-                    result[code][hour] += len(all_cs)
+        else:
+            # ═══════════════════════════════════════════════════════
+            # 路径 B：无 detail 表 → 从 sector_flights（北京时）转换到 UTC
+            # ═══════════════════════════════════════════════════════
+            # sector_flights.dof = 北京时日期，hour = 北京时小时
+            # 对于 UTC 日期 D：
+            #   UTC 小时 0-15  → 北京时 8-23  同日期 D
+            #   UTC 小时 16-23 → 北京时 0-7   次日 D+1
+            bj_end = (end + timedelta(days=1)).strftime("%Y-%m-%d")
+            raw_rows = conn.execute(
+                "SELECT dof, hour, terminal_code, callsign FROM sector_flights "
+                "WHERE dof >= ? AND dof <= ? AND terminal_code LIKE 'ZGJDTM%'",
+                (date_from, bj_end),
+            ).fetchall()
 
-            d += timedelta(days=1)
+            # 组织成 (bj_date, bj_hour, terminal_code) → set[callsign]
+            raw_flights: dict[tuple[str, int, str], set[str]] = {}
+            for r in raw_rows:
+                key = (r["dof"], r["hour"], r["terminal_code"])
+                if key not in raw_flights:
+                    raw_flights[key] = set()
+                raw_flights[key].add(r["callsign"])
+
+            while cur <= end:
+                date_str = cur.strftime("%Y-%m-%d")
+
+                # 构建语音活跃度
+                sector_active_slot = {
+                    c: [False] * 144 for c in sector_codes
+                }
+                has_any_voice = False
+                for code, ch_id in sector_channels.items():
+                    durations = self.load_voice_durations(date_str, ch_id)
+                    for s in range(144):
+                        if durations[s] > 0:
+                            sector_active_slot[code][s] = True
+                            has_any_voice = True
+                if not has_any_voice:
+                    for code in sector_codes:
+                        sector_active_slot[code] = [True] * 144
+
+                next_date = (cur + timedelta(days=1)).strftime("%Y-%m-%d")
+
+                for hour in range(24):
+                    slot_start = hour * 6
+                    # 确定对应的北京时日期和小时
+                    if hour < 16:
+                        bj_date = date_str  # 同天
+                        bj_hour = hour + 8   # 0→8, 1→9, ... 15→23
+                    else:
+                        bj_date = next_date  # 次日
+                        bj_hour = hour - 16  # 16→0, 17→1, ... 23→7
+
+                    for code in sector_codes:
+                        has_voice = any(
+                            sector_active_slot[code][slot_start + i]
+                            for i in range(6)
+                        )
+                        parent = merge_parent_map.get(code)
+                        if not has_voice and parent is not None:
+                            continue
+
+                        # 递归收集需要合并的子扇区
+                        merged = self._collect_merged_sectors_for_slot(
+                            code, slot_start, sector_active_slot, merge_parent_map
+                        )
+
+                        all_cs: set[str] = set()
+                        for mc in merged:
+                            cs = raw_flights.get((bj_date, bj_hour, mc), set())
+                            all_cs.update(cs)
+
+                        result[code][hour] += len(all_cs)
+
+                cur += timedelta(days=1)
 
         return result
 
