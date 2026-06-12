@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.54</title>
+<title>ATC AFTN WebHub v2.1.55</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.54</span>
+  <span class="badge">v2.1.55</span>
 </div>
 
 <div class="tabs">
@@ -2435,20 +2435,20 @@ function esc(s) {
 
   function _computeTrailDefaults(atd, ata, entryTime, exitTime) {
     // 返回: { fromTime: 'HH:MM', duration: number (分钟) }
-    // 进港航班：fromTime = 进区域时间 - 8分钟
+    // 进港航班：fromTime = 进区域时间 - 10分钟（多留余量），时长覆盖至落地后
     if (entryTime) {
       var entryDt = _parseUtcTimestamp(entryTime);
       if (entryDt) {
-        var fromDt = new Date(entryDt.getTime() - 5 * 60000);
+        var fromDt = new Date(entryDt.getTime() - 10 * 60000);
         var fromH = _pad2(fromDt.getUTCHours());
         var fromM = _pad2(fromDt.getUTCMinutes());
         var fromTime = fromH + ':' + fromM;
-        // 时长 = max(12, ATA - entryTime + 5)
-        var dur = 12;
+        // 时长 = max(15, ATA - entryTime + 15) 确保覆盖到落地后
+        var dur = 15;
         if (ata) {
           var ataDt = _parseUtcTimestamp(ata);
           if (ataDt) {
-            dur = Math.max(12, Math.round((ataDt - entryDt) / 60000) + 5);
+            dur = Math.max(15, Math.round((ataDt - entryDt) / 60000) + 15);
           }
         }
         return { fromTime: fromTime, duration: dur };
@@ -2511,6 +2511,7 @@ function esc(s) {
     _trailState.callsign = callsign;
     _trailState.dateStr = dateStr || '';
     _trailState.allPoints = [];
+    _trailState.ata = ata || '';
 
     // 设置智能默认值
     var defaults = _computeTrailDefaults(atd, ata, entryTime, exitTime);
@@ -2548,6 +2549,7 @@ function esc(s) {
 
     var callsign = _trailState.callsign;
     var dateStr = _trailState.dateStr;
+    var ata = _trailState.ata;
 
     // 并行请求：轨迹数据 + 地图背景 + 终端区配置
     var trailPromise = fetch('/api/flight_trail?callsign=' + encodeURIComponent(callsign) + '&date=' + encodeURIComponent(dateStr || ''))
@@ -2601,9 +2603,9 @@ function esc(s) {
         var elapsed = Date.now() - _startTime;
         var minShow = 500;
         if (elapsed < minShow) {
-          setTimeout(function() { _renderTrailResult(canvas, loading, callsign, allPoints, fromTime, durationStr); }, minShow - elapsed);
+          setTimeout(function() { _renderTrailResult(canvas, loading, callsign, allPoints, fromTime, durationStr, ata); }, minShow - elapsed);
         } else {
-          _renderTrailResult(canvas, loading, callsign, allPoints, fromTime, durationStr);
+          _renderTrailResult(canvas, loading, callsign, allPoints, fromTime, durationStr, ata);
         }
       })
       .catch(function(err) {
@@ -2630,7 +2632,7 @@ function esc(s) {
       });
   }
 
-  function _renderTrailResult(canvas, loading, callsign, allPoints, fromTime, durationStr) {
+  function _renderTrailResult(canvas, loading, callsign, allPoints, fromTime, durationStr, ata) {
     loading.style.display = 'none';
     _trailLoading = false;
 
@@ -2667,7 +2669,7 @@ function esc(s) {
     }
 
     _trailMapElements = _trailState.mapElements;
-    drawFlightTrail(canvas, callsign, filtered, _trailState.terminalConfig);
+    drawFlightTrail(canvas, callsign, filtered, _trailState.terminalConfig, ata);
   }
 
   function closeTrailPopup() {
@@ -2716,7 +2718,7 @@ function esc(s) {
     ctx.fillText(msg, w/2, h/2);
   }
 
-  function drawFlightTrail(canvas, callsign, points, terminalConfig) {
+  function drawFlightTrail(canvas, callsign, points, terminalConfig, ata) {
     var container = canvas.parentElement;
     var w = container.clientWidth;
     var h = container.clientHeight;
@@ -2935,6 +2937,39 @@ function esc(s) {
     }
     if (exitPt) {
       drawTermMarker(exitPt, '', '#ef4444');  // 红色
+    }
+
+    // ── 在最后一个轨迹点旁标上落地时间（进港航班） ──
+    if (isArrival && ata && pixelPts.length > 0) {
+      var lastPt = pixelPts[pixelPts.length - 1];
+      var ataTime = (ata || '').slice(11, 19);
+      if (ataTime) {
+        ctx.save();
+        // 外框背景
+        var labelText = 'ATA ' + ataTime;
+        ctx.font = 'bold 11px monospace';
+        var tw = ctx.measureText(labelText).width;
+        var lx = lastPt.x - tw / 2 - 4;
+        var ly = lastPt.y - 20;
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(lx - 2, ly - 1, tw + 12, 16);
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(lx - 2, ly - 1, tw + 12, 16);
+        // 标签文字
+        ctx.fillStyle = '#fbbf24';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(labelText, lastPt.x, lastPt.y - 5);
+        // 小引线指向轨迹点
+        ctx.beginPath();
+        ctx.moveTo(lastPt.x, lastPt.y - 5);
+        ctx.lineTo(lastPt.x, lastPt.y);
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+        ctx.restore();
+      }
     }
 
     // ── 终端区信息栏 ──
