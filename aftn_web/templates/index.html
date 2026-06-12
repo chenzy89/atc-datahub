@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.57</title>
+<title>ATC AFTN WebHub v2.1.58</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.57</span>
+  <span class="badge">v2.1.58</span>
 </div>
 
 <div class="tabs">
@@ -2903,6 +2903,18 @@ function esc(s) {
           }
         }
         prevInTerm = inTerm;
+      }
+    }
+
+    // ── 进港航班若无出区域检测点，用最后一个轨迹点代替 ──
+    if (isArrival && !exitPt && points.length > 0) {
+      for (var ei = points.length - 1; ei >= 0; ei--) {
+        var eLt = parseFloat(points[ei].lt);
+        var eLn = parseFloat(points[ei].ln);
+        if (!isNaN(eLt) && !isNaN(eLn)) {
+          exitPt = {lat: eLt, lon: eLn, ts: points[ei].ts, alt: parseFloat(points[ei].fl) || 0};
+          break;
+        }
       }
     }
 
