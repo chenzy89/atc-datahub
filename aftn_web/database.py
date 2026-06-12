@@ -1033,16 +1033,19 @@ class Database:
         sector_channels: dict[str, int],
         sector_codes: list[str],
     ) -> dict[str, list[int]]:
-        """查询考虑扇区合并的24小时架次分布（北京时间）
+        """查询考虑扇区合并的24小时架次分布（UTC）
+
+        使用 sector_callsigns_10min（UTC）+ voice_duration（UTC）直接计算，
+        不依赖北京时的 sector_flights 表。
 
         规则：
-        - 扇区某小时无通话（6个10分钟slot都无语音），且该扇区有父扇区
-          → 该小时架次归0（合并到父扇区）
-        - 扇区有通话时，递归收集所有无通话子扇区的航班，合并去重
+        - 扇区某10分钟slot无通话且该扇区有父扇区 → 该slot架次归0（归入父扇区）
+        - 递归收集所有无通话子链，合并去重
+        - 每小时由6个slot的callsign取并集
 
         merge_parent_map: {子终端代码: 父终端代码}
         sector_channels:  {终端代码: 通道号}
-        sector_codes:     所有终端代码列表（用于确定返回顺序）
+        sector_codes:     所有终端代码列表
 
         返回 {终端代码: [24元数组]} 结构
         """
@@ -1050,87 +1053,76 @@ class Database:
         conn = self._get_conn()
 
         try:
-            d = datetime.strptime(date_from, "%Y%m%d").date()
-            end = datetime.strptime(date_to, "%Y%m%d").date()
+            d = datetime.strptime(date_from, "%Y-%m-%d").date()
+            end = datetime.strptime(date_to, "%Y-%m-%d").date()
         except ValueError:
             return result
 
         while d <= end:
-            beijing_date = d.strftime("%Y%m%d")
-            prev_utc = (d - timedelta(days=1)).strftime("%Y%m%d")
-            curr_utc = d.strftime("%Y%m%d")
+            date_str = d.strftime("%Y-%m-%d")
 
-            # ── 1. 加载语音活跃度（每个扇区每个北京时间小时是否有通话） ──
-            # 对于北京时日期 D：
-            #   北京时小时 0-7  → UTC D-1  slots 96-143
-            #   北京时小时 8-23 → UTC D     slots 0-95
-            sector_active_hour: dict[str, list[bool]] = {
-                c: [False] * 24 for c in sector_codes
+            # ── 1. 加载语音活跃度：{terminal_code: [144 bool]} ──
+            sector_active_slot: dict[str, list[bool]] = {
+                c: [False] * 144 for c in sector_codes
             }
             has_any_voice = False
 
             for code, ch_id in sector_channels.items():
-                prev_durs = self.load_voice_durations(prev_utc, ch_id)
-                curr_durs = self.load_voice_durations(curr_utc, ch_id)
+                durations = self.load_voice_durations(date_str, ch_id)
+                for s in range(144):
+                    if durations[s] > 0:
+                        sector_active_slot[code][s] = True
+                        has_any_voice = True
 
-                # 北京时小时 0-7（UTC D-1 slots 96-143）
-                for bj_hour in range(8):
-                    base = (bj_hour + 16) * 6  # 96, 102, 108, ...
-                    for i in range(6):
-                        if prev_durs[base + i] > 0:
-                            sector_active_hour[code][bj_hour] = True
-                            has_any_voice = True
-                            break
-
-                # 北京时小时 8-23（UTC D slots 0-95）
-                for bj_hour in range(8, 24):
-                    base = (bj_hour - 8) * 6  # 0, 6, 12, ...
-                    for i in range(6):
-                        if curr_durs[base + i] > 0:
-                            sector_active_hour[code][bj_hour] = True
-                            has_any_voice = True
-                            break
-
-            # 没有任何语音数据 → 无法判断关闭状态，全部视为活跃
+            # 无任何语音数据 → 全部视为活跃
             if not has_any_voice:
                 for code in sector_codes:
-                    sector_active_hour[code] = [True] * 24
+                    sector_active_slot[code] = [True] * 144
 
-            # ── 2. 获取当日原始飞行架次（callsign 级别） ──
-            raw_rows = conn.execute(
-                "SELECT terminal_code, hour, callsign FROM sector_flights "
-                "WHERE dof=? AND terminal_code LIKE 'ZGJDTM%'",
-                (beijing_date,),
-            ).fetchall()
+            # ── 2. 对每个U T C小时，按6个slot计算合并架次 ──
+            for hour in range(24):
+                slot_start = hour * 6
 
-            raw_flights: dict[tuple[str, int], set[str]] = {}
-            for r in raw_rows:
-                key = (r["terminal_code"], r["hour"])
-                if key not in raw_flights:
-                    raw_flights[key] = set()
-                raw_flights[key].add(r["callsign"])
-
-            # ── 3. 对每个扇区、每个小时应用合并逻辑 ──
-            for code in sector_codes:
-                for hour in range(24):
+                # 对于每个扇区，收集该小时所有6个slot中去重的callsign
+                for code in sector_codes:
+                    # 检查本扇区该小时是否有通话（任意slot有语音就算活跃）
+                    has_voice = any(
+                        sector_active_slot[code][slot_start + i]
+                        for i in range(6)
+                    )
                     parent = merge_parent_map.get(code)
-                    active = sector_active_hour[code][hour]
 
-                    if not active and parent is not None:
-                        # 本扇区无通话且有父扇区 → 该小时架次为0（归入父扇区计算）
-                        result[code][hour] += 0
+                    if not has_voice and parent is not None:
+                        # 本扇区无通话且有父扇区 → 该小时架次为0
                         continue
 
-                    # 递归收集需要合并到此扇区的子扇区（无通话的子链）
-                    merged = self._collect_merged_sectors_hourly(
-                        code, hour, sector_active_hour, merge_parent_map
-                    )
-
-                    # 去重合并：收集合并集合中所有扇区的 callsign
+                    # 收集该小时6个slot中，所有需要合并到此扇区的callsign
                     all_cs: set[str] = set()
-                    for mc in merged:
-                        cs = raw_flights.get((mc, hour), set())
-                        all_cs.update(cs)
+                    for i in range(6):
+                        slot = slot_start + i
+                        # 构建当前slot需要合并的扇区集合
+                        merged_set = self._collect_merged_sectors_for_slot(
+                            code, slot, sector_active_slot, merge_parent_map
+                        )
+                        if len(merged_set) <= 1:
+                            # 仅自身，从 sector_callsigns_10min 查
+                            rows = conn.execute(
+                                "SELECT DISTINCT callsign FROM sector_callsigns_10min "
+                                "WHERE date=? AND slot=? AND terminal_code=?",
+                                (date_str, slot, code),
+                            ).fetchall()
+                        else:
+                            # 查所有合并扇区的 callsign 并集
+                            merge_list = list(merged_set)
+                            placeholders = ','.join(['?'] * len(merge_list))
+                            rows = conn.execute(
+                                f"SELECT DISTINCT callsign FROM sector_callsigns_10min "
+                                f"WHERE date=? AND slot=? "
+                                f"AND terminal_code IN ({placeholders})",
+                                [date_str, slot] + merge_list,
+                            ).fetchall()
+                        for r in rows:
+                            all_cs.add(r["callsign"])
 
                     result[code][hour] += len(all_cs)
 
@@ -1138,22 +1130,22 @@ class Database:
 
         return result
 
-    def _collect_merged_sectors_hourly(
-        self, code: str, hour: int,
-        active_hour: dict[str, list[bool]],
+    def _collect_merged_sectors_for_slot(
+        self, code: str, slot: int,
+        active_slot: dict[str, list[bool]],
         parent_map: dict[str, str],
     ) -> set[str]:
-        """递归收集在指定小时需要合并到 code 的所有扇区（含自身）
+        """递归收集在指定slot需要合并到code的所有扇区（含自身）
 
-        如果一个子扇区在该小时无通话，递归收集其所有无通话的子扇区
+        如果一个子扇区在该slot无通话，递归收集其所有无通话的子扇区链
         """
         codes: set[str] = set()
         codes.add(code)
         children = [c for c, p in parent_map.items() if p == code]
         for child in children:
-            if not active_hour[child][hour]:
-                sub = self._collect_merged_sectors_hourly(
-                    child, hour, active_hour, parent_map
+            if not active_slot[child][slot]:
+                sub = self._collect_merged_sectors_for_slot(
+                    child, slot, active_slot, parent_map
                 )
                 codes.update(sub)
         return codes

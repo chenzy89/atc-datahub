@@ -598,8 +598,8 @@ canvas#radarMap {
       </label>
     </div>
     <div class="search-row" style="align-items:end;">
-      <label><span>起始日期</span><input id="st-df" type="date"></label>
-      <label><span>截止日期</span><input id="st-dt" type="date"></label>
+      <label><span>起始日期 (UTC)</span><input id="st-df" type="date"></label>
+      <label><span>截止日期 (UTC)</span><input id="st-dt" type="date"></label>
       <button class="btn btn-primary" onclick="generateStats()" style="margin-left:8px;">🔍 查询</button>
       <button class="btn btn-secondary" onclick="exportStatsXlsx()" style="margin-left:8px;">导出</button>
       <span id="st-info" class="text-muted" style="margin-left:8px;"></span>
@@ -611,7 +611,7 @@ canvas#radarMap {
       <div id="st-summary" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;"></div>
 
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow-x:auto;margin-bottom:16px;">
-        <h3 style="font-size:14px;font-weight:600;margin:12px 12px 8px;color:var(--text-primary);">机场24小时流量分布（架次）</h3>
+        <h3 style="font-size:14px;font-weight:600;margin:12px 12px 8px;color:var(--text-primary);">机场24小时流量分布（架次）(UTC)</h3>
         <table id="st-hourly-tbl" style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px;">
           <thead><tr id="st-hourly-head"></tr></thead>
           <tbody id="st-hourly-body"></tbody>
@@ -619,7 +619,7 @@ canvas#radarMap {
       </div>
 
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow-x:auto;margin-bottom:16px;">
-        <h3 style="font-size:14px;font-weight:600;margin:12px 12px 8px;color:var(--text-primary);">扇区24小时流量分布（架次）</h3>
+        <h3 style="font-size:14px;font-weight:600;margin:12px 12px 8px;color:var(--text-primary);">扇区24小时流量分布（架次）(UTC)</h3>
         <table id="st-sector-tbl" style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px;">
           <thead><tr id="st-sector-head"></tr></thead>
           <tbody id="st-sector-body"></tbody>
