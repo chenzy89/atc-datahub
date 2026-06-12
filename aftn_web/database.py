@@ -6,7 +6,7 @@ import logging
 import sqlite3
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1026,6 +1026,137 @@ class Database:
                 result[tc] = [0] * 24
             result[tc][r["hour"]] = r["cnt"]
         return result
+
+    def query_merged_sector_traffic(
+        self, date_from: str, date_to: str,
+        merge_parent_map: dict[str, str],
+        sector_channels: dict[str, int],
+        sector_codes: list[str],
+    ) -> dict[str, list[int]]:
+        """查询考虑扇区合并的24小时架次分布（北京时间）
+
+        规则：
+        - 扇区某小时无通话（6个10分钟slot都无语音），且该扇区有父扇区
+          → 该小时架次归0（合并到父扇区）
+        - 扇区有通话时，递归收集所有无通话子扇区的航班，合并去重
+
+        merge_parent_map: {子终端代码: 父终端代码}
+        sector_channels:  {终端代码: 通道号}
+        sector_codes:     所有终端代码列表（用于确定返回顺序）
+
+        返回 {终端代码: [24元数组]} 结构
+        """
+        result: dict[str, list[int]] = {c: [0] * 24 for c in sector_codes}
+        conn = self._get_conn()
+
+        try:
+            d = datetime.strptime(date_from, "%Y%m%d").date()
+            end = datetime.strptime(date_to, "%Y%m%d").date()
+        except ValueError:
+            return result
+
+        while d <= end:
+            beijing_date = d.strftime("%Y%m%d")
+            prev_utc = (d - timedelta(days=1)).strftime("%Y%m%d")
+            curr_utc = d.strftime("%Y%m%d")
+
+            # ── 1. 加载语音活跃度（每个扇区每个北京时间小时是否有通话） ──
+            # 对于北京时日期 D：
+            #   北京时小时 0-7  → UTC D-1  slots 96-143
+            #   北京时小时 8-23 → UTC D     slots 0-95
+            sector_active_hour: dict[str, list[bool]] = {
+                c: [False] * 24 for c in sector_codes
+            }
+            has_any_voice = False
+
+            for code, ch_id in sector_channels.items():
+                prev_durs = self.load_voice_durations(prev_utc, ch_id)
+                curr_durs = self.load_voice_durations(curr_utc, ch_id)
+
+                # 北京时小时 0-7（UTC D-1 slots 96-143）
+                for bj_hour in range(8):
+                    base = (bj_hour + 16) * 6  # 96, 102, 108, ...
+                    for i in range(6):
+                        if prev_durs[base + i] > 0:
+                            sector_active_hour[code][bj_hour] = True
+                            has_any_voice = True
+                            break
+
+                # 北京时小时 8-23（UTC D slots 0-95）
+                for bj_hour in range(8, 24):
+                    base = (bj_hour - 8) * 6  # 0, 6, 12, ...
+                    for i in range(6):
+                        if curr_durs[base + i] > 0:
+                            sector_active_hour[code][bj_hour] = True
+                            has_any_voice = True
+                            break
+
+            # 没有任何语音数据 → 无法判断关闭状态，全部视为活跃
+            if not has_any_voice:
+                for code in sector_codes:
+                    sector_active_hour[code] = [True] * 24
+
+            # ── 2. 获取当日原始飞行架次（callsign 级别） ──
+            raw_rows = conn.execute(
+                "SELECT terminal_code, hour, callsign FROM sector_flights "
+                "WHERE dof=? AND terminal_code LIKE 'ZGJDTM%'",
+                (beijing_date,),
+            ).fetchall()
+
+            raw_flights: dict[tuple[str, int], set[str]] = {}
+            for r in raw_rows:
+                key = (r["terminal_code"], r["hour"])
+                if key not in raw_flights:
+                    raw_flights[key] = set()
+                raw_flights[key].add(r["callsign"])
+
+            # ── 3. 对每个扇区、每个小时应用合并逻辑 ──
+            for code in sector_codes:
+                for hour in range(24):
+                    parent = merge_parent_map.get(code)
+                    active = sector_active_hour[code][hour]
+
+                    if not active and parent is not None:
+                        # 本扇区无通话且有父扇区 → 该小时架次为0（归入父扇区计算）
+                        result[code][hour] += 0
+                        continue
+
+                    # 递归收集需要合并到此扇区的子扇区（无通话的子链）
+                    merged = self._collect_merged_sectors_hourly(
+                        code, hour, sector_active_hour, merge_parent_map
+                    )
+
+                    # 去重合并：收集合并集合中所有扇区的 callsign
+                    all_cs: set[str] = set()
+                    for mc in merged:
+                        cs = raw_flights.get((mc, hour), set())
+                        all_cs.update(cs)
+
+                    result[code][hour] += len(all_cs)
+
+            d += timedelta(days=1)
+
+        return result
+
+    def _collect_merged_sectors_hourly(
+        self, code: str, hour: int,
+        active_hour: dict[str, list[bool]],
+        parent_map: dict[str, str],
+    ) -> set[str]:
+        """递归收集在指定小时需要合并到 code 的所有扇区（含自身）
+
+        如果一个子扇区在该小时无通话，递归收集其所有无通话的子扇区
+        """
+        codes: set[str] = set()
+        codes.add(code)
+        children = [c for c, p in parent_map.items() if p == code]
+        for child in children:
+            if not active_hour[child][hour]:
+                sub = self._collect_merged_sectors_hourly(
+                    child, hour, active_hour, parent_map
+                )
+                codes.update(sub)
+        return codes
 
     def save_voice_duration(self, date_str: str, channel: int,
                              slot: int, duration: float) -> None:
