@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.55</title>
+<title>ATC AFTN WebHub v2.1.56</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.55</span>
+  <span class="badge">v2.1.56</span>
 </div>
 
 <div class="tabs">
@@ -2439,7 +2439,7 @@ function esc(s) {
     if (entryTime) {
       var entryDt = _parseUtcTimestamp(entryTime);
       if (entryDt) {
-        var fromDt = new Date(entryDt.getTime() - 10 * 60000);
+        var fromDt = new Date(entryDt.getTime() - 5 * 60000);
         var fromH = _pad2(fromDt.getUTCHours());
         var fromM = _pad2(fromDt.getUTCMinutes());
         var fromTime = fromH + ':' + fromM;
@@ -2933,43 +2933,10 @@ function esc(s) {
     }
 
     if (entryPt) {
-      drawTermMarker(entryPt, '', '#22c55e');  // 绿色
+      drawTermMarker(entryPt, '', '#ef4444');  // 红色（进区域时间）
     }
     if (exitPt) {
       drawTermMarker(exitPt, '', '#ef4444');  // 红色
-    }
-
-    // ── 在最后一个轨迹点旁标上落地时间（进港航班） ──
-    if (isArrival && ata && pixelPts.length > 0) {
-      var lastPt = pixelPts[pixelPts.length - 1];
-      var ataTime = (ata || '').slice(11, 19);
-      if (ataTime) {
-        ctx.save();
-        // 外框背景
-        var labelText = 'ATA ' + ataTime;
-        ctx.font = 'bold 11px monospace';
-        var tw = ctx.measureText(labelText).width;
-        var lx = lastPt.x - tw / 2 - 4;
-        var ly = lastPt.y - 20;
-        ctx.fillStyle = 'rgba(0,0,0,0.7)';
-        ctx.fillRect(lx - 2, ly - 1, tw + 12, 16);
-        ctx.strokeStyle = '#fbbf24';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(lx - 2, ly - 1, tw + 12, 16);
-        // 标签文字
-        ctx.fillStyle = '#fbbf24';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(labelText, lastPt.x, lastPt.y - 5);
-        // 小引线指向轨迹点
-        ctx.beginPath();
-        ctx.moveTo(lastPt.x, lastPt.y - 5);
-        ctx.lineTo(lastPt.x, lastPt.y);
-        ctx.strokeStyle = '#fbbf24';
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
-        ctx.restore();
-      }
     }
 
     // ── 终端区信息栏 ──
