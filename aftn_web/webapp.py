@@ -170,7 +170,9 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     @app.route("/api/flight_trail")
     def api_flight_trail():
-        """返回指定航班号当天的全部历史航迹点（用于飞行计划页的轨迹图）"""
+        """返回指定航班号当天的全部历史航迹点（用于飞行计划页的轨迹图）
+        对于跨午夜航班，自动扩展查询到次日（ATA 落在次日的情况）。
+        """
         if radar_history_store is None:
             return jsonify([])
         callsign = _req_str("callsign")
@@ -179,9 +181,38 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         date_str = _req_str("date") or datetime.utcnow().strftime("%Y-%m-%d")
         ts_from = f"{date_str}T00:00:00.000Z"
         ts_to = f"{date_str}T23:59:59.000Z"
+
+        # 查询主日期
         pts = radar_history_store.query(ts_from, ts_to, callsign)
-        pts.sort(key=lambda p: p.get("ts", ""))
-        return jsonify(pts)
+
+        # 检查是否需要扩展查询到次日（跨午夜航班）
+        # 如果最后航迹点在 23:50 之后，自动查询次日 0-2 小时的数据
+        pts_sorted = sorted(pts, key=lambda p: p.get("ts", ""))
+        extend_to_next = False
+        if pts_sorted:
+            last_ts = pts_sorted[-1].get("ts", "")
+            if len(last_ts) >= 19:
+                try:
+                    last_h = int(last_ts[11:13])
+                    last_m = int(last_ts[14:16])
+                    if last_h == 23 and last_m >= 50:
+                        extend_to_next = True
+                except (ValueError, IndexError):
+                    pass
+
+        if extend_to_next:
+            try:
+                dt = datetime.strptime(date_str, "%Y-%m-%d") + timedelta(days=1)
+                next_date = dt.strftime("%Y-%m-%d")
+                next_from = f"{next_date}T00:00:00.000Z"
+                next_to = f"{next_date}T01:00:00.000Z"  # 查凌晨 1 小时足矣
+                next_pts = radar_history_store.query(next_from, next_to, callsign)
+                pts_sorted.extend(next_pts)
+                pts_sorted.sort(key=lambda p: p.get("ts", ""))
+            except Exception:
+                pass
+
+        return jsonify(pts_sorted)
 
     @app.route("/api/config/terminal_airports")
     def api_terminal_airports():

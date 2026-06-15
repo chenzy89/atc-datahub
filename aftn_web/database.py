@@ -784,6 +784,7 @@ class Database:
 
         优先匹配：callsign + adep + adest + 今日 DOF
         降级匹配：callsign + 今日 DOF
+        跨午夜回退：匹配昨日 DOF（航班落地在次日 UTC 凌晨）
         """
         if not callsign:
             return 0
@@ -793,20 +794,33 @@ class Database:
             try:
                 conn = self._get_conn()
                 match = None
-                if adep and adest:
-                    match = conn.execute(
-                        "SELECT id FROM flight_plans "
-                        "WHERE callsign=? AND adep=? AND adest=? AND dof=? "
-                        "ORDER BY updated_at DESC LIMIT 1",
-                        (callsign, adep, adest, today_str),
-                    ).fetchone()
-                if not match:
-                    match = conn.execute(
-                        "SELECT id FROM flight_plans "
-                        "WHERE callsign=? AND dof=? "
-                        "ORDER BY updated_at DESC LIMIT 1",
-                        (callsign, today_str),
-                    ).fetchone()
+                # 尝试匹配的 DOF 列表：今日 → 昨日（跨午夜回退）
+                dof_candidates = [today_str]
+                try:
+                    from datetime import timedelta as _td
+                    yesterday_str = (datetime.utcnow() - _td(days=1)).strftime("%Y-%m-%d")
+                    dof_candidates.append(yesterday_str)
+                except Exception:
+                    pass
+
+                for dof_candidate in dof_candidates:
+                    if adep and adest:
+                        match = conn.execute(
+                            "SELECT id FROM flight_plans "
+                            "WHERE callsign=? AND adep=? AND adest=? AND dof=? "
+                            "ORDER BY updated_at DESC LIMIT 1",
+                            (callsign, adep, adest, dof_candidate),
+                        ).fetchone()
+                    if not match:
+                        match = conn.execute(
+                            "SELECT id FROM flight_plans "
+                            "WHERE callsign=? AND dof=? "
+                            "ORDER BY updated_at DESC LIMIT 1",
+                            (callsign, dof_candidate),
+                        ).fetchone()
+                    if match:
+                        break
+
                 if not match:
                     return 0
 

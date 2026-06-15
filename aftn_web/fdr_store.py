@@ -297,11 +297,20 @@ class FDRStore:
         for rec in candidates:
             if rec.terminal_entry_ts and not rec.terminal_exit_ts:
                 try:
-                    plan = db.find_flight_plan(
-                        rec.callsign, rec.adep, rec.adest,
-                        dof=datetime.utcnow().date(),
-                        exclude_cancelled=True,
-                    )
+                    # 先试今日 DOF，再试昨日 DOF（跨午夜航班）
+                    from datetime import timedelta as _td
+                    _now = datetime.utcnow()
+                    _today = _now.date()
+                    _yesterday = (_now - _td(days=1)).date()
+                    plan = None
+                    for _dof in (_today, _yesterday):
+                        plan = db.find_flight_plan(
+                            rec.callsign, rec.adep, rec.adest,
+                            dof=_dof,
+                            exclude_cancelled=True,
+                        )
+                        if plan and plan.get("ata"):
+                            break
                     if plan and plan.get("ata"):
                         rec.terminal_exit_ts = plan["ata"]
                         logger.info(
