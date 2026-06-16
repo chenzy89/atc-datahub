@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC AFTN WebHub v2.1.59</title>
+<title>ATC AFTN WebHub v2.1.60</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.59</span>
+  <span class="badge">v2.1.60</span>
 </div>
 
 <div class="tabs">
@@ -2849,11 +2849,25 @@ function esc(s) {
     if (termVertices.length > 2) {
       // 第一遍：检测进出终端点（落地后停止检测）
       var prevInTerm1 = false;
+      var prevTs1 = null;
       for (var ti = 0; ti < points.length; ti++) {
         var tlt = parseFloat(points[ti].lt);
         var tln = parseFloat(points[ti].ln);
         var tfl = parseFloat(points[ti].fl) || 0;
         if (isNaN(tlt) || isNaN(tln)) continue;
+
+        // 大时间间隙检测：相邻点间隔超过5分钟视为新航段，重置状态
+        // 防止不同飞行周期的两段轨迹（如上一航班进近+本航班进近）互相污染
+        if (prevTs1 && points[ti].ts) {
+          var gap = new Date(points[ti].ts) - new Date(prevTs1);
+          if (gap > 300000) {  // 5 分钟
+            prevInTerm1 = false;
+            entryPt = null;
+            exitPt = null;
+            landed = false;
+          }
+        }
+        prevTs1 = points[ti].ts;
 
         // 一旦高度低于终端区底部，标记为已落地，后续不再检测
         if (tfl > 0 && tfl < termFloor) {
@@ -2878,11 +2892,23 @@ function esc(s) {
       landed = false;
       var termEntryTs = null;
       var prevInTerm = false;
+      var prevTs2 = null;
       for (var ti = 0; ti < points.length; ti++) {
         var tlt = parseFloat(points[ti].lt);
         var tln = parseFloat(points[ti].ln);
         var tfl = parseFloat(points[ti].fl) || 0;
         if (isNaN(tlt) || isNaN(tln)) continue;
+
+        // 大时间间隙：重置飞行时间累加
+        if (prevTs2 && points[ti].ts) {
+          var gap = new Date(points[ti].ts) - new Date(prevTs2);
+          if (gap > 300000) {
+            termDuration = 0;
+            termEntryTs = null;
+            landed = false;
+          }
+        }
+        prevTs2 = points[ti].ts;
 
         if (tfl > 0 && tfl < termFloor) {
           landed = true;
