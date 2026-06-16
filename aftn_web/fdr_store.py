@@ -362,8 +362,8 @@ class FDRStore:
                     utc_iso, now,
                 )
 
-            # ── 出港离区检测（仅在航迹保存启用且未保存过的航班） ──
-            if self._track_enabled and rec.has_departed:
+            # ── 出港离区检测（仅在航迹保存启用时） ──
+            if self._track_enabled and (rec.adep or rec.adest):
                 # 已有起降地信息且配置启用时才检测
                 in_area = self._point_in_save_area(lat, lon)
                 if rec._was_in_save_area and not in_area and not rec._area_departed:
@@ -384,11 +384,6 @@ class FDRStore:
             # 有有效位置且高度 > 0 时才检查
             if lat and lon and new_fl > 0:
                 rec.check_terminal_transition(lat, lon, new_fl, now, utc_iso)
-
-    @property
-    def has_departed(self) -> bool:
-        """检查是否有出港相关属性"""
-        return bool(self._track_airports)
 
     def _save_track(self, db: Any, rec: FDRRecord, track_type: str) -> bool:
         """保存航迹到数据库
