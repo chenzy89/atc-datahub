@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import threading
 import time
@@ -109,6 +110,10 @@ class FDRRecord:
     # ── 扇区跟踪 ──
     sector_index: int = 0
     _sector_recorded: set[str] = field(default_factory=set)  # 已记录的扇区代码
+
+    # ── 移交点（雷达探测） ──────────────────────────────
+    handover_pt: str = ""                                     # 雷达探测的移交点（TransPt 匹配）
+    _handover_pt_updated: bool = False                        # 移交点是否已写回 DB
 
     # ── 航迹保存 ──────────────────────────────────────────
     _full_track: list[dict] = field(default_factory=list)     # 全量航迹 [{ts,lt,ln,fl,hd,sp,...}]
@@ -243,6 +248,115 @@ class FDRStore:
         except Exception as exc:
             logger.warning("SectorInfo.txt 加载失败: %s", exc)
 
+    @classmethod
+    def load_trans_pt_files(cls) -> None:
+        """加载进/出港移交点坐标文件（TransPt_inbound.txt / TransPt_outbound.txt）"""
+        base = Path("/home/share/atc_datahub/config")
+        files = {
+            "inbound": base / "TransPt_inbound.txt",
+            "outbound": base / "TransPt_outbound.txt",
+        }
+        for direction, path in files.items():
+            result: dict[str, tuple[float, float]] = {}
+            try:
+                if not path.exists():
+                    logger.debug("TransPt_%s.txt 不存在: %s", direction, path)
+                    continue
+                for line in path.read_text("utf-8").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split()
+                    if len(parts) < 3:
+                        continue
+                    name = parts[0].strip().upper()
+                    lat_str = parts[1].strip()
+                    lon_str = parts[2].strip()
+                    lat = cls._dms_to_decimal(lat_str)
+                    lon = cls._dms_to_decimal(lon_str)
+                    if lat is not None and lon is not None:
+                        result[name] = (lat, lon)
+                if direction == "inbound":
+                    cls._INBOUND_PTS = result
+                else:
+                    cls._OUTBOUND_PTS = result
+                if result:
+                    logger.info(
+                        "TransPt_%s.txt 已加载: %s", direction,
+                        list(result.keys()),
+                    )
+            except Exception as exc:
+                logger.warning("TransPt_%s.txt 加载失败: %s", direction, exc)
+
+    # 移交点坐标缓存（类变量）
+    _INBOUND_PTS: dict[str, tuple[float, float]] = {}  # 进港移交点 {名称: (lat, lon)}
+    _OUTBOUND_PTS: dict[str, tuple[float, float]] = {}  # 出港移交点
+    _TRANS_PT_LOADED = False
+
+    @staticmethod
+    def _dms_to_decimal(dms: str) -> float | None:
+        """将 DMS 格式 "22,29,24N" 转为十进制度数"""
+        try:
+            dms = dms.strip()
+            if not dms:
+                return None
+            direction = dms[-1]
+            nums = dms[:-1].strip()
+            parts = nums.split(",")
+            if len(parts) != 3:
+                return None
+            d = float(parts[0])
+            m = float(parts[1])
+            s = float(parts[2])
+            decimal = d + m / 60.0 + s / 3600.0
+            if direction in ("S", "W"):
+                decimal = -decimal
+            return decimal
+        except (ValueError, IndexError, TypeError):
+            return None
+
+    @staticmethod
+    def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """计算两点间的大圆距离（千米）"""
+        R = 6371.0
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = (math.sin(dlat / 2) ** 2 +
+             math.cos(math.radians(lat1)) *
+             math.cos(math.radians(lat2)) *
+             math.sin(dlon / 2) ** 2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
+
+    def _detect_handover_pt(self, lat: float, lon: float, adep: str, adest: str,
+                             airports: set[str]) -> str:
+        """根据当前位置和航班类型，检测最近的移交点（<10km 即采用）
+
+        进港航班（adest 在 airports 中）→ 对照 TransPt_inbound.txt
+        出港航班（adep 在 airports 中）→ 对照 TransPt_outbound.txt
+        返回匹配的移交点名称（大写），未匹配返回空字符串
+        """
+        if not lat or not lon:
+            return ""
+        if adest.upper() in airports:
+            pts = self._INBOUND_PTS
+        elif adep.upper() in airports:
+            pts = self._OUTBOUND_PTS
+        else:
+            return ""
+
+        for name, (pt_lat, pt_lon) in pts.items():
+            dist = self._haversine_km(lat, lon, pt_lat, pt_lon)
+            if dist < 10.0:
+                logger.debug(
+                    "[HANDOVER] %s 距 %s %.1fkm (<10km)，采用移交点 %s",
+                    self._callsign_hint, name, dist, name,
+                )
+                return name
+        return ""
+
+    _callsign_hint = ""  # 临时调试用
+
     def __init__(self, track_config: dict | None = None) -> None:
         self._lock = threading.Lock()
         self._records: dict[str, FDRRecord] = {}
@@ -251,6 +365,11 @@ class FDRStore:
         # 待写入 DB 的扇区记录（callsign+dof+sector_code → hour）
         self._pending_sectors: dict[tuple[str, str, str], int] = {}
         self.load_sector_map()
+
+        # ── 移交点坐标加载（类变量，仅加载一次） ──────────
+        if not FDRStore._TRANS_PT_LOADED:
+            FDRStore._TRANS_PT_LOADED = True
+            self.load_trans_pt_files()
 
         # ── 航迹保存配置 ──────────────────────────────────
         self._track_enabled = False
@@ -361,6 +480,22 @@ class FDRStore:
                     rec.adep, rec.adest,
                     utc_iso, now,
                 )
+
+            # ── 移交点检测（雷达位置 vs TransPt 文件） ──
+            # 只在有有效位置且有起降地信息时才检测
+            if lat and lon and (rec.adep or rec.adest):
+                self._callsign_hint = rec.callsign
+                detected_hp = self._detect_handover_pt(
+                    lat, lon, rec.adep, rec.adest,
+                    self._track_airports,
+                )
+                if detected_hp and detected_hp != rec.handover_pt:
+                    rec.handover_pt = detected_hp
+                    rec._handover_pt_updated = False
+                    logger.info(
+                        "[HANDOVER] %s 雷达探测到移交点: %s (航段 %s->%s)",
+                        rec.callsign, detected_hp, rec.adep, rec.adest,
+                    )
 
             # ── 出港离区检测（仅在航迹保存启用时） ──
             if self._track_enabled and (rec.adep or rec.adest):
@@ -493,17 +628,20 @@ class FDRStore:
 
         for rec in candidates:
             try:
-                # 3a. 跑道/程序更新
-                if rec.runway or rec.flight_procedure:
+                # 3a. 跑道/程序/移交点更新
+                if rec.runway or rec.flight_procedure or (rec.handover_pt and not rec._handover_pt_updated):
                     affected = db.update_radar_data(
                         rec.callsign,
                         rec.runway,
                         rec.flight_procedure,
                         adep=rec.adep,
                         adest=rec.adest,
+                        handover_pt=rec.handover_pt,
                     )
                     if affected > 0:
                         radar_updated += 1
+                        if rec.handover_pt:
+                            rec._handover_pt_updated = True
 
                 # 3b. 终端区数据更新
                 if rec.terminal_entry_ts or rec.terminal_exit_ts:

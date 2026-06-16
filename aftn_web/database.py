@@ -757,13 +757,16 @@ class Database:
         return raw
 
     def update_radar_data(self, callsign: str, runway: str, flight_procedure: str,
-                           adep: str = "", adest: str = "") -> int:
+                           adep: str = "", adest: str = "",
+                           handover_pt: str = "") -> int:
         """按航班号更新使用跑道和飞行程序（来自雷达 CAT062）
 
         优先匹配规则：
         - 若 CAT062 提供起降地 → callsign + adep + adest + 今日 DOF
         - 否则 → callsign + 今日 DOF 降级匹配
         避免批量更新历史计划。
+
+        handover_pt: 雷达探测到的移交点（来自进/出港TransPt文件，距当前位置<10km）
 
         返回更新的记录数
         """
@@ -781,18 +784,42 @@ class Database:
         for retry in range(10):
             try:
                 conn = self._get_conn()
+                # 构建 SET 子句：始终更新 runway/procedure，handover_pt 只在有值时覆盖
+                set_parts = ["runway=?", "flight_procedure=?", "updated_at=?"]
+                set_vals = [runway, flight_procedure, now]
+                where_extra = ""
+                where_vals = []
+
+                if handover_pt:
+                    handover_pt = handover_pt.upper().strip()
+                    set_parts.append("handover_pt=?")
+                    set_vals.append(handover_pt)
+                    # WHERE 条件：只在 handover_pt 不同时才更新（避免无意义的写）
+                    where_extra = "AND handover_pt != ?"
+                    where_vals = [handover_pt]
+
+                set_clause = ", ".join(set_parts)
+                where_base = "(runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure=''"
+                where_base += " OR handover_pt='')"
+                # 参数合并：SET 值 + WHERE 值
+                all_params = set_vals + [runway, flight_procedure]
+                if handover_pt:
+                    all_params += where_vals
+                all_params.append(match["id"])
+
                 cur = conn.execute(
-                    "UPDATE flight_plans SET runway=?, flight_procedure=?, updated_at=? "
-                    "WHERE id=? AND (runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')",
-                    (runway, flight_procedure, now, match["id"], runway, flight_procedure),
+                    f"UPDATE flight_plans SET {set_clause} "
+                    f"WHERE id=? AND ({where_base} {where_extra})",
+                    all_params,
                 )
                 conn.commit()
                 affected = cur.rowcount
                 if affected > 0:
                     loc = f"{adep}->{adest}" if adep and adest else ""
-                    logger.info("[RADAR] %s%s (id=%d) 更新 跑道=%s 程序=%s",
+                    logger.info("[RADAR] %s%s (id=%d) 更新 跑道=%s 程序=%s%s",
                                 callsign, f" {loc}" if loc else "",
-                                match["id"], runway or '-', flight_procedure or '-')
+                                match["id"], runway or '-', flight_procedure or '-',
+                                f" 移交点={handover_pt}" if handover_pt else "")
                 return affected
             except sqlite3.OperationalError as e:
                 if "locked" in str(e) and retry < 9:
