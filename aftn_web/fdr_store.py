@@ -495,13 +495,21 @@ class FDRStore:
                     lat, lon, rec.adep, rec.adest,
                     self._track_airports,
                 )
-                if detected_hp and detected_hp != rec.handover_pt:
-                    rec.handover_pt = detected_hp
+                if detected_hp:
+                    if detected_hp != rec.handover_pt:
+                        rec.handover_pt = detected_hp
+                        logger.info(
+                            "[HANDOVER] %s 雷达探测到移交点: %s (航段 %s->%s)，替换原 %s",
+                            rec.callsign, detected_hp, rec.adep, rec.adest,
+                            rec.handover_pt or '(空)',
+                        )
+                    else:
+                        logger.debug(
+                            "[HANDOVER] %s 雷达确认移交点: %s (与现有一致，写入雷达标志)",
+                            rec.callsign, detected_hp,
+                        )
+                    # 无论值是否变化，都重置标志位，让 DB 写入 radar_handover_pt
                     rec._handover_pt_updated = False
-                    logger.info(
-                        "[HANDOVER] %s 雷达探测到移交点: %s (航段 %s->%s)",
-                        rec.callsign, detected_hp, rec.adep, rec.adest,
-                    )
 
             # ── 出港离区检测（仅在航迹保存启用时） ──
             if self._track_enabled and (rec.adep or rec.adest):
@@ -648,8 +656,9 @@ class FDRStore:
                     )
                     if affected > 0:
                         radar_updated += 1
-                        if rec.handover_pt:
-                            rec._handover_pt_updated = True
+                    # 无论 affected 是否为 0，都标记为已处理
+                    # 避免值相同但雷达标志位（radar_handover_pt）已存在时无限重试
+                    rec._handover_pt_updated = True
 
                 # 3b. 终端区数据更新
                 if rec.terminal_entry_ts or rec.terminal_exit_ts:
