@@ -1290,7 +1290,7 @@ function renderPlans(rs) {
     h += '<tr>' +
       '<td class="callsign"><a href="javascript:void(0)" onclick="showFlightTrail(this)" data-callsign="' + esc(r.callsign||'') + '" data-dof="' + esc((r.dof||'').slice(0,10)) + '" data-atd="' + esc(r.atd||'') + '" data-ata="' + esc(r.ata||'') + '" data-entry="' + esc(r.entry_time||'') + '" data-exit="' + esc(r.exit_time||'') + '" style="color:var(--accent-green);text-decoration:none;cursor:pointer;" title="查看历史轨迹">' + (r.callsign||'-') + '</a></td>' +
       '<td>' + (r.flight_rule||'-') + '</td>' +
-      '<td>' + (r.handover_pt ? '<span style="color:' + (['SAREX','IDUMA','OVGOT','LOVTA','MIPAG','LANDA','SULAS','TOMUD','P50','BEKOL','TAMOT','INDUS','FOXTROT','URBOR','SESAN','QZ'].indexOf(r.handover_pt) >= 0 ? '#58a6ff' : 'inherit') + ';font-weight:' + (['SAREX','IDUMA','OVGOT','LOVTA','MIPAG','LANDA','SULAS','TOMUD','P50','BEKOL','TAMOT','INDUS','FOXTROT','URBOR','SESAN','QZ'].indexOf(r.handover_pt) >= 0 ? '600' : 'normal') + '">' + r.handover_pt + '</span>' : '-') + '</td>' +
+      '<td>' + (r.handover_pt ? '<span style="color:' + (['P50','SULAS','IDUMA'].indexOf(r.handover_pt) >= 0 ? '#58a6ff' : 'inherit') + ';font-weight:' + (['P50','SULAS','IDUMA'].indexOf(r.handover_pt) >= 0 ? '600' : 'normal') + '">' + r.handover_pt + '</span>' : '-') + '</td>' +
       '<td>' + (r.aircraft_type||'-') + '</td>' +
       '<td>' + fd + '</td>' +
       '<td class="airport">' + (r.adep||'-') + '</td>' +
