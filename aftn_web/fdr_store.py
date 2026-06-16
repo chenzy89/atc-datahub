@@ -347,9 +347,9 @@ class FDRStore:
 
         for name, (pt_lat, pt_lon) in pts.items():
             dist = self._haversine_km(lat, lon, pt_lat, pt_lon)
-            if dist < 10.0:
+            if dist < 5.0:
                 logger.debug(
-                    "[HANDOVER] %s 距 %s %.1fkm (<10km)，采用移交点 %s",
+                    "[HANDOVER] %s 距 %s %.1fkm (<5km)，采用移交点 %s",
                     self._callsign_hint, name, dist, name,
                 )
                 return name
