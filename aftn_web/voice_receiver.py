@@ -651,23 +651,74 @@ class VoiceReceiver:
             st.last_activity = mono_now
             st.bytes_received += len(data)
 
-        # ── 提取 ADPCM 并提前解码 PCM（用于 VAD 能量检测） ──
-        # 数据包结构: [2B 通道号] [N 字节 ADPCM] [8B 后缀(时间戳等)]
+        # ── 提取 ADPCM 数据 ──
+        # 数据包结构假定: [2B ch] [可变长度 ADPCM] [8B 后缀(时间戳/RSSI)]
+        # 但如果 8B 后缀假设不正确（例如 ch264 来源不同），data[2:-8] 会截断 ADPCM
+        # 策略：先试 data[2:-8]（标准模式），如果解码出非空 PCM 就收工；
+        # 如果解码为空，尝试 data[2:]（全载荷），并记录差异。
         raw_len = len(data)
+
+        # ── 策略 1: 标准 data[2:-8] ──
         adpcm_data = data[2 : raw_len - 8] if raw_len > 10 else b''
-        pcm_data = b""
+        pcm_data = b''
+        decoded_ok = False
         if adpcm_data:
             if channel not in self._decoders:
                 self._decoders[channel] = ADPCMDecoder()
             decoder = self._decoders[channel]
             pcm_data = decoder.decode_adpcm(adpcm_data)
-            # 调试日志：通道 264 首次调试或解码异常时记录
-            if channel == 264 and not pcm_data and adpcm_data:
-                logger.warning(
-                    "ch264 decode empty: raw=%dB, adpcm=%dB, extra8=%s",
-                    raw_len, len(adpcm_data),
-                    data[-8:].hex() if raw_len >= 8 else 'N/A',
+            if pcm_data:
+                decoded_ok = True
+
+        # ── 策略 2: 如果标准方式解码为空，尝试 data[2:] ──
+        if not decoded_ok and raw_len > 4:
+            full_adpcm = data[2:]
+            fallback_pcm = decoder.decode_adpcm(full_adpcm)
+            if fallback_pcm:
+                logger.info(
+                    "ch%d ADPCM extraction fallback: standard(data[2:-8])=%dB -> empty, "
+                    "full(data[2:])=%dB -> %dB PCM (raw packet=%dB)",
+                    channel, len(adpcm_data), len(full_adpcm),
+                    len(fallback_pcm), raw_len,
                 )
+                pcm_data = fallback_pcm
+                decoded_ok = True
+
+        # ── 调试日志：ch264 首次包结构 ──
+        if channel == 264:
+            _ch264_log = getattr(self, '_ch264_pkt_log', 0)
+            if _ch264_log < 5:
+                self._ch264_pkt_log = _ch264_log + 1
+                suffix8 = data[-8:].hex() if raw_len >= 8 else 'N/A'
+                logger.info(
+                    "ch264 packet#%d: raw=%dB, data[2:-8]=%dB, data[2:]=%dB, "
+                    "pcm=%dB, suffix8=%s",
+                    _ch264_log + 1, raw_len,
+                    len(adpcm_data), len(data[2:]) if raw_len > 2 else 0,
+                    len(pcm_data), suffix8,
+                )
+
+        if not decoded_ok:
+            if channel == 264:
+                logger.warning(
+                    "ch264 both extraction strategies failed: raw=%dB", raw_len
+                )
+            adpcm_data = b''
+            pcm_data = b''
+
+        # ── 调试日志：ch264 PCM 能量水平 ──
+        if pcm_data and channel == 264:
+            _ch264_energy = self._compute_pcm_energy(pcm_data)
+            _ch264_energy_log = getattr(self, '_ch264_energy_count', 0)
+            if _ch264_energy_log < 10 or (_ch264_energy_log % 50 == 0):
+                self._ch264_energy_count = _ch264_energy_log + 1
+                logger.info(
+                    "ch264 PCM energy: %.4f, pcm=%dB, slots=%d",
+                    _ch264_energy, len(pcm_data),
+                    len(pcm_data) // 2 // 505,
+                )
+            else:
+                self._ch264_energy_count = _ch264_energy_log + 1
 
         # ── 通话时长统计（VAD 能量检测） ──
         self._track_duration(channel, clock_now, pcm_data)
