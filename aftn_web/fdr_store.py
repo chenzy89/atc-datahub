@@ -636,7 +636,7 @@ class FDRStore:
                         rec.flight_procedure,
                         adep=rec.adep,
                         adest=rec.adest,
-                        handover_pt=rec.handover_pt,
+                        radar_handover_pt=rec.handover_pt,
                     )
                     if affected > 0:
                         radar_updated += 1

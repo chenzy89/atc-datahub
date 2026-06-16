@@ -170,6 +170,12 @@ class Database:
             conn.commit()
         except sqlite3.OperationalError:
             pass
+        # 迁移：新增 radar_handover_pt 列（v2.1.65），雷达探测移交点（与航路解析的 handover_pt 分开）
+        try:
+            conn.execute("ALTER TABLE flight_plans ADD COLUMN radar_handover_pt TEXT NOT NULL DEFAULT ''")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
 
         # ── ASR 语音识别文本表 ──
@@ -758,7 +764,7 @@ class Database:
 
     def update_radar_data(self, callsign: str, runway: str, flight_procedure: str,
                            adep: str = "", adest: str = "",
-                           handover_pt: str = "") -> int:
+                           radar_handover_pt: str = "") -> int:
         """按航班号更新使用跑道和飞行程序（来自雷达 CAT062）
 
         优先匹配规则：
@@ -766,7 +772,8 @@ class Database:
         - 否则 → callsign + 今日 DOF 降级匹配
         避免批量更新历史计划。
 
-        handover_pt: 雷达探测到的移交点（来自进/出港TransPt文件，距当前位置<10km）
+        radar_handover_pt: 雷达探测到的移交点（来自进/出港TransPt文件，距当前位置<10km）
+        写入 radar_handover_pt 字段，与航路解析的 handover_pt 分开。
 
         返回更新的记录数
         """
@@ -784,26 +791,25 @@ class Database:
         for retry in range(10):
             try:
                 conn = self._get_conn()
-                # 构建 SET 子句：始终更新 runway/procedure，handover_pt 只在有值时覆盖
+                # 构建 SET/WHERE 子句
                 set_parts = ["runway=?", "flight_procedure=?", "updated_at=?"]
                 set_vals = [runway, flight_procedure, now]
                 where_extra = ""
                 where_vals = []
 
-                if handover_pt:
-                    handover_pt = handover_pt.upper().strip()
-                    set_parts.append("handover_pt=?")
-                    set_vals.append(handover_pt)
-                    # WHERE 条件：只在 handover_pt 不同时才更新（避免无意义的写）
-                    where_extra = "AND handover_pt != ?"
-                    where_vals = [handover_pt]
+                if radar_handover_pt:
+                    radar_handover_pt = radar_handover_pt.upper().strip()
+                    set_parts.append("radar_handover_pt=?")
+                    set_vals.append(radar_handover_pt)
+                    # WHERE：只在雷达移交点不同时更新
+                    where_extra = "AND radar_handover_pt != ?"
+                    where_vals = [radar_handover_pt]
 
                 set_clause = ", ".join(set_parts)
                 where_base = "(runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure=''"
-                where_base += " OR handover_pt='')"
-                # 参数合并：SET 值 + WHERE 值
+                where_base += " OR radar_handover_pt='')"
                 all_params = set_vals + [runway, flight_procedure]
-                if handover_pt:
+                if radar_handover_pt:
                     all_params += where_vals
                 all_params.append(match["id"])
 
@@ -819,7 +825,7 @@ class Database:
                     logger.info("[RADAR] %s%s (id=%d) 更新 跑道=%s 程序=%s%s",
                                 callsign, f" {loc}" if loc else "",
                                 match["id"], runway or '-', flight_procedure or '-',
-                                f" 移交点={handover_pt}" if handover_pt else "")
+                                f" 雷达移交点={radar_handover_pt}" if radar_handover_pt else "")
                 return affected
             except sqlite3.OperationalError as e:
                 if "locked" in str(e) and retry < 9:

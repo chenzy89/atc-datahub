@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.1.65</title>
+<title>ATC综合数据中心 v2.1.66</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.65</span>
+  <span class="badge">v2.1.66</span>
 </div>
 
 <div class="tabs">
@@ -1290,7 +1290,7 @@ function renderPlans(rs) {
     h += '<tr>' +
       '<td class="callsign"><a href="javascript:void(0)" onclick="showFlightTrail(this)" data-callsign="' + esc(r.callsign||'') + '" data-dof="' + esc((r.dof||'').slice(0,10)) + '" data-atd="' + esc(r.atd||'') + '" data-ata="' + esc(r.ata||'') + '" data-entry="' + esc(r.entry_time||'') + '" data-exit="' + esc(r.exit_time||'') + '" style="color:var(--accent-green);text-decoration:none;cursor:pointer;" title="查看历史轨迹">' + (r.callsign||'-') + '</a></td>' +
       '<td>' + (r.flight_rule||'-') + '</td>' +
-      '<td>' + (r.handover_pt ? '<span style="color:' + (['P50','SULAS','IDUMA'].indexOf(r.handover_pt) >= 0 ? '#58a6ff' : 'inherit') + ';font-weight:' + (['P50','SULAS','IDUMA'].indexOf(r.handover_pt) >= 0 ? '600' : 'normal') + '">' + r.handover_pt + '</span>' : '-') + '</td>' +
+      '<td>' + (r.radar_handover_pt ? '<span style="color:#58a6ff;font-weight:600;" title="雷达探测">' + r.radar_handover_pt + '</span>' : (r.handover_pt||'-')) + '</td>' +
       '<td>' + (r.aircraft_type||'-') + '</td>' +
       '<td>' + fd + '</td>' +
       '<td class="airport">' + (r.adep||'-') + '</td>' +
@@ -2344,7 +2344,7 @@ function esc(s) {
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">进终端</td><td style="padding:2px 0;">' + esc(data.entry_time || '-') + '</td></tr>'
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">出终端</td><td style="padding:2px 0;">' + esc(data.exit_time || '-') + '</td></tr>'
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">终端时长</td><td style="padding:2px 0;">' + (data.terminal_flight_time ? Math.floor(data.terminal_flight_time/60) + '分' + (data.terminal_flight_time%60) + '秒' : '-') + '</td></tr>'
-          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">移交点</td><td style="padding:2px 0;">' + esc(data.handover_pt || '-') + '</td></tr>'
+          + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">移交点</td><td style="padding:2px 0;">' + esc(data.handover_pt || '-') + (data.radar_handover_pt ? ' <span style="color:#58a6ff;font-weight:600;font-size:11px;">[雷达:' + data.radar_handover_pt + ']</span>' : '') + '</td></tr>'
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;vertical-align:top;">航路</td><td style="padding:2px 0;word-break:break-all;font-size:12px;">' + esc(data.route || '-') + '</td></tr>'
           + '</table>';
 
