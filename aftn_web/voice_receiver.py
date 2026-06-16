@@ -133,7 +133,9 @@ class ChannelStatus:
 
 
 class ADPCMDecoder:
-    """IMA ADPCM 解码器 — 从 online_auio 项目移植"""
+    """IMA ADPCM 解码器 — 重塑版：支持变长块，容错性强，匹配合法参考实现"""
+
+    __slots__ = ('decoder_predicted', 'decoder_index', 'decoder_step')
 
     def __init__(self):
         self.decoder_predicted = 0
@@ -141,59 +143,98 @@ class ADPCMDecoder:
         self.decoder_step = 7
 
     def decode_adpcm(self, adpcm_data: bytes) -> bytes:
+        """将 ADPCM 数据解码为线性 PCM16
+
+        支持任意长度的 ADPCM 数据，会在 4 字节块头边界处自动对齐解析。
+        最后一个不是 BLOCK_SIZE 的块也正常解码，不会丢弃。
+        """
         pcm_frames = bytearray()
         i = 0
-        while i < len(adpcm_data):
-            end = min(i + BLOCK_SIZE, len(adpcm_data))
-            block = adpcm_data[i:end]
-            if len(block) != BLOCK_SIZE:
+        n = len(adpcm_data)
+        while i < n:
+            # 剩余数据不足以构成最小块（4 字节头），丢弃
+            remaining = n - i
+            if remaining < 4:
                 break
+            blocksize = BLOCK_SIZE if remaining >= BLOCK_SIZE else remaining
+            block = adpcm_data[i:i + blocksize]
             try:
                 pcm_block = self.decode_block(block)
                 pcm_frames.extend(pcm_block)
             except Exception:
                 pass
-            i += BLOCK_SIZE
+            i += blocksize
         return bytes(pcm_frames)
 
     def decode_block(self, block: bytes) -> bytes:
-        if len(block) != BLOCK_SIZE:
-            raise ValueError(f"块大小必须为256，实际{len(block)}")
-        result = bytearray()
+        """解码一个 ADPCM 块（变长），返回 PCM16 bytes
+
+        IMA ADPCM 块结构（标准的全块 256 字节）：
+          bytes[0:2]  初始 PCM16 样本（有符号小端）
+          bytes[2]    初始索引（0-88）
+          bytes[3]    保留（通常为 0）
+          bytes[4:]   压缩数据，每字节两个 4-bit nibble
+        """
+        blen = len(block)
+        if blen < 4:
+            return b''
+
+        # ── 从块头恢复初始状态 ──
         self.decoder_predicted = struct.unpack('<h', block[0:2])[0]
         self.decoder_index = block[2] & 0xFF
+        if self.decoder_index > 88:
+            self.decoder_index = 0
         self.decoder_step = T_STEP[self.decoder_index]
-        result.extend(block[0:2])
-        for i in range(4, len(block)):
-            original_sample = block[i] & 0xFF
-            second_sample = original_sample >> 4
-            first_sample = original_sample & 0x0F
-            first_pcm = self.decode_sample(first_sample)
-            second_pcm = self.decode_sample(second_sample)
-            result.extend(struct.pack('<h', first_pcm))
-            result.extend(struct.pack('<h', second_pcm))
+
+        # ── 结果缓冲区 ──
+        n_nibbles = (blen - 4) * 2  # 一个字节提供两个 nibble
+        # 预分配：头样本(2B) + 每个 nibble 对应一个 PCM16 样本(2B)
+        result = bytearray(2 + n_nibbles * 2)
+        result[0:2] = block[0:2]  # 初始样本直通
+
+        # ── 逐个 nibble 解码 ──
+        off = 2  # result 写入偏移（已写入头样本）
+        for bi in range(4, blen):
+            b = block[bi]
+            # 低 4 位 = 第一个样本，高 4 位 = 第二个样本
+            lo = b & 0x0F
+            hi = (b >> 4) & 0x0F
+            struct.pack_into('<h', result, off, self._decode_nibble(lo)); off += 2
+            struct.pack_into('<h', result, off, self._decode_nibble(hi)); off += 2
+
         return bytes(result)
 
-    def decode_sample(self, nibble: int) -> int:
-        sign = nibble & 8
-        delta = nibble & 7
+    def _decode_nibble(self, nibble: int) -> int:
+        """解码单个 4-bit ADPCM nibble，返回 PCM16 样本
+
+        算法完全匹配参考实现 py_IMA_DECODE.py 的 _decode_sample。
+        """
+        # ── 计算差分值 ──
         difference = self.decoder_step >> 3
-        if delta & 4:
+        if nibble & 4:
             difference += self.decoder_step
-        if delta & 2:
+        if nibble & 2:
             difference += self.decoder_step >> 1
-        if delta & 1:
+        if nibble & 1:
             difference += self.decoder_step >> 2
-        if sign:
+        if nibble & 8:
             difference = -difference
+
+        # ── 更新预测值并钳制 ──
         self.decoder_predicted += difference
         if self.decoder_predicted > 32767:
             self.decoder_predicted = 32767
         elif self.decoder_predicted < -32768:
             self.decoder_predicted = -32768
+
+        # ── 更新索引和步长 ──
         self.decoder_index += T_INDEX[nibble]
-        self.decoder_index = max(0, min(88, self.decoder_index))
+        if self.decoder_index < 0:
+            self.decoder_index = 0
+        elif self.decoder_index > 88:
+            self.decoder_index = 88
         self.decoder_step = T_STEP[self.decoder_index]
+
         return self.decoder_predicted
 
 
@@ -611,13 +652,22 @@ class VoiceReceiver:
             st.bytes_received += len(data)
 
         # ── 提取 ADPCM 并提前解码 PCM（用于 VAD 能量检测） ──
-        adpcm_data = data[2 : len(data) - 8]
+        # 数据包结构: [2B 通道号] [N 字节 ADPCM] [8B 后缀(时间戳等)]
+        raw_len = len(data)
+        adpcm_data = data[2 : raw_len - 8] if raw_len > 10 else b''
         pcm_data = b""
         if adpcm_data:
             if channel not in self._decoders:
                 self._decoders[channel] = ADPCMDecoder()
             decoder = self._decoders[channel]
             pcm_data = decoder.decode_adpcm(adpcm_data)
+            # 调试日志：通道 264 首次调试或解码异常时记录
+            if channel == 264 and not pcm_data and adpcm_data:
+                logger.warning(
+                    "ch264 decode empty: raw=%dB, adpcm=%dB, extra8=%s",
+                    raw_len, len(adpcm_data),
+                    data[-8:].hex() if raw_len >= 8 else 'N/A',
+                )
 
         # ── 通话时长统计（VAD 能量检测） ──
         self._track_duration(channel, clock_now, pcm_data)

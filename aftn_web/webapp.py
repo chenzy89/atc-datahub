@@ -848,6 +848,12 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
                     # PCM16 → WAV → base64
                     wav_data = make_wav(pcm_data, sample_rate=8000)
                     b64 = base64.b64encode(wav_data).decode("ascii")
+                    if channel_id == 264:
+                        import logging as _log
+                        _log.getLogger('aftn_web.voice').debug(
+                            'ch264 SSE push: seq=%d, pcm=%dB, wav=%dB, b64=%dch',
+                            seq, len(pcm_data), len(wav_data), len(b64),
+                        )
                     yield f"data: {b64}\n\n"
 
         return Response(
