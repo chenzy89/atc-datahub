@@ -192,6 +192,33 @@ class Database:
         """)
         conn.commit()
 
+        # ── 航迹保存表（flight_tracks） ──
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS flight_tracks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                callsign TEXT NOT NULL,
+                track_type TEXT NOT NULL,
+                adep TEXT NOT NULL DEFAULT '',
+                adest TEXT NOT NULL DEFAULT '',
+                dof TEXT NOT NULL DEFAULT '',
+                points_json TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ft_callsign
+                ON flight_tracks(callsign);
+            CREATE INDEX IF NOT EXISTS idx_ft_dof
+                ON flight_tracks(dof);
+            CREATE INDEX IF NOT EXISTS idx_ft_adep
+                ON flight_tracks(adep);
+            CREATE INDEX IF NOT EXISTS idx_ft_adest
+                ON flight_tracks(adest);
+            CREATE INDEX IF NOT EXISTS idx_ft_dof_callsign
+                ON flight_tracks(dof, callsign);
+        """)
+        conn.commit()
+
         # ── 回填：从 sector_flights 填充 sector_traffic_10min ──
         # 覆盖所有 sector_flights 中存在但 sector_traffic_10min 中缺失的日期
         try:
@@ -1999,3 +2026,104 @@ def _day_from_dt_str(dt_str: str | None) -> str | None:
     if not dt_str or len(dt_str) < 10:
         return None
     return dt_str[:10]
+
+
+# ── 航迹保存 (flight_tracks) ──────────────────────────────────
+
+def save_flight_track(db_self, callsign: str, track_type: str,
+                       adep: str, adest: str, dof: str,
+                       points_json: str,
+                       start_time: str, end_time: str) -> int:
+    """保存一条航迹记录到数据库"""
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    conn = db_self._get_conn()
+    conn.execute(
+        """INSERT INTO flight_tracks
+           (callsign, track_type, adep, adest, dof,
+            points_json, start_time, end_time, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (callsign.upper(), track_type, adep.upper(), adest.upper(),
+         dof, points_json, start_time, end_time, now),
+    )
+    conn.commit()
+    return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def query_flight_tracks(db_self, callsign: str = "",
+                         dof: str = "",
+                         adep: str = "",
+                         adest: str = "",
+                         track_type: str = "",
+                         date_from: str = "",
+                         date_to: str = "",
+                         limit: int = 100) -> list[dict]:
+    """查询航迹记录"""
+    conn = db_self._get_conn()
+    conditions: list[str] = []
+    params: list = []
+    if callsign:
+        conditions.append("callsign = ?")
+        params.append(callsign.upper())
+    if dof:
+        conditions.append("dof = ?")
+        params.append(dof)
+    if adep:
+        conditions.append("adep = ?")
+        params.append(adep.upper())
+    if adest:
+        conditions.append("adest = ?")
+        params.append(adest.upper())
+    if track_type:
+        conditions.append("track_type = ?")
+        params.append(track_type)
+    if date_from:
+        conditions.append("created_at >= ?")
+        params.append(date_from)
+    if date_to:
+        conditions.append("created_at <= ?")
+        params.append(date_to + " 23:59:59")
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    rows = conn.execute(
+        f"SELECT * FROM flight_tracks {where} ORDER BY end_time DESC LIMIT ?",
+        params + [min(limit, 500)],
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def query_flight_tracks_by_callsigns(db_self, callsigns: list[str],
+                                       dof: str = "") -> list[dict]:
+    """按多个呼号批量查询航迹（用于批量轨迹图）"""
+    if not callsigns:
+        return []
+    conn = db_self._get_conn()
+    placeholders = ",".join(["?" for _ in callsigns])
+    upper = [cs.upper() for cs in callsigns]
+    if dof:
+        rows = conn.execute(
+            f"""SELECT ft.* FROM flight_tracks ft
+               INNER JOIN (
+                 SELECT callsign, MAX(end_time) as max_end
+                 FROM flight_tracks
+                 WHERE callsign IN ({placeholders}) AND dof=?
+                 GROUP BY callsign
+               ) latest ON ft.callsign=latest.callsign
+                 AND ft.end_time=latest.max_end
+               WHERE ft.callsign IN ({placeholders}) AND ft.dof=?
+               ORDER BY ft.callsign""",
+            upper + [dof] + upper + [dof],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"""SELECT ft.* FROM flight_tracks ft
+               INNER JOIN (
+                 SELECT callsign, MAX(end_time) as max_end
+                 FROM flight_tracks
+                 WHERE callsign IN ({placeholders})
+                 GROUP BY callsign
+               ) latest ON ft.callsign=latest.callsign
+                 AND ft.end_time=latest.max_end
+               WHERE ft.callsign IN ({placeholders})
+               ORDER BY ft.callsign""",
+            upper + upper,
+        ).fetchall()
+    return [dict(r) for r in rows]

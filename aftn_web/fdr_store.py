@@ -7,10 +7,16 @@ CAT062 解析后的每条航迹数据写入 FDR 列表，
 - 终端区进出检测（多边形 + 高度）
 
 TTL: 超过 8 秒未更新的记录自动清理。
+
+v2.1.x 新增：
+- 全量航迹点累计（_full_track）
+- 航迹保存到 DB（进港落地后 / 出港离区时）
+- 自定义保存区域+机场配置
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -30,6 +36,9 @@ FDR_TTL_SECONDS = 16
 
 # 定期检查间隔
 PROCESS_INTERVAL_SECONDS = 4
+
+# 航迹采样间隔（秒）：每 N 秒采集一个全量航迹点
+TRACK_SAMPLE_INTERVAL = 5
 
 _RUNWAY_PATTERN = re.compile(r'^\d{2}[LCR]?$')
 
@@ -53,6 +62,17 @@ def _validate_flight_procedure(val: str) -> str:
     if _FP_PATTERN.match(val):
         return val
     return "ERROR"
+
+
+def _point_in_rect(lat: float, lon: float,
+                   tl_lat: float, tl_lon: float,
+                   br_lat: float, br_lon: float) -> bool:
+    """判断点是否在矩形区域内"""
+    min_lat = min(tl_lat, br_lat)
+    max_lat = max(tl_lat, br_lat)
+    min_lon = min(tl_lon, br_lon)
+    max_lon = max(tl_lon, br_lon)
+    return min_lat <= lat <= max_lat and min_lon <= lon <= max_lon
 
 
 @dataclass
@@ -90,10 +110,52 @@ class FDRRecord:
     sector_index: int = 0
     _sector_recorded: set[str] = field(default_factory=set)  # 已记录的扇区代码
 
+    # ── 航迹保存 ──────────────────────────────────────────
+    _full_track: list[dict] = field(default_factory=list)     # 全量航迹 [{ts,lt,ln,fl,hd,sp,...}]
+    _track_saved: bool = False                                # 是否已保存到 DB
+    _last_track_ts: float = 0.0                               # 上次采集全量点的时间（monotonic）
+    _was_in_save_area: bool = False                           # 上次检查时是否在保存区域内
+    _area_departed: bool = False                              # 是否已触发离区保存
+
     @property
     def is_associated(self) -> bool:
         """是否已相关：有起降地信息才可能与飞行计划匹配"""
         return bool(self.adep) and bool(self.adest)
+
+    def record_full_track_point(self, lat: float, lon: float, fl: float,
+                                 heading: float, speed: float,
+                                 runway: str, flight_procedure: str,
+                                 adep: str, adest: str,
+                                 utc_iso: str, now_mono: float) -> None:
+        """采集一个全量航迹点（按采样间隔）"""
+        dt = now_mono - self._last_track_ts
+        if dt < TRACK_SAMPLE_INTERVAL and self._full_track:
+            return
+        self._full_track.append({
+            "ts": utc_iso,
+            "lt": lat,
+            "ln": lon,
+            "fl": fl,
+            "hd": heading,
+            "sp": speed,
+            "rw": runway,
+            "fp": flight_procedure,
+            "ap": adep,
+            "ad": adest,
+        })
+        self._last_track_ts = now_mono
+
+    def get_full_track_json(self) -> str:
+        """返回全量航迹的 JSON 字符串"""
+        return json.dumps(self._full_track, ensure_ascii=False, separators=(",", ":"))
+
+    def is_arrival_to_airport(self, airports: set[str]) -> bool:
+        """检查航班是否进港到指定机场"""
+        return self.adest.upper() in airports
+
+    def is_departure_from_airport(self, airports: set[str]) -> bool:
+        """检查航班是否从指定机场出港"""
+        return self.adep.upper() in airports
 
     def check_terminal_transition(self, lat: float, lon: float, alt_m: float,
                                    check_time: float, utc_iso: str) -> None:
@@ -181,7 +243,7 @@ class FDRStore:
         except Exception as exc:
             logger.warning("SectorInfo.txt 加载失败: %s", exc)
 
-    def __init__(self) -> None:
+    def __init__(self, track_config: dict | None = None) -> None:
         self._lock = threading.Lock()
         self._records: dict[str, FDRRecord] = {}
         self._last_process = 0.0
@@ -189,6 +251,40 @@ class FDRStore:
         # 待写入 DB 的扇区记录（callsign+dof+sector_code → hour）
         self._pending_sectors: dict[tuple[str, str, str], int] = {}
         self.load_sector_map()
+
+        # ── 航迹保存配置 ──────────────────────────────────
+        self._track_enabled = False
+        self._track_airports: set[str] = {"ZGSZ", "ZGSD", "VMMC"}
+        self._track_tl_lat = 23.5
+        self._track_tl_lon = 112.0
+        self._track_br_lat = 21.0
+        self._track_br_lon = 115.5
+
+        if track_config:
+            self._track_enabled = bool(track_config.get("enabled", False))
+            airports = track_config.get("airports", ["ZGSZ", "ZGSD", "VMMC"])
+            self._track_airports = {a.upper() for a in airports}
+            tl = track_config.get("area_top_left", {})
+            br = track_config.get("area_bottom_right", {})
+            self._track_tl_lat = float(tl.get("lat", 23.5))
+            self._track_tl_lon = float(tl.get("lon", 112.0))
+            self._track_br_lat = float(br.get("lat", 21.0))
+            self._track_br_lon = float(br.get("lon", 115.5))
+            if self._track_enabled:
+                logger.info(
+                    "航迹保存已启用: 机场=%s, 区域=(%.1f,%.1f)-(%.1f,%.1f)",
+                    self._track_airports,
+                    self._track_tl_lat, self._track_tl_lon,
+                    self._track_br_lat, self._track_br_lon,
+                )
+
+    def _point_in_save_area(self, lat: float, lon: float) -> bool:
+        """判断点是否在自定义保存区域内"""
+        return _point_in_rect(
+            lat, lon,
+            self._track_tl_lat, self._track_tl_lon,
+            self._track_br_lat, self._track_br_lon,
+        )
 
     # ── 公开接口 ──────────────────────────────────────────
 
@@ -226,7 +322,7 @@ class FDRStore:
             rec.flight_level = new_fl
             rec.speed = parsed.get("speed", 0.0)
 
-            # 尾迹
+            # 尾迹（仅显示用，保留最近5个）
             if lat or lon:
                 last_pt = rec.trail[-1] if rec.trail else None
                 trail_dt = now - rec._last_trail_time
@@ -242,14 +338,42 @@ class FDRStore:
                     rec._last_trail_time = now
 
             # 覆盖非空字段
-            if runway := parsed.get("runway", "").strip():
-                rec.runway = _validate_runway(runway)
-            if fp := parsed.get("flight_procedure", "").strip():
+            rw = parsed.get("runway", "").strip()
+            fp = parsed.get("flight_procedure", "").strip()
+            adep_raw = parsed.get("adep", "").strip()
+            adest_raw = parsed.get("adest", "").strip()
+
+            if rw:
+                rec.runway = _validate_runway(rw)
+            if fp:
                 rec.flight_procedure = _validate_flight_procedure(fp)
-            if adep := parsed.get("adep", "").strip():
-                rec.adep = adep.upper()
-            if adest := parsed.get("adest", "").strip():
-                rec.adest = adest.upper()
+            if adep_raw:
+                rec.adep = adep_raw.upper()
+            if adest_raw:
+                rec.adest = adest_raw.upper()
+
+            # ── 全量航迹点采集（所有航班都采集，仅在配置启用时保存） ──
+            if lat or lon:
+                rec.record_full_track_point(
+                    lat, lon, new_fl,
+                    rec.heading, rec.speed,
+                    rec.runway, rec.flight_procedure,
+                    rec.adep, rec.adest,
+                    utc_iso, now,
+                )
+
+            # ── 出港离区检测（仅在航迹保存启用且未保存过的航班） ──
+            if self._track_enabled and rec.has_departed:
+                # 已有起降地信息且配置启用时才检测
+                in_area = self._point_in_save_area(lat, lon)
+                if rec._was_in_save_area and not in_area and not rec._area_departed:
+                    # 从区内到区外 → 触发离区保存
+                    rec._area_departed = True
+                    logger.info(
+                        "[TRACK] %s %s->%s 离开保存区域，标记出港",
+                        rec.callsign, rec.adep, rec.adest,
+                    )
+                rec._was_in_save_area = in_area
 
             # ── 扇区跟踪 ────────────────────────────────
             sector_idx = parsed.get("sector_index", 0)
@@ -261,6 +385,47 @@ class FDRStore:
             if lat and lon and new_fl > 0:
                 rec.check_terminal_transition(lat, lon, new_fl, now, utc_iso)
 
+    @property
+    def has_departed(self) -> bool:
+        """检查是否有出港相关属性"""
+        return bool(self._track_airports)
+
+    def _save_track(self, db: Any, rec: FDRRecord, track_type: str) -> bool:
+        """保存航迹到数据库
+        
+        返回 True 表示成功保存
+        """
+        if rec._track_saved:
+            return False
+        if not rec.callsign:
+            return False
+        if len(rec._full_track) < 2:
+            logger.debug("[TRACK] %s 航迹点不足，跳过保存", rec.callsign)
+            return False
+
+        points_json = rec.get_full_track_json()
+        dof = datetime.utcnow().strftime("%Y-%m-%d")
+        start_time = rec._full_track[0].get("ts", "")
+        end_time = rec._full_track[-1].get("ts", "")
+
+        try:
+            from .database import save_flight_track
+            track_id = save_flight_track(
+                db, rec.callsign, track_type,
+                rec.adep, rec.adest, dof,
+                points_json, start_time, end_time,
+            )
+            rec._track_saved = True
+            logger.info(
+                "[TRACK] %s %s 航迹已保存 (id=%d, 点=%d, %s->%s)",
+                rec.callsign, track_type, track_id,
+                len(rec._full_track), start_time, end_time,
+            )
+            return True
+        except Exception as exc:
+            logger.error("[TRACK] %s 航迹保存失败: %s", rec.callsign, exc)
+            return False
+
     def process_updates(self, db: Any) -> None:
         """
         周期性处理：
@@ -268,6 +433,9 @@ class FDRStore:
         2. 对有效 FDR 执行飞行计划更新：
            a. 跑道/飞行程序
            b. 终端区进出时间
+        3. 航迹保存：
+           a. 进港：落地后标牌消失（过期）时保存
+           b. 出港：离开自定义区域时保存
         """
         now = time.monotonic()
         with self._lock:
@@ -361,7 +529,11 @@ class FDRStore:
                     logger.warning("[FDR] %s 更新失败（已累计 %d 次）",
                                    rec.callsign, error_count)
 
-        # 5. 删除已补ATA的过期记录（处理完这一轮才真正清理）
+        # ── 5. 航迹保存 ──────────────────────────────────────
+        if self._track_enabled:
+            self._process_track_save(db, candidates)
+
+        # 6. 删除已补ATA的过期记录（处理完这一轮才真正清理）
         if fill_ata_keys:
             with self._lock:
                 for k in fill_ata_keys:
@@ -375,6 +547,37 @@ class FDRStore:
             logger.debug("[SECTOR] 刷入 %d 条扇区记录", sector_flushed)
         if error_count > 10:
             logger.info("[FDR] 累计 %d 次更新失败，等待下个周期重试", error_count)
+
+    def _process_track_save(self, db: Any, candidates: list[FDRRecord]) -> None:
+        """处理航迹保存逻辑
+        
+        在 process_updates() 中调用，需在清理超时记录后进行。
+        """
+        saved_count = 0
+        for rec in candidates:
+            if rec._track_saved:
+                continue
+            if len(rec._full_track) < 2:
+                continue
+
+            # A) 进港航班保存条件：已落地 + 标牌消失（TTL超时，record在cleanup时会被移除）
+            #    这里的 candidates 包含已过期但尚未删除的记录
+            if rec._landed and rec.is_arrival_to_airport(self._track_airports):
+                # 检查 record 是否即将过期或被清理
+                now = time.monotonic()
+                is_expiring = (now - rec.last_update) > (FDR_TTL_SECONDS * 0.8)
+                if is_expiring:
+                    if self._save_track(db, rec, "ARRIVAL"):
+                        saved_count += 1
+                    # 保存后标记，避免下次再处理
+
+            # B) 出港航班保存条件：离开自定义区域
+            elif rec._area_departed and rec.is_departure_from_airport(self._track_airports):
+                if self._save_track(db, rec, "DEPARTURE"):
+                    saved_count += 1
+
+        if saved_count > 0:
+            logger.info("[TRACK] 本轮保存 %d 条航迹", saved_count)
 
     def get_tracks(self) -> list[dict[str, Any]]:
         """返回所有有效航迹（带位置和终端区信息）"""

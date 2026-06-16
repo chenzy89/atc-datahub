@@ -32,6 +32,13 @@
     "path": "./data/aftn.db"
   },
 
+  "track_recording": {
+    "enabled": true,
+    "airports": ["ZGSZ", "ZGSD", "VMMC"],
+    "area_top_left": {"lat": 23.5, "lon": 112.0},
+    "area_bottom_right": {"lat": 21.0, "lon": 115.5}
+  },
+
   "voice_data": {
     "retention_days": 30,
     "flight_count_max": 18

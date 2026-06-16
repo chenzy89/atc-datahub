@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.1.62</title>
+<title>ATC综合数据中心 v2.1.63</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.62</span>
+  <span class="badge">v2.1.63</span>
 </div>
 
 <div class="tabs">
@@ -551,6 +551,7 @@ canvas#radarMap {
       <button class="btn btn-primary" onclick="searchPlans()">🔍 查询</button>
       <button class="btn btn-secondary" onclick="resetPlans()">重置</button>
       <button class="btn btn-secondary" onclick="exportExcel()">导出</button>
+      <button class="btn btn-secondary btn-sm" onclick="batchFlightTrail()" style="border-color:var(--accent-green);color:var(--accent-green);font-size:12px;">📐 批量轨迹</button>
       <span id="fpl-info" class="text-muted" style="margin-left:6px;"></span>
     </div>
   </div>
@@ -2551,9 +2552,18 @@ function esc(s) {
     var dateStr = _trailState.dateStr;
     var ata = _trailState.ata;
 
-    // 并行请求：轨迹数据 + 地图背景 + 终端区配置
-    var trailPromise = fetch('/api/flight_trail?callsign=' + encodeURIComponent(callsign) + '&date=' + encodeURIComponent(dateStr || ''))
-      .then(function(r) { return r.json(); });
+    // 并行请求：轨迹数据（优先查 DB flight_tracks，无数据时回退到 gzip 历史文件） + 地图背景 + 终端区配置
+    var trailPromise = fetch('/api/flight_tracks?callsign=' + encodeURIComponent(callsign) + '&dof=' + encodeURIComponent(dateStr || ''))
+      .then(function(r) { return r.json(); })
+      .then(function(tracks) {
+        // flight_tracks 返回 [{id, callsign, track_type, points, ...}]
+        if (tracks && tracks.length > 0 && tracks[0].points && tracks[0].points.length >= 2) {
+          return tracks[0].points;
+        }
+        // 回退到旧的 gzip 扫描方式
+        return fetch('/api/flight_trail?callsign=' + encodeURIComponent(callsign) + '&date=' + encodeURIComponent(dateStr || ''))
+          .then(function(r2) { return r2.json(); });
+      });
 
     var mapPromise = fetch('/api/maplist')
       .then(function(r) { return r.json(); })
@@ -3024,6 +3034,338 @@ function esc(s) {
   window.closeTrailPopup = closeTrailPopup;
   window.applyTrailFilter = applyTrailFilter;
   window.skipTrailFilter = skipTrailFilter;
+  window.batchFlightTrail = batchFlightTrail;
+
+  // ══════════════════════════════════════════════════════════
+  // 批量轨迹图 — 将表格中所有航班记录的轨迹画在一张图中
+  // ══════════════════════════════════════════════════════════
+
+  function batchFlightTrail() {
+    // 获取表格中所有显示的行
+    var table = document.getElementById('tbl-fpl');
+    if (!table) return;
+    var rows = table.querySelectorAll('tr');
+    if (rows.length === 0) { alert('暂无航班记录'); return; }
+
+    // 收集呼号和 DOF
+    var pairs = {};
+    var dofSet = new Set();
+    for (var i = 0; i < rows.length; i++) {
+      var link = rows[i].querySelector('.callsign a');
+      if (link) {
+        var cs = link.dataset.callsign;
+        var d = link.dataset.dof;
+        if (cs) {
+          pairs[cs] = d || '';
+          if (d) dofSet.add(d);
+        }
+      }
+    }
+    var callsigns = Object.keys(pairs);
+    if (callsigns.length === 0) { alert('暂无有效航班号'); return; }
+
+    // 用最多的那个 DOF（通常所有航班同一天）
+    var dof = '';
+    if (dofSet.size === 1) dof = dofSet.values().next().value;
+
+    var modal = document.getElementById('modal-trail');
+    var canvas = document.getElementById('trailCanvas');
+    var loading = document.getElementById('trail-loading');
+    var title = document.getElementById('trail-title');
+    var filter = document.getElementById('trail-time-filter');
+    if (!modal || !canvas) return;
+
+    title.textContent = '批量轨迹 (' + callsigns.length + ' 架次)';
+    modal.style.display = 'flex';
+    loading.style.display = 'flex';
+    if (filter) filter.style.display = 'none';
+
+    // 保存状态
+    _trailState.callsign = '';
+    _trailState.dateStr = dof;
+    _trailState.allPoints = [];
+    _trailState.ata = '';
+    _trailLoading = false;
+
+    var queryStr = callsigns.map(function(c) { return encodeURIComponent(c); }).join(',');
+    var url = '/api/flight_tracks/batch?callsigns=' + queryStr;
+    if (dof) url += '&dof=' + encodeURIComponent(dof);
+
+    var bp = []; // { callsign, track_type, points, color }
+    var colors = ['#38bdf8', '#fbbf24', '#a78bfa', '#fb7185', '#34d399', '#f97316', '#22d3ee', '#e879f9', '#fdba74', '#67e8f9'];
+
+    Promise.all([
+      fetch(url).then(function(r) { return r.json(); }),
+      fetch('/api/maplist').then(function(r) { return r.json(); }).then(function(fileList) {
+        if (fileList.length === 0) return {order:[], layers:{}};
+        var promises = fileList.map(function(entry) {
+          return fetch('/api/map_file/' + encodeURIComponent(entry.name))
+            .then(function(r) { return r.ok ? r.text() : ''; });
+        });
+        return Promise.all(promises).then(function(texts) {
+          var order = [];
+          var layers = {};
+          for (var i = 0; i < fileList.length; i++) {
+            var name = fileList[i].name;
+            order.push(name);
+            layers[name] = {
+              enabled: !!(mapLayers[name] ? mapLayers[name].enabled : fileList[i].enabled),
+              elements: texts[i] ? parseMapFile(texts[i]) : []
+            };
+          }
+          return {order: order, layers: layers};
+        });
+      }),
+      fetch('/api/config/terminal_airports').then(function(r) { return r.json(); }).catch(function() { return {}; }),
+    ]).then(function(results) {
+      var tracks = results[0] || [];
+      var mapData = results[1] || {order:[], layers:{}};
+      var terminalConfig = results[2] || {};
+
+      _trailMapLayerOrder = mapData.order;
+      _trailMapLayerData = mapData.layers;
+      var flat = [];
+      for (var li = 0; li < _trailMapLayerOrder.length; li++) {
+        var lname = _trailMapLayerOrder[li];
+        var ld = _trailMapLayerData[lname];
+        if (ld && ld.enabled) flat = flat.concat(ld.elements);
+      }
+      _trailState.mapElements = flat;
+      _trailState.terminalConfig = terminalConfig;
+      _trailMapElements = flat;
+
+      // 回退尝试旧的 gzip 扫描
+      if (tracks.length === 0) {
+        // 逐个呼号查询旧的历史数据
+        loadFallbackBatchTrail(callsigns, dof, flat, terminalConfig, colors, canvas, loading);
+        return;
+      }
+
+      loading.style.display = 'none';
+
+      var container = canvas.parentElement;
+      var w = container.clientWidth;
+      var h = container.clientHeight;
+      if (w < 100) w = 800;
+      if (h < 100) h = 500;
+
+      // 计算所有轨迹点的包围盒
+      var allPts = [];
+      var batchData = [];
+      for (var t = 0; t < tracks.length; t++) {
+        var trk = tracks[t];
+        if (!trk.points || trk.points.length < 2) continue;
+        var color = colors[t % colors.length];
+        batchData.push({
+          callsign: trk.callsign,
+          track_type: trk.track_type,
+          points: trk.points,
+          color: color,
+        });
+        for (var p = 0; p < trk.points.length; p++) {
+          allPts.push(trk.points[p]);
+        }
+      }
+
+      if (batchData.length === 0) {
+        drawTrailEmpty(canvas, '无有效轨迹数据');
+        return;
+      }
+
+      drawMultiFlightTrail(canvas, batchData, allPts, flat, terminalConfig);
+    }).catch(function(err) {
+      loading.style.display = 'none';
+      try {
+        var ctx = canvas.getContext('2d');
+        var w = canvas.parentElement.clientWidth || 800;
+        var h = canvas.parentElement.clientHeight || 500;
+        var dpr = window.devicePixelRatio || 1;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        ctx.scale(dpr, dpr);
+        ctx.fillStyle = '#0a1628';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#f85149';
+        ctx.font = '14px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('查询失败: ' + err.message, w/2, h/2);
+      } catch(e2) {}
+    });
+  }
+
+  function loadFallbackBatchTrail(callsigns, dof, mapElements, terminalConfig, colors, canvas, loading) {
+    // 当 DB 无数据时，逐个呼号查旧的 gzip 历史数据
+    var allPromises = [];
+    for (var i = 0; i < callsigns.length; i++) {
+      var cs = callsigns[i];
+      var url = '/api/flight_trail?callsign=' + encodeURIComponent(cs);
+      if (dof) url += '&date=' + encodeURIComponent(dof);
+      allPromises.push(fetch(url).then(function(r) { return r.json(); }));
+    }
+
+    Promise.all(allPromises).then(function(results) {
+      loading.style.display = 'none';
+      var batchData = [];
+      var allPts = [];
+      for (var i = 0; i < results.length; i++) {
+        var pts = results[i];
+        if (!pts || pts.length < 2) continue;
+        var color = colors[i % colors.length];
+        // 从 pts 推断呼号
+        var cs = '';
+        for (var p = 0; p < pts.length; p++) {
+          if (pts[p].cs) { cs = pts[p].cs; break; }
+        }
+        if (!cs) cs = callsigns[i];
+        batchData.push({ callsign: cs, points: pts, color: color });
+        for (var p = 0; p < pts.length; p++) {
+          allPts.push(pts[p]);
+        }
+      }
+      if (batchData.length === 0) {
+        drawTrailEmpty(canvas, '无有效轨迹数据');
+        return;
+      }
+      drawMultiFlightTrail(canvas, batchData, allPts, mapElements, terminalConfig);
+    }).catch(function(err) {
+      loading.style.display = 'none';
+      drawTrailEmpty(canvas, '查询失败: ' + err.message);
+    });
+  }
+
+  function drawMultiFlightTrail(canvas, batchData, allPts, mapElements, terminalConfig) {
+    var container = canvas.parentElement;
+    var w = container.clientWidth;
+    var h = container.clientHeight;
+    if (w < 100) w = 800;
+    if (h < 100) h = 500;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    // 计算包围盒
+    var minLat = Infinity, maxLat = -Infinity;
+    var minLon = Infinity, maxLon = -Infinity;
+    for (var i = 0; i < allPts.length; i++) {
+      var lt = parseFloat(allPts[i].lt);
+      var ln = parseFloat(allPts[i].ln);
+      if (!isNaN(lt) && !isNaN(ln)) {
+        if (lt < minLat) minLat = lt;
+        if (lt > maxLat) maxLat = lt;
+        if (ln < minLon) minLon = ln;
+        if (ln > maxLon) maxLon = ln;
+      }
+    }
+
+    if (!isFinite(minLat)) {
+      drawTrailEmpty(canvas, '无效位置数据');
+      return;
+    }
+
+    var centerLat = (minLat + maxLat) / 2;
+    var centerLon = (minLon + maxLon) / 2;
+    var margin = 0.1;
+    var latSpan = (maxLat - minLat) * (1 + margin) || 0.05;
+    var lonSpan = (maxLon - minLon) * (1 + margin) || 0.05;
+    var paddingPx = 60;
+    var scaleLat = (latSpan * 111320) / (h - paddingPx * 2);
+    var cosCenter = Math.cos(centerLat * Math.PI / 180);
+    var scaleLon = (lonSpan * 111320 * cosCenter) / (w - paddingPx * 2);
+    var scale = Math.max(scaleLat, scaleLon, 1);
+
+    _trailGeo = new GeoTransform({lat: centerLat, lon: centerLon}, scale, w, h);
+
+    ctx.fillStyle = '#0a1628';
+    ctx.fillRect(0, 0, w, h);
+
+    // 绘制地图背景
+    _trailMapElements = mapElements || [];
+    for (var i = 0; i < _trailMapElements.length; i++) {
+      drawElement(ctx, _trailMapElements[i], _trailGeo);
+    }
+
+    // 图例
+    var legendX = 12;
+    var legendY = 36;
+    var legendSpacing = 20;
+
+    // 绘制每条轨迹
+    for (var t = 0; t < batchData.length; t++) {
+      var trk = batchData[t];
+      var pts = trk.points;
+      var color = trk.color || '#38bdf8';
+
+      // 转换像素点
+      var pixelPts = [];
+      for (var i = 0; i < pts.length; i++) {
+        var lt = parseFloat(pts[i].lt);
+        var ln = parseFloat(pts[i].ln);
+        if (isNaN(lt) || isNaN(ln)) continue;
+        var sp = _trailGeo.realToPixel({lat: lt, lon: ln});
+        pixelPts.push(sp);
+      }
+
+      if (pixelPts.length < 2) continue;
+
+      // 轨迹线
+      ctx.beginPath();
+      ctx.moveTo(pixelPts[0].x, pixelPts[0].y);
+      ctx.globalAlpha = 0.85;
+      for (var i = 1; i < pixelPts.length; i++) {
+        ctx.lineTo(pixelPts[i].x, pixelPts[i].y);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]);
+      ctx.stroke();
+      ctx.globalAlpha = 1.0;
+
+      // 起点标记（小圆点）
+      ctx.beginPath();
+      ctx.arc(pixelPts[0].x, pixelPts[0].y, 3, 0, 2 * Math.PI);
+      ctx.fillStyle = color;
+      ctx.fill();
+
+      // 终点标记
+      ctx.beginPath();
+      ctx.arc(pixelPts[pixelPts.length-1].x, pixelPts[pixelPts.length-1].y, 3, 0, 2 * Math.PI);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // 终点附近标呼号
+      var lastPx = pixelPts[pixelPts.length-1];
+      ctx.fillStyle = color;
+      ctx.font = 'bold 11px Consolas, monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(trk.callsign, lastPx.x + 5, lastPx.y - 3);
+
+      // 图例
+      ctx.fillStyle = color;
+      ctx.font = '11px Consolas, monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(trk.callsign + ' ' + (trk.track_type === 'ARRIVAL' ? '进港' : trk.track_type === 'DEPARTURE' ? '出港' : ''), legendX, legendY);
+      legendY += legendSpacing;
+    }
+
+    // 底部信息
+    ctx.fillStyle = '#64748b';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(batchData.length + ' 条航迹', 12, h - 12);
+  }
 
   // ── 缩放与拖动 + 悬停检测 ──
   var isDragging = false;

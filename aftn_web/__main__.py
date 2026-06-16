@@ -276,7 +276,19 @@ def main(argv: list[str] | None = None) -> int:
     radar_history_store: RadarHistoryStore | None = None
     radar_receiver: RadarReceiver | None = None
     if config.radar.enabled:
-        fdr_store = FDRStore()
+        track_cfg = {
+            "enabled": config.track_recording.enabled,
+            "airports": list(config.track_recording.airports),
+            "area_top_left": {
+                "lat": config.track_recording.top_left_lat,
+                "lon": config.track_recording.top_left_lon,
+            },
+            "area_bottom_right": {
+                "lat": config.track_recording.bottom_right_lat,
+                "lon": config.track_recording.bottom_right_lon,
+            },
+        }
+        fdr_store = FDRStore(track_config=track_cfg)
         radar_history_store = RadarHistoryStore(
             Path(config.db_path).parent / "radar_history",
             retention_days=90,

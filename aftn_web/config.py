@@ -62,12 +62,24 @@ class AsrEndpointConfig:
 
 
 @dataclass
+class TrackRecordingConfig:
+    """航迹保存配置"""
+    enabled: bool = False
+    airports: tuple = ("ZGSZ", "ZGSD", "VMMC")
+    top_left_lat: float = 23.5
+    top_left_lon: float = 112.0
+    bottom_right_lat: float = 21.0
+    bottom_right_lon: float = 115.5
+
+
+@dataclass
 class AppConfig:
     system_name: str = "ATC AFTN WebHub"
     aftn: EndpointConfig = field(default_factory=EndpointConfig)
     radar: RadarEndpointConfig = field(default_factory=RadarEndpointConfig)
     voice: VoiceEndpointConfig = field(default_factory=VoiceEndpointConfig)
     asr: AsrEndpointConfig = field(default_factory=AsrEndpointConfig)
+    track_recording: TrackRecordingConfig = field(default_factory=TrackRecordingConfig)
     voice_data: VoiceDataConfig = field(default_factory=VoiceDataConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     web: WebConfig = field(default_factory=WebConfig)
@@ -93,6 +105,7 @@ def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
     radar_raw = raw.get("network", {}).get("radar", {})
     voice_raw = raw.get("network", {}).get("voice", {})
     asr_raw = raw.get("network", {}).get("asr", {})
+    track_raw = raw.get("track_recording", {})
     voice_data_raw = raw.get("voice_data", {})
     db = raw.get("database", {})
     web = raw.get("web", {})
@@ -122,6 +135,14 @@ def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
             port=int(asr_raw.get("port", 33033)),
             interface_ip=asr_raw.get("interface_ip", "0.0.0.0"),
             enabled=bool(asr_raw.get("enabled", False)),
+        ),
+        track_recording=TrackRecordingConfig(
+            enabled=bool(track_raw.get("enabled", False)),
+            airports=tuple(track_raw.get("airports", ["ZGSZ", "ZGSD", "VMMC"])),
+            top_left_lat=float(track_raw.get("area_top_left", {}).get("lat", 23.5)),
+            top_left_lon=float(track_raw.get("area_top_left", {}).get("lon", 112.0)),
+            bottom_right_lat=float(track_raw.get("area_bottom_right", {}).get("lat", 21.0)),
+            bottom_right_lon=float(track_raw.get("area_bottom_right", {}).get("lon", 115.5)),
         ),
         voice_data=VoiceDataConfig(
             flight_count_max=int(voice_data_raw.get("flight_count_max", 18)),

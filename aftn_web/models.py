@@ -87,3 +87,25 @@ class FlightPlan:
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+@dataclass
+class FlightTrack:
+    """航迹记录"""
+    id: int = 0
+    callsign: str = ""
+    track_type: str = ""       # ARRIVAL 或 DEPARTURE
+    adep: str = ""
+    adest: str = ""
+    dof: str = ""              # YYYY-MM-DD
+    points_json: str = ""      # JSON 序列化的航迹点列表
+    start_time: str = ""       # 首点时间
+    end_time: str = ""         # 末点时间
+    created_at: str = ""
+
+    def get_points(self) -> list[dict]:
+        import json
+        try:
+            return json.loads(self.points_json)
+        except (json.JSONDecodeError, TypeError):
+            return []

@@ -214,6 +214,93 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
         return jsonify(pts_sorted)
 
+    # ══════════════════════════════════════════════════════════
+    # 航迹保存（flight_tracks 数据库查询）
+    # ══════════════════════════════════════════════════════════
+
+    @app.route("/api/flight_tracks")
+    def api_flight_tracks():
+        """查询已保存的航迹记录（替代原 CAT062 gzip 扫描方式）
+
+        Query params:
+            callsign: 呼号
+            dof: 执行日期 (YYYY-MM-DD)
+            adep: 起飞机场
+            adest: 目的地机场
+            track_type: ARRIVAL / DEPARTURE
+        """
+        callsign = _req_str("callsign")
+        dof = _req_str("dof") or datetime.utcnow().strftime("%Y-%m-%d")
+        adep = _req_str("adep")
+        adest = _req_str("adest")
+        track_type = _req_str("track_type")
+
+        from .database import query_flight_tracks
+        records = query_flight_tracks(
+            db, callsign=callsign or "",
+            dof=dof or "",
+            adep=adep or "",
+            adest=adest or "",
+            track_type=track_type or "",
+            limit=100,
+        )
+        # 返回时反序列化 points_json
+        result = []
+        for r in records:
+            points = []
+            try:
+                points = json.loads(r.get("points_json", "[]"))
+            except (json.JSONDecodeError, TypeError):
+                pass
+            result.append({
+                "id": r["id"],
+                "callsign": r["callsign"],
+                "track_type": r["track_type"],
+                "adep": r["adep"],
+                "adest": r["adest"],
+                "dof": r["dof"],
+                "points": points,
+                "start_time": r["start_time"],
+                "end_time": r["end_time"],
+            })
+        return jsonify(result)
+
+    @app.route("/api/flight_tracks/batch")
+    def api_flight_tracks_batch():
+        """批量查询多个呼号的航迹（用于飞行计划页批量轨迹图）
+
+        Query params:
+            callsigns: 逗号分隔的呼号列表
+            dof: 执行日期 (YYYY-MM-DD)，选填
+        """
+        cs_str = _req_str("callsigns")
+        if not cs_str:
+            return jsonify([])
+        callsigns = [c.strip() for c in cs_str.split(",") if c.strip()]
+        dof = _req_str("dof") or ""
+
+        from .database import query_flight_tracks_by_callsigns
+        records = query_flight_tracks_by_callsigns(db, callsigns, dof)
+        result = []
+        for r in records:
+            points = []
+            try:
+                points = json.loads(r.get("points_json", "[]"))
+            except (json.JSONDecodeError, TypeError):
+                pass
+            result.append({
+                "id": r["id"],
+                "callsign": r["callsign"],
+                "track_type": r["track_type"],
+                "adep": r["adep"],
+                "adest": r["adest"],
+                "dof": r["dof"],
+                "points": points,
+                "start_time": r["start_time"],
+                "end_time": r["end_time"],
+            })
+        return jsonify(result)
+
     @app.route("/api/config/terminal_airports")
     def api_terminal_airports():
         """返回终端区完整配置（机场列表+多边形+高度）"""
