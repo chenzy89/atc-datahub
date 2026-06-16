@@ -884,33 +884,31 @@ class Database:
                 # 2) 已结束航班：从 entry→exit/ata 补算
                 if entry_time and terminal_flight_time >= 0:
                     _cur = conn.execute(
-                        "SELECT terminal_flight_time, exit_time, ata FROM flight_plans WHERE id=?",
+                        "SELECT terminal_flight_time, exit_time, ata, entry_time FROM flight_plans WHERE id=?",
                         (match["id"],),
                     ).fetchone()
                     if _cur:
-                        # 单调性：保留更大的已有值
-                        if _cur["terminal_flight_time"] > terminal_flight_time:
-                            terminal_flight_time = _cur["terminal_flight_time"]
-                        # 回填：entry_time 有值、航班已结束、时长为 0
-                        if terminal_flight_time == 0:
-                            _end = _cur["exit_time"] or _cur["ata"] or ""
-                            if _end:
-                                try:
-                                    from datetime import datetime as _dt2, timezone as _tz2
-                                    _e = _dt2.fromisoformat(entry_time.replace("Z", "+00:00"))
-                                    _x = _dt2.fromisoformat(str(_end))
-                                    if _x.tzinfo is None:
-                                        _x = _x.replace(tzinfo=_tz2.utc)
-                                    _computed = max(0, int((_x - _e).total_seconds()))
-                                    if _computed > 0:
-                                        terminal_flight_time = _computed
-                                        logger.info(
-                                            "[TERM] %s 回填终端时长: %ds (entry→%s)",
-                                            callsign, _computed,
-                                            "exit" if _cur["exit_time"] else "ata",
-                                        )
-                                except Exception as _ex:
-                                    logger.debug("[TERM] %s 补算失败: %s", callsign, _ex)
+                        # 当 entry_time 和 exit_time/ata 都已知时，用时间跨度替代 FDR 累计值
+                        # FDR 累计只在高度≥终端区底部时计数，下降穿底后停止，导致值偏小
+                        _end = exit_time or _cur["exit_time"] or _cur["ata"] or ""
+                        _start = entry_time or _cur["entry_time"] or ""
+                        if _start and _end:
+                            try:
+                                from datetime import datetime as _dt2, timezone as _tz2
+                                _e = _dt2.fromisoformat(_start.replace("Z", "+00:00"))
+                                _x = _dt2.fromisoformat(str(_end).replace("Z", "+00:00"))
+                                if _x.tzinfo is None:
+                                    _x = _x.replace(tzinfo=_tz2.utc)
+                                _computed = max(0, int((_x - _e).total_seconds()))
+                                if _computed > 0 and _computed != terminal_flight_time:
+                                    # 保留最大值：有时 span 可能略大于实际终端飞行时间
+                                    terminal_flight_time = _computed
+                                    logger.info(
+                                        "[TERM] %s 按 entry→exit 计算终端时长: %ds (%s → %s)",
+                                        callsign, _computed, _start, _end,
+                                    )
+                            except Exception as _ex:
+                                logger.debug("[TERM] %s 补算失败: %s", callsign, _ex)
 
                 now = _fmt_dt(datetime.utcnow())
                 cur = conn.execute(

@@ -345,14 +345,20 @@ class FDRStore:
         else:
             return ""
 
+        # 记录所有点位的距离（方便调试）
         for name, (pt_lat, pt_lon) in pts.items():
             dist = self._haversine_km(lat, lon, pt_lat, pt_lon)
             if dist < 5.0:
-                logger.debug(
-                    "[HANDOVER] %s 距 %s %.1fkm (<5km)，采用移交点 %s",
-                    self._callsign_hint, name, dist, name,
+                logger.info(
+                    "[HANDOVER] %s 距 %s %.1fkm (<5km @ %.4f,%.4f)，采用移交点 %s",
+                    self._callsign_hint, name, dist, lat, lon, name,
                 )
                 return name
+            if dist < 20.0:
+                logger.debug(
+                    "[HANDOVER] %s 距 %s %.1fkm (>5km但<20km @ %.4f,%.4f)",
+                    self._callsign_hint, name, dist, lat, lon,
+                )
         return ""
 
     _callsign_hint = ""  # 临时调试用
