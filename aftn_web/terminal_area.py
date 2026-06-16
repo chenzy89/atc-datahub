@@ -19,7 +19,7 @@ from typing import Any, Optional
 logger = logging.getLogger("aftn_web.terminal")
 
 _TERMINAL_CACHE: Optional[dict[str, Any]] = None
-_FDRG_PATH = Path("/home/share/atc_aftn_web/config/FDRG.json")
+_FDRG_PATH = Path("/home/share/atc_datahub/config/FDRG.json")
 
 
 def _point_in_polygon(lat: float, lon: float, vertices: list[list[float]]) -> bool:

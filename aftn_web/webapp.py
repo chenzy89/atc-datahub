@@ -42,7 +42,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
     @app.route("/api/maplist")
     def api_maplist():
         """返回 maplist.txt 中定义的地图文件列表（含默认启用状态）"""
-        map_dir = Path("/home/share/atc_aftn_web/map")
+        map_dir = Path("/home/share/atc_datahub/map")
         lst = map_dir / "maplist.txt"
         entries: list[dict] = []
         if lst.exists():
@@ -60,10 +60,10 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     @app.route("/api/map_file/<name>")
     def api_map_file(name: str):
-        """读取 /home/share/atc_aftn_web/map/<name>.txt 地图文件"""
+        """读取 /home/share/atc_datahub/map/<name>.txt 地图文件"""
         import os
         safe = os.path.basename(name)
-        filepath = Path("/home/share/atc_aftn_web/map") / f"{safe}.txt"
+        filepath = Path("/home/share/atc_datahub/map") / f"{safe}.txt"
         if not filepath.exists():
             return jsonify({"error": "file not found"}), 404
         for enc in ("utf-8-sig", "gbk", "utf-8"):

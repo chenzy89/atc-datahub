@@ -151,7 +151,7 @@ class FDRStore:
     _INTERESTED_TERMINALS: set[str] = set()
 
     @classmethod
-    def load_sector_map(cls, path: str | Path = "/home/share/atc_aftn_web/config/SectorInfo.txt") -> None:
+    def load_sector_map(cls, path: str | Path = "/home/share/atc_datahub/config/SectorInfo.txt") -> None:
         """从 SectorInfo.txt 加载扇区映射"""
         cls._SECTOR_MAP.clear()
         cls._SECTOR_BY_CODE.clear()
