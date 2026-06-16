@@ -138,7 +138,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             "aircraft_type": best.get("aircraft_type", ""),
             "route": best.get("route", ""),
             "handover_pt": best.get("handover_pt", ""),
-            "radar_handover_pt": best.get("radar_handover_pt", ""),
+            "radar_hp_detected": bool(best.get("radar_handover_pt", "")),
             "runway": best.get("runway", ""),
             "flight_procedure": best.get("flight_procedure", ""),
             "entry_time": best.get("entry_time", ""),
