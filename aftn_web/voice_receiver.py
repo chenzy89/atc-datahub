@@ -684,41 +684,9 @@ class VoiceReceiver:
                 pcm_data = fallback_pcm
                 decoded_ok = True
 
-        # ── 调试日志：ch264 首次包结构 ──
-        if channel == 264:
-            _ch264_log = getattr(self, '_ch264_pkt_log', 0)
-            if _ch264_log < 5:
-                self._ch264_pkt_log = _ch264_log + 1
-                suffix8 = data[-8:].hex() if raw_len >= 8 else 'N/A'
-                logger.info(
-                    "ch264 packet#%d: raw=%dB, data[2:-8]=%dB, data[2:]=%dB, "
-                    "pcm=%dB, suffix8=%s",
-                    _ch264_log + 1, raw_len,
-                    len(adpcm_data), len(data[2:]) if raw_len > 2 else 0,
-                    len(pcm_data), suffix8,
-                )
-
         if not decoded_ok:
-            if channel == 264:
-                logger.warning(
-                    "ch264 both extraction strategies failed: raw=%dB", raw_len
-                )
             adpcm_data = b''
             pcm_data = b''
-
-        # ── 调试日志：ch264 PCM 能量水平 ──
-        if pcm_data and channel == 264:
-            _ch264_energy = self._compute_pcm_energy(pcm_data)
-            _ch264_energy_log = getattr(self, '_ch264_energy_count', 0)
-            if _ch264_energy_log < 10 or (_ch264_energy_log % 50 == 0):
-                self._ch264_energy_count = _ch264_energy_log + 1
-                logger.info(
-                    "ch264 PCM energy: %.4f, pcm=%dB, slots=%d",
-                    _ch264_energy, len(pcm_data),
-                    len(pcm_data) // 2 // 505,
-                )
-            else:
-                self._ch264_energy_count = _ch264_energy_log + 1
 
         # ── 通话时长统计（VAD 能量检测） ──
         self._track_duration(channel, clock_now, pcm_data)
