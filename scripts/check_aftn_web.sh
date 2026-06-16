@@ -3,7 +3,7 @@
 # 用法：./scripts/check_aftn_web.sh
 
 PORT=5000
-WORK_DIR="/home/share/atc_aftn_web"
+WORK_DIR="/home/share/atc_datahub"
 LOG_DIR="$WORK_DIR/logs"
 PID_FILE="/tmp/aftn_web.pid"
 
