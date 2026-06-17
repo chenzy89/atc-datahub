@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.1.78</title>
+<title>ATC综合数据中心 v2.1.79</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -2329,7 +2329,9 @@ function esc(s) {
         popup.innerHTML = '' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
           + '<span style="font-size:16px;font-weight:700;color:#34d399;">' + esc(data.callsign || '-') + '</span>'
-          + '<button onclick="closeTrackPopup()" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;">&times;</button>'
+          + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
+          + '<span style="font-size:16px;font-weight:700;color:#34d399;">' + esc(data.callsign || '-') + '</span>'
+          + '<button class="track-popup-close" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;">&times;</button>'
           + '</div>'
           + '<table style="width:100%;border-collapse:collapse;">'
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">起飞地</td><td style="padding:2px 0;">' + esc(data.adep || '-') + '</td></tr>'
@@ -2347,6 +2349,10 @@ function esc(s) {
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">移交点</td><td style="padding:2px 0;">' + esc(data.handover_pt || '-') + (data.radar_hp_detected ? ' <span style="color:#58a6ff;font-weight:600;font-size:11px;">[雷达命中]</span>' : '') + '</td></tr>'
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;vertical-align:top;">航路</td><td style="padding:2px 0;word-break:break-all;font-size:12px;">' + esc(data.route || '-') + '</td></tr>'
           + '</table>';
+
+        // 给关闭按钮绑定事件（不用 inline onclick）
+        var closeBtn = popup.querySelector('.track-popup-close');
+        if (closeBtn) closeBtn.addEventListener('click', closeTrackPopup);
 
         // 背景遮罩
         var overlay = document.createElement('div');
@@ -2369,7 +2375,7 @@ function esc(s) {
         popup.innerHTML = '' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">'
           + '<span style="font-size:16px;font-weight:700;color:#34d399;">' + esc(trk.callsign || trk.ssr || '-') + '</span>'
-          + '<button onclick="closeTrackPopup()" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;">&times;</button>'
+          + '<button class="track-popup-close" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;">&times;</button>'
           + '</div>'
           + '<div style="color:#94a3b8;">无飞行计划记录</div>'
           + '<table style="width:100%;border-collapse:collapse;margin-top:10px;">'
@@ -2377,6 +2383,10 @@ function esc(s) {
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">经度</td><td style="padding:2px 0;">' + (typeof trk.longitude !== 'undefined' ? parseFloat(trk.longitude).toFixed(4) : '-') + '</td></tr>'
           + '<tr><td style="color:#64748b;padding:2px 8px 2px 0;white-space:nowrap;">高度</td><td style="padding:2px 0;">' + (trk.flight_level ? Math.round(parseFloat(trk.flight_level)) + ' m' : '-') + '</td></tr>'
           + '</table>';
+
+        // 给关闭按钮绑定事件
+        var closeBtn2 = popup.querySelector('.track-popup-close');
+        if (closeBtn2) closeBtn2.addEventListener('click', closeTrackPopup);
 
         var overlay = document.createElement('div');
         overlay.id = 'track-popup-overlay';
