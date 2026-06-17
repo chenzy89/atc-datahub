@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.1.74</title>
+<title>ATC综合数据中心 v2.1.75</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -3051,7 +3051,6 @@ function esc(s) {
     // 收集呼号和 DOF
     var pairs = {};
     var dofSet = new Set();
-    var fpMeta = {}; // {callsign: {adep, adest}}
     for (var i = 0; i < rows.length; i++) {
       var link = rows[i].querySelector('.callsign a');
       if (link) {
@@ -3060,7 +3059,6 @@ function esc(s) {
         if (cs) {
           pairs[cs] = d || '';
           if (d) dofSet.add(d);
-          fpMeta[cs] = { adep: link.dataset.adep || '', adest: link.dataset.adest || '' };
         }
       }
     }
@@ -3140,87 +3138,31 @@ function esc(s) {
 
       loading.style.display = 'none';
 
-      // 收集 DB 中找到的呼号
-      var foundCs = {};
+      var allPts = [];
+      var batchData = [];
       for (var t = 0; t < tracks.length; t++) {
-        if (tracks[t].callsign) foundCs[tracks[t].callsign] = true;
-      }
-
-      // 需要从 gzip 补查的呼号
-      var missingCs = [];
-      for (var ci = 0; ci < callsigns.length; ci++) {
-        if (!foundCs[callsigns[ci]]) missingCs.push(callsigns[ci]);
-      }
-
-      // 如果有缺失，并发查询 gzip 历史
-      var fallbackPromise = Promise.resolve([]);
-      if (missingCs.length > 0) {
-        var fallbackReqs = missingCs.map(function(cs) {
-          var url = '/api/flight_trail?callsign=' + encodeURIComponent(cs);
-          if (dof) url += '&date=' + encodeURIComponent(dof);
-          return fetch(url).then(function(r) { return r.json(); }).then(function(pts) {
-            var meta = fpMeta[cs] || {};
-            var adep = meta.adep || '';
-            var adest = meta.adest || '';
-            var track_type = 'ARRIVAL';
-            if (adest && adest !== 'ZGSZ' && adep === 'ZGSZ') {
-              track_type = 'DEPARTURE';
-            } else if (adest === 'ZGSZ') {
-              track_type = 'ARRIVAL';
-            }
-            return { callsign: cs, points: pts, track_type: track_type };
-          }).catch(function() { return null; });
+        var trk = tracks[t];
+        if (!trk.points || trk.points.length < 2) continue;
+        var color = getBatchTrailColor(trk.track_type);
+        batchData.push({
+          callsign: trk.callsign,
+          track_type: trk.track_type,
+          points: trk.points,
+          color: color,
         });
-        fallbackPromise = Promise.all(fallbackReqs).then(function(fts) {
-          return fts.filter(function(f) { return f && f.points && f.points.length >= 2; });
-        });
+        for (var p = 0; p < trk.points.length; p++) {
+          allPts.push(trk.points[p]);
+        }
       }
 
-      return fallbackPromise.then(function(fallbackTracks) {
-        var allPts = [];
-        var batchData = [];
+      title.textContent = '批量轨迹 (' + batchData.length + ' 架次 / ' + callsigns.length + ' 架次)';
 
-        // DB 结果
-        for (var t = 0; t < tracks.length; t++) {
-          var trk = tracks[t];
-          if (!trk.points || trk.points.length < 2) continue;
-          var color = getBatchTrailColor(trk.track_type);
-          batchData.push({
-            callsign: trk.callsign,
-            track_type: trk.track_type,
-            points: trk.points,
-            color: color,
-          });
-          for (var p = 0; p < trk.points.length; p++) {
-            allPts.push(trk.points[p]);
-          }
-        }
+      if (batchData.length === 0) {
+        drawTrailEmpty(canvas, '无有效航迹数据\n（仅有 ' + callsigns.length + ' 个飞行计划，' + tracks.length + ' 个有航迹记录）');
+        return;
+      }
 
-        // gzip 补查结果
-        for (var f = 0; f < fallbackTracks.length; f++) {
-          var ft = fallbackTracks[f];
-          var color = getBatchTrailColor(ft.track_type);
-          batchData.push({
-            callsign: ft.callsign,
-            track_type: ft.track_type,
-            points: ft.points,
-            color: color,
-          });
-          for (var p = 0; p < ft.points.length; p++) {
-            allPts.push(ft.points[p]);
-          }
-        }
-
-        // 更新标题
-        title.textContent = '批量轨迹 (' + batchData.length + ' 架次)';
-
-        if (batchData.length === 0) {
-          drawTrailEmpty(canvas, '无有效轨迹数据');
-          return;
-        }
-
-        drawMultiFlightTrail(canvas, batchData, allPts, flat, terminalConfig);
-      });
+      drawMultiFlightTrail(canvas, batchData, allPts, flat, terminalConfig);
     }).catch(function(err) {
       loading.style.display = 'none';
       try {
