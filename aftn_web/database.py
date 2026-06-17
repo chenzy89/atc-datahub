@@ -791,8 +791,6 @@ class Database:
                 conn = self._get_conn()
                 set_parts = ["runway=?", "flight_procedure=?", "updated_at=?"]
                 set_vals = [runway, flight_procedure, now]
-                where_parts = ["(runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')"]
-                where_vals = [runway, flight_procedure]
 
                 if handover_pt:
                     handover_pt = handover_pt.upper().strip()
@@ -801,8 +799,12 @@ class Database:
                     set_vals.append(handover_pt)
                     set_parts.append("radar_handover_pt=?")
                     set_vals.append(handover_pt)
-                    where_parts.append("radar_handover_pt != ?")
-                    where_vals.append(handover_pt)
+                    # 跑道/程序没变但 radar_handover_pt 有更新时也要写入
+                    where_parts = ["(runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='' OR radar_handover_pt != ?)"]
+                    where_vals = [runway, flight_procedure, handover_pt]
+                else:
+                    where_parts = ["(runway != ? OR flight_procedure != ? OR runway='' OR flight_procedure='')"]
+                    where_vals = [runway, flight_procedure]
 
                 set_clause = ", ".join(set_parts)
                 where_clause = " AND ".join(where_parts)
