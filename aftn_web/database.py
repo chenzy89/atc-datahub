@@ -806,7 +806,7 @@ class Database:
 
                 set_clause = ", ".join(set_parts)
                 where_clause = " AND ".join(where_parts)
-                all_params = set_vals + where_vals + [match["id"]]
+                all_params = set_vals + [match["id"]] + where_vals
 
                 cur = conn.execute(
                     f"UPDATE flight_plans SET {set_clause} WHERE id=? AND {where_clause}",
