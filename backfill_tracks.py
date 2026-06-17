@@ -15,6 +15,7 @@ import gzip
 import os
 from datetime import datetime, date
 from pathlib import Path
+from typing import List
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger("backfill")
 
 
-def query_radar_history(archive_dir: str, date_str: str, callsign: str = "") -> list[dict]:
+def query_radar_history(archive_dir: str, date_str: str, callsign: str = "") -> List[dict]:
     """从 radar_history gzip 中查询轨迹点"""
     fpath = os.path.join(archive_dir, f"radar_{date_str.replace('-', '')}.jsonl.gz")
     if not os.path.exists(fpath):
@@ -73,7 +74,7 @@ def backfill(date_str: str, archive_dir: str, db_path: str):
         return
 
     logger.info("扫描档案文件: %s", fpath)
-    pts_by_cs: dict[str, list[dict]] = {}
+    pts_by_cs = {}
     line_count = 0
     with gzip.open(fpath, "rt", encoding="utf-8") as f:
         for line in f:
