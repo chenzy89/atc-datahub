@@ -280,12 +280,10 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         callsigns = [c.strip() for c in cs_str.split(",") if c.strip()]
         dof = _req_str("dof") or ""
 
-        from .database import query_flight_tracks_by_callsigns, query_flight_plans
+        from .database import query_flight_tracks_by_callsigns
         records = query_flight_tracks_by_callsigns(db, callsigns, dof)
         result = []
-        found_cs = set()
         for r in records:
-            found_cs.add(r["callsign"])
             points = []
             try:
                 points = json.loads(r.get("points_json", "[]"))
@@ -302,56 +300,6 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
                 "start_time": r["start_time"],
                 "end_time": r["end_time"],
             })
-
-        # 补充查询：DB 中找不到的呼号，从 radar_history gzip 中查询
-        if radar_history_store is not None and dof:
-            missing = [cs for cs in callsigns if cs not in found_cs]
-            if missing:
-                ts_from = f"{dof}T00:00:00.000Z"
-                ts_to = f"{dof}T23:59:59.000Z"
-                # 获取飞行计划信息以确定进/出港
-                fp_map = {}
-                try:
-                    import datetime as _dt
-                    dof_date = _dt.datetime.strptime(dof, "%Y-%m-%d").date()
-                    for cs in missing:
-                        try:
-                            fplist = query_flight_plans(db, callsign=cs, dof=dof_date, limit=1)
-                            if fplist:
-                                fp_map[cs] = fplist[0]
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-                for cs in missing:
-                    try:
-                        pts = radar_history_store.query(ts_from, ts_to, cs)
-                        if pts and len(pts) >= 2:
-                            pts_sorted = sorted(pts, key=lambda p: p.get("ts", ""))
-                            fp = fp_map.get(cs, {})
-                            adep = fp.get("adep", "") if fp else ""
-                            adest = fp.get("adest", "") if fp else ""
-                            # 决定进/出港
-                            if adest == "ZGSZ":
-                                track_type = "ARRIVAL"
-                            elif adep == "ZGSZ":
-                                track_type = "DEPARTURE"
-                            else:
-                                track_type = "ARRIVAL"
-                            result.append({
-                                "id": 0,
-                                "callsign": cs,
-                                "track_type": track_type,
-                                "adep": adep,
-                                "adest": adest,
-                                "dof": dof,
-                                "points": pts_sorted,
-                                "start_time": pts_sorted[0].get("ts", ""),
-                                "end_time": pts_sorted[-1].get("ts", ""),
-                            })
-                    except Exception:
-                        pass
-
         return jsonify(result)
 
     @app.route("/api/config/terminal_airports")

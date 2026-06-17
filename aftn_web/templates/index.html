@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.1.73</title>
+<title>ATC综合数据中心 v2.1.74</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -1288,7 +1288,7 @@ function renderPlans(rs) {
       msgTagsHtml += '<span class="tag ' + mtc + '" style="cursor:pointer;margin-right:3px;" onclick="showFplMsg(\'' + esc(r.callsign||'') + '\',\'' + dofStr + '\')" title="查看该计划的两天内所有报文">' + mt + '</span>';
     }
     h += '<tr>' +
-      '<td class="callsign"><a href="javascript:void(0)" onclick="showFlightTrail(this)" data-callsign="' + esc(r.callsign||'') + '" data-dof="' + esc((r.dof||'').slice(0,10)) + '" data-atd="' + esc(r.atd||'') + '" data-ata="' + esc(r.ata||'') + '" data-entry="' + esc(r.entry_time||'') + '" data-exit="' + esc(r.exit_time||'') + '" style="color:var(--accent-green);text-decoration:none;cursor:pointer;" title="查看历史轨迹">' + (r.callsign||'-') + '</a></td>' +
+      '<td class="callsign"><a href="javascript:void(0)" onclick="showFlightTrail(this)" data-callsign="' + esc(r.callsign||'') + '" data-dof="' + esc((r.dof||'').slice(0,10)) + '" data-adep="' + esc(r.adep||'') + '" data-adest="' + esc(r.adest||'') + '" data-atd="' + esc(r.atd||'') + '" data-ata="' + esc(r.ata||'') + '" data-entry="' + esc(r.entry_time||'') + '" data-exit="' + esc(r.exit_time||'') + '" style="color:var(--accent-green);text-decoration:none;cursor:pointer;" title="查看历史轨迹">' + (r.callsign||'-') + '</a></td>'+
       '<td>' + (r.flight_rule||'-') + '</td>' +
       '<td>' + (r.radar_handover_pt ? '<span style="color:#58a6ff;font-weight:600;" title="雷达探测">' + r.handover_pt + '</span>' : (r.handover_pt||'-')) + '</td>' +
       '<td>' + (r.aircraft_type||'-') + '</td>' +
@@ -3051,6 +3051,7 @@ function esc(s) {
     // 收集呼号和 DOF
     var pairs = {};
     var dofSet = new Set();
+    var fpMeta = {}; // {callsign: {adep, adest}}
     for (var i = 0; i < rows.length; i++) {
       var link = rows[i].querySelector('.callsign a');
       if (link) {
@@ -3059,6 +3060,7 @@ function esc(s) {
         if (cs) {
           pairs[cs] = d || '';
           if (d) dofSet.add(d);
+          fpMeta[cs] = { adep: link.dataset.adep || '', adest: link.dataset.adest || '' };
         }
       }
     }
@@ -3138,36 +3140,87 @@ function esc(s) {
 
       loading.style.display = 'none';
 
-      var container = canvas.parentElement;
-      var w = container.clientWidth;
-      var h = container.clientHeight;
-      if (w < 100) w = 800;
-      if (h < 100) h = 500;
-
-      // 计算所有轨迹点的包围盒
-      var allPts = [];
-      var batchData = [];
+      // 收集 DB 中找到的呼号
+      var foundCs = {};
       for (var t = 0; t < tracks.length; t++) {
-        var trk = tracks[t];
-        if (!trk.points || trk.points.length < 2) continue;
-        var color = getBatchTrailColor(trk.track_type);
-        batchData.push({
-          callsign: trk.callsign,
-          track_type: trk.track_type,
-          points: trk.points,
-          color: color,
+        if (tracks[t].callsign) foundCs[tracks[t].callsign] = true;
+      }
+
+      // 需要从 gzip 补查的呼号
+      var missingCs = [];
+      for (var ci = 0; ci < callsigns.length; ci++) {
+        if (!foundCs[callsigns[ci]]) missingCs.push(callsigns[ci]);
+      }
+
+      // 如果有缺失，并发查询 gzip 历史
+      var fallbackPromise = Promise.resolve([]);
+      if (missingCs.length > 0) {
+        var fallbackReqs = missingCs.map(function(cs) {
+          var url = '/api/flight_trail?callsign=' + encodeURIComponent(cs);
+          if (dof) url += '&date=' + encodeURIComponent(dof);
+          return fetch(url).then(function(r) { return r.json(); }).then(function(pts) {
+            var meta = fpMeta[cs] || {};
+            var adep = meta.adep || '';
+            var adest = meta.adest || '';
+            var track_type = 'ARRIVAL';
+            if (adest && adest !== 'ZGSZ' && adep === 'ZGSZ') {
+              track_type = 'DEPARTURE';
+            } else if (adest === 'ZGSZ') {
+              track_type = 'ARRIVAL';
+            }
+            return { callsign: cs, points: pts, track_type: track_type };
+          }).catch(function() { return null; });
         });
-        for (var p = 0; p < trk.points.length; p++) {
-          allPts.push(trk.points[p]);
+        fallbackPromise = Promise.all(fallbackReqs).then(function(fts) {
+          return fts.filter(function(f) { return f && f.points && f.points.length >= 2; });
+        });
+      }
+
+      return fallbackPromise.then(function(fallbackTracks) {
+        var allPts = [];
+        var batchData = [];
+
+        // DB 结果
+        for (var t = 0; t < tracks.length; t++) {
+          var trk = tracks[t];
+          if (!trk.points || trk.points.length < 2) continue;
+          var color = getBatchTrailColor(trk.track_type);
+          batchData.push({
+            callsign: trk.callsign,
+            track_type: trk.track_type,
+            points: trk.points,
+            color: color,
+          });
+          for (var p = 0; p < trk.points.length; p++) {
+            allPts.push(trk.points[p]);
+          }
         }
-      }
 
-      if (batchData.length === 0) {
-        drawTrailEmpty(canvas, '无有效轨迹数据');
-        return;
-      }
+        // gzip 补查结果
+        for (var f = 0; f < fallbackTracks.length; f++) {
+          var ft = fallbackTracks[f];
+          var color = getBatchTrailColor(ft.track_type);
+          batchData.push({
+            callsign: ft.callsign,
+            track_type: ft.track_type,
+            points: ft.points,
+            color: color,
+          });
+          for (var p = 0; p < ft.points.length; p++) {
+            allPts.push(ft.points[p]);
+          }
+        }
 
-      drawMultiFlightTrail(canvas, batchData, allPts, flat, terminalConfig);
+        // 更新标题
+        title.textContent = '批量轨迹 (' + batchData.length + ' 架次)';
+
+        if (batchData.length === 0) {
+          drawTrailEmpty(canvas, '无有效轨迹数据');
+          return;
+        }
+
+        drawMultiFlightTrail(canvas, batchData, allPts, flat, terminalConfig);
+      });
     }).catch(function(err) {
       loading.style.display = 'none';
       try {
