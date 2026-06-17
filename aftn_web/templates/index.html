@@ -3092,8 +3092,9 @@ function esc(s) {
     var url = '/api/flight_tracks/batch?callsigns=' + queryStr;
     if (dof) url += '&dof=' + encodeURIComponent(dof);
 
-    var bp = []; // { callsign, track_type, points, color }
-    var colors = ['#38bdf8', '#fbbf24', '#a78bfa', '#fb7185', '#34d399', '#f97316', '#22d3ee', '#e879f9', '#fdba74', '#67e8f9'];
+    function getBatchTrailColor(trackType) {
+      return trackType === 'DEPARTURE' ? '#3b82f6' : '#eab308';
+    }
 
     Promise.all([
       fetch(url).then(function(r) { return r.json(); }),
@@ -3135,13 +3136,6 @@ function esc(s) {
       _trailState.terminalConfig = terminalConfig;
       _trailMapElements = flat;
 
-      // 回退尝试旧的 gzip 扫描
-      if (tracks.length === 0) {
-        // 逐个呼号查询旧的历史数据
-        loadFallbackBatchTrail(callsigns, dof, flat, terminalConfig, colors, canvas, loading);
-        return;
-      }
-
       loading.style.display = 'none';
 
       var container = canvas.parentElement;
@@ -3156,7 +3150,7 @@ function esc(s) {
       for (var t = 0; t < tracks.length; t++) {
         var trk = tracks[t];
         if (!trk.points || trk.points.length < 2) continue;
-        var color = colors[t % colors.length];
+        var color = getBatchTrailColor(trk.track_type);
         batchData.push({
           callsign: trk.callsign,
           track_type: trk.track_type,
@@ -3194,46 +3188,6 @@ function esc(s) {
         ctx.textBaseline = 'middle';
         ctx.fillText('查询失败: ' + err.message, w/2, h/2);
       } catch(e2) {}
-    });
-  }
-
-  function loadFallbackBatchTrail(callsigns, dof, mapElements, terminalConfig, colors, canvas, loading) {
-    // 当 DB 无数据时，逐个呼号查旧的 gzip 历史数据
-    var allPromises = [];
-    for (var i = 0; i < callsigns.length; i++) {
-      var cs = callsigns[i];
-      var url = '/api/flight_trail?callsign=' + encodeURIComponent(cs);
-      if (dof) url += '&date=' + encodeURIComponent(dof);
-      allPromises.push(fetch(url).then(function(r) { return r.json(); }));
-    }
-
-    Promise.all(allPromises).then(function(results) {
-      loading.style.display = 'none';
-      var batchData = [];
-      var allPts = [];
-      for (var i = 0; i < results.length; i++) {
-        var pts = results[i];
-        if (!pts || pts.length < 2) continue;
-        var color = colors[i % colors.length];
-        // 从 pts 推断呼号
-        var cs = '';
-        for (var p = 0; p < pts.length; p++) {
-          if (pts[p].cs) { cs = pts[p].cs; break; }
-        }
-        if (!cs) cs = callsigns[i];
-        batchData.push({ callsign: cs, points: pts, color: color });
-        for (var p = 0; p < pts.length; p++) {
-          allPts.push(pts[p]);
-        }
-      }
-      if (batchData.length === 0) {
-        drawTrailEmpty(canvas, '无有效轨迹数据');
-        return;
-      }
-      drawMultiFlightTrail(canvas, batchData, allPts, mapElements, terminalConfig);
-    }).catch(function(err) {
-      loading.style.display = 'none';
-      drawTrailEmpty(canvas, '查询失败: ' + err.message);
     });
   }
 
@@ -3292,16 +3246,31 @@ function esc(s) {
       drawElement(ctx, _trailMapElements[i], _trailGeo);
     }
 
-    // 图例
+    // 图例（仅进港/出港两种颜色）
     var legendX = 12;
     var legendY = 36;
     var legendSpacing = 20;
+    var legendItems = [
+      { label: '进港', color: '#eab308' },
+      { label: '出港', color: '#3b82f6' },
+    ];
+    for (var li = 0; li < legendItems.length; li++) {
+      var item = legendItems[li];
+      ctx.fillStyle = item.color;
+      ctx.fillRect(legendX, legendY, 14, 3);
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(item.label, legendX + 20, legendY + 2);
+      legendY += legendSpacing;
+    }
 
-    // 绘制每条轨迹
+    // 绘制每条轨迹（只画 1px 线，无端点标记、无呼号标签）
     for (var t = 0; t < batchData.length; t++) {
       var trk = batchData[t];
       var pts = trk.points;
-      var color = trk.color || '#38bdf8';
+      var color = trk.color || '#eab308';
 
       // 转换像素点
       var pixelPts = [];
@@ -3315,10 +3284,10 @@ function esc(s) {
 
       if (pixelPts.length < 2) continue;
 
-      // 轨迹线
+      // 纯轨迹线（1px，无标注）
       ctx.beginPath();
       ctx.moveTo(pixelPts[0].x, pixelPts[0].y);
-      ctx.globalAlpha = 0.85;
+      ctx.globalAlpha = 0.7;
       for (var i = 1; i < pixelPts.length; i++) {
         ctx.lineTo(pixelPts[i].x, pixelPts[i].y);
       }
@@ -3327,37 +3296,6 @@ function esc(s) {
       ctx.setLineDash([]);
       ctx.stroke();
       ctx.globalAlpha = 1.0;
-
-      // 起点标记（小圆点）
-      ctx.beginPath();
-      ctx.arc(pixelPts[0].x, pixelPts[0].y, 3, 0, 2 * Math.PI);
-      ctx.fillStyle = color;
-      ctx.fill();
-
-      // 终点标记
-      ctx.beginPath();
-      ctx.arc(pixelPts[pixelPts.length-1].x, pixelPts[pixelPts.length-1].y, 3, 0, 2 * Math.PI);
-      ctx.fillStyle = color;
-      ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      // 终点附近标呼号
-      var lastPx = pixelPts[pixelPts.length-1];
-      ctx.fillStyle = color;
-      ctx.font = 'bold 11px Consolas, monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(trk.callsign, lastPx.x + 5, lastPx.y - 3);
-
-      // 图例
-      ctx.fillStyle = color;
-      ctx.font = '11px Consolas, monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      ctx.fillText(trk.callsign + ' ' + (trk.track_type === 'ARRIVAL' ? '进港' : trk.track_type === 'DEPARTURE' ? '出港' : ''), legendX, legendY);
-      legendY += legendSpacing;
     }
 
     // 底部信息
