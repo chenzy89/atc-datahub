@@ -106,6 +106,7 @@ class FDRRecord:
     terminal_accum_seconds: int = 0         # 终端内累计飞行秒数
     _last_terminal_check_time: float = 0.0  # 上次终端检查的 monotonic 时间
     _landed: bool = False  # 是否已落地（高度低于终端区下限），落地后停止终端检测
+    _landed_at: float = 0.0  # 落地时的 monotonic 时间戳
 
     # ── 扇区跟踪 ──
     sector_index: int = 0
@@ -177,6 +178,7 @@ class FDRRecord:
         cfg = load_terminal_config()
         if alt_m > 0 and alt_m < cfg["floor_m"]:
             self._landed = True
+            self._landed_at = time.monotonic()
             self.in_terminal = False
             logger.debug("[TERM] %s 已落地，停止终端检测", self.callsign)
             return
@@ -702,13 +704,13 @@ class FDRStore:
             if len(rec._full_track) < 2:
                 continue
 
-            # A) 进港航班保存条件：已落地 + 标牌消失（TTL超时，record在cleanup时会被移除）
-            #    这里的 candidates 包含已过期但尚未删除的记录
+            # A) 进港航班保存条件：已落地 + 到港目的地
+            #    落地后等待 10 秒防误判，然后立即保存，不等记录过期
             if rec._landed and rec.is_arrival_to_airport(self._track_airports):
-                # 检查 record 是否即将过期或被清理
                 now = time.monotonic()
+                landed_grace = (now - rec._landed_at) > 10.0  # 落地后等 10 秒
                 is_expiring = (now - rec.last_update) > (FDR_TTL_SECONDS * 0.8)
-                if is_expiring:
+                if landed_grace or is_expiring:
                     if self._save_track(db, rec, "ARRIVAL"):
                         saved_count += 1
                     # 保存后标记，避免下次再处理
