@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.1.75</title>
+<title>ATC综合数据中心 v2.1.76</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -3088,16 +3088,31 @@ function esc(s) {
     _trailState.ata = '';
     _trailLoading = false;
 
-    var queryStr = callsigns.map(function(c) { return encodeURIComponent(c); }).join(',');
-    var url = '/api/flight_tracks/batch?callsigns=' + queryStr;
-    if (dof) url += '&dof=' + encodeURIComponent(dof);
-
     function getBatchTrailColor(trackType) {
       return trackType === 'DEPARTURE' ? '#3b82f6' : '#eab308';
     }
 
+    // 按呼号查
+    var csUrl = '/api/flight_tracks/batch?callsigns=' + callsigns.map(function(c) { return encodeURIComponent(c); }).join(',');
+    if (dof) csUrl += '&dof=' + encodeURIComponent(dof);
+
+    // 如果表格有目的地/起飞地筛选，额外按 adep/adest 查询（补上呼号不匹配但同目的地的航迹）
+    var extraQs = [];
+    var adestFilter = (document.getElementById('qfd') || {}).value || '';
+    var adepFilter = (document.getElementById('qfa') || {}).value || '';
+    if (adestFilter) {
+      extraQs.push('/api/flight_tracks?adest=' + encodeURIComponent(adestFilter) + '&dof=' + encodeURIComponent(dof));
+    }
+    if (adepFilter) {
+      extraQs.push('/api/flight_tracks?adep=' + encodeURIComponent(adepFilter) + '&dof=' + encodeURIComponent(dof));
+    }
+
     Promise.all([
-      fetch(url).then(function(r) { return r.json(); }),
+      fetch(csUrl).then(function(r) { return r.json(); }),
+      // 并发的补充查询
+      Promise.all(extraQs.map(function(u) { return fetch(u).then(function(r) { return r.json(); }); })).then(function(arrs) {
+        return arrs.reduce(function(a, b) { return a.concat(b); }, []);
+      }),
       fetch('/api/maplist').then(function(r) { return r.json(); }).then(function(fileList) {
         if (fileList.length === 0) return {order:[], layers:{}};
         var promises = fileList.map(function(entry) {
@@ -3121,8 +3136,18 @@ function esc(s) {
       fetch('/api/config/terminal_airports').then(function(r) { return r.json(); }).catch(function() { return {}; }),
     ]).then(function(results) {
       var tracks = results[0] || [];
-      var mapData = results[1] || {order:[], layers:{}};
-      var terminalConfig = results[2] || {};
+      // 合并呼号查询 + 目的地/起飞地补充查询，按 callsign 去重
+      var extraTracks = results[1] || [];
+      var seenCs = {};
+      tracks.forEach(function(t) { if (t.callsign) seenCs[t.callsign] = true; });
+      extraTracks.forEach(function(t) {
+        if (t.callsign && !seenCs[t.callsign] && t.points && t.points.length >= 2) {
+          tracks.push(t);
+          seenCs[t.callsign] = true;
+        }
+      });
+      var mapData = results[2] || {order:[], layers:{}};
+      var terminalConfig = results[3] || {};
 
       _trailMapLayerOrder = mapData.order;
       _trailMapLayerData = mapData.layers;
