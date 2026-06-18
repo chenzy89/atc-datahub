@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.1.81</title>
+<title>ATC综合数据中心 v2.1.82</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.81</span>
+  <span class="badge">v2.1.82</span>
 </div>
 
 <div class="tabs">
@@ -2431,6 +2431,14 @@ function esc(s) {
   // 存储全局状态供时间过滤使用
   var _trailState = { callsign: '', dateStr: '', allPoints: [], mapElements: [], terminalConfig: {} };
   var _trailLoading = false;
+  // 轨迹图鼠标交互状态
+  var _trailRenderState = null;  // 存渲染参数，用于缩放平移后重绘
+  var _trailIsDragging = false;
+  var _trailDragStartX = 0;
+  var _trailDragStartY = 0;
+  var _trailDragCenterLat = 0;
+  var _trailDragCenterLon = 0;
+  var _trailInteractionSetup = false;
 
   function _parseUtcTimestamp(s) {
     if (!s) return null;
@@ -2695,7 +2703,9 @@ function esc(s) {
     document.getElementById('modal-trail').style.display = 'none';
     _trailMapElements = [];
     _trailGeo = null;
-    _trailLoading = false;  // 重置加载标志，防止下次无法加载
+    _trailRenderState = null;
+    _trailLoading = false;
+    _trailInteractionSetup = false;  // 下次打开重新绑定事件
   }
 
   function clearCanvas(canvas) {
@@ -2743,13 +2753,6 @@ function esc(s) {
     var h = container.clientHeight;
     if (w < 100) w = 800;
     if (h < 100) h = 500;
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = w + 'px';
-    canvas.style.height = h + 'px';
-    var ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
 
     // 计算轨迹点包围盒
     var minLat = Infinity, maxLat = -Infinity;
@@ -2813,52 +2816,6 @@ function esc(s) {
 
     _trailGeo = new GeoTransform({lat: centerLat, lon: centerLon}, scale, w, h);
 
-    // 绘制背景
-    ctx.fillStyle = _MAP_BG;
-    ctx.fillRect(0, 0, w, h);
-
-    // 按主雷达图的图层选择过滤地图元素
-    var trailElements = _trailMapElements;
-    if (Object.keys(_trailMapLayerData).length > 0) {
-      trailElements = [];
-      for (var li = 0; li < _trailMapLayerOrder.length; li++) {
-        var lname = _trailMapLayerOrder[li];
-        var ld = _trailMapLayerData[lname];
-        if (ld && ld.enabled) trailElements = trailElements.concat(ld.elements);
-      }
-    }
-    for (var i = 0; i < trailElements.length; i++) {
-      drawElement(ctx, trailElements[i], _trailGeo);
-    }
-
-    // 收集有效像素点
-    var pixelPts = [];
-    for (var i = 0; i < points.length; i++) {
-      var lt = parseFloat(points[i].lt);
-      var ln = parseFloat(points[i].ln);
-      if (isNaN(lt) || isNaN(ln)) continue;
-      var sp = _trailGeo.realToPixel({lat: lt, lon: ln});
-      pixelPts.push(sp);
-    }
-
-    if (pixelPts.length < 2) {
-      drawTrailEmpty(canvas, '航班 ' + callsign + ' 轨迹点不足');
-      return;
-    }
-
-    // ── 轨迹线（1px 精细线条） ──
-    ctx.beginPath();
-    ctx.moveTo(pixelPts[0].x, pixelPts[0].y);
-    for (var i = 1; i < pixelPts.length; i++) {
-      ctx.lineTo(pixelPts[i].x, pixelPts[i].y);
-    }
-    ctx.strokeStyle = trailColor;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([]);
-    ctx.stroke();
-
-
-
     // ── 终端区进出检测 ──────────────────────────────────
     var entryPt = null;
     var exitPt = null;
@@ -2876,10 +2833,9 @@ function esc(s) {
         if (isNaN(tlt) || isNaN(tln)) continue;
 
         // 大时间间隙检测：相邻点间隔超过5分钟视为新航段，重置状态
-        // 防止不同飞行周期的两段轨迹（如上一航班进近+本航班进近）互相污染
         if (prevTs1 && points[ti].ts) {
           var gap = new Date(points[ti].ts) - new Date(prevTs1);
-          if (gap > 300000) {  // 5 分钟
+          if (gap > 300000) {
             prevInTerm1 = false;
             entryPt = null;
             exitPt = null;
@@ -2888,7 +2844,6 @@ function esc(s) {
         }
         prevTs1 = points[ti].ts;
 
-        // 一旦高度低于终端区底部，标记为已落地，后续不再检测
         if (tfl > 0 && tfl < termFloor) {
           landed = true;
           prevInTerm1 = false;
@@ -2907,7 +2862,7 @@ function esc(s) {
         if (landed) prevInTerm1 = false;
       }
 
-      // 第二遍：计算终端内飞行时间（落地后停止累加）
+      // 第二遍：计算终端内飞行时间
       landed = false;
       var termEntryTs = null;
       var prevInTerm = false;
@@ -2918,7 +2873,6 @@ function esc(s) {
         var tfl = parseFloat(points[ti].fl) || 0;
         if (isNaN(tlt) || isNaN(tln)) continue;
 
-        // 大时间间隙：重置飞行时间累加
         if (prevTs2 && points[ti].ts) {
           var gap = new Date(points[ti].ts) - new Date(prevTs2);
           if (gap > 300000) {
@@ -2951,7 +2905,7 @@ function esc(s) {
       }
     }
 
-    // ── 进港航班若无出区域检测点，用最后一个轨迹点代替 ──
+    // 进港航班若无出区域检测点，用最后一个轨迹点代替
     if (isArrival && !exitPt && points.length > 0) {
       for (var ei = points.length - 1; ei >= 0; ei--) {
         var eLt = parseFloat(points[ei].lt);
@@ -2963,53 +2917,7 @@ function esc(s) {
       }
     }
 
-    // ── 绘制进出终端标记 ──────────────────────────────
-    var markerColor = '#22d3ee'; // 青色
-    var markerLabelColor = '#e2e8f0';
-
-    function drawTermMarker(pt, label, color) {
-      var sp = _trailGeo.realToPixel({lat: pt.lat, lon: pt.lon});
-      if (!sp || isNaN(sp.x) || isNaN(sp.y)) return;
-      // 外圈
-      ctx.beginPath();
-      ctx.arc(sp.x, sp.y, 7, 0, 2 * Math.PI);
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.9;
-      ctx.fill();
-      ctx.globalAlpha = 1.0;
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      // 标签
-      var tsLocal = (pt.ts || '').slice(11, 19);
-      ctx.fillStyle = markerLabelColor;
-      ctx.font = 'bold 11px monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(tsLocal, sp.x + 10, sp.y - 3);
-    }
-
-    if (entryPt) {
-      drawTermMarker(entryPt, '', '#22c55e');  // 绿色（进区域时间）
-    }
-    if (exitPt) {
-      drawTermMarker(exitPt, '', '#ef4444');  // 红色（出区域时间）
-    }
-
-    // ── 终端区信息栏 ──
-    var bottomY = h - 12;
-    var lineH = 18;
-
-    // 航班号标签
-    ctx.fillStyle = trailColor;
-    ctx.font = 'bold 13px Consolas, monospace';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'bottom';
-    ctx.fillText(callsign + ' ' + trailLabel, 12, bottomY);
-
-    // 终端区时间
-    ctx.font = '11px sans-serif';
-    ctx.fillStyle = '#94a3b8';
+    // 终端时间文本
     var termText = '';
     if (entryPt && exitPt) {
       var eTs = (entryPt.ts || '').slice(11, 19);
@@ -3022,13 +2930,199 @@ function esc(s) {
       var xTs = (exitPt.ts || '').slice(11, 19);
       termText = '出终端 ' + xTs;
     }
+
+    // 存储渲染状态
+    _trailRenderState = {
+      mode: 'single',
+      callsign: callsign,
+      points: points,
+      trailColor: trailColor,
+      entryPt: entryPt,
+      exitPt: exitPt,
+      termDuration: termDuration,
+      termText: termText,
+      isArrival: isArrival
+    };
+
+    // 渲染
+    _renderTrailOnGeo(canvas, callsign, points, trailColor, entryPt, exitPt, termDuration, termText, isArrival);
+
+    // 启用鼠标交互
+    setupTrailInteraction();
+  }
+
+  // ── 轨迹图重绘（缩放/平移后调用） ──
+  function _redrawTrail() {
+    if (!_trailRenderState || !_trailGeo) return;
+    var canvas = document.getElementById('trailCanvas');
+    if (!canvas) return;
+    var state = _trailRenderState;
+    if (state.mode === 'single') {
+      _renderTrailOnGeo(canvas, state.callsign, state.points, state.trailColor,
+        state.entryPt, state.exitPt, state.termDuration, state.termText,
+        state.isArrival);
+    } else if (state.mode === 'multi') {
+      _renderMultiTrailOnGeo(canvas, state.batchData, state.mapElements);
+    }
+  }
+
+  // ── 轨迹图鼠标交互设置 ──
+  function setupTrailInteraction() {
+    var canvas = document.getElementById('trailCanvas');
+    if (!canvas || _trailInteractionSetup) return;
+    _trailInteractionSetup = true;
+
+    // 滚轮缩放
+    canvas.addEventListener('wheel', function(e) {
+      e.preventDefault();
+      if (!_trailGeo) return;
+      var delta = e.deltaY > 0 ? 1.1 : 1/1.1;
+      _trailGeo.setScale(_trailGeo.scale * delta);
+      _redrawTrail();
+    }, {passive: false});
+
+    // 鼠标按下：开始拖拽
+    canvas.addEventListener('mousedown', function(e) {
+      if (e.button !== 0) return;
+      _trailIsDragging = true;
+      _trailDragStartX = e.clientX;
+      _trailDragStartY = e.clientY;
+      if (_trailGeo) {
+        _trailDragCenterLat = _trailGeo.center.lat;
+        _trailDragCenterLon = _trailGeo.center.lon;
+      }
+      canvas.style.cursor = 'grabbing';
+    });
+
+    // 鼠标移动：拖拽
+    canvas.addEventListener('mousemove', function(e) {
+      if (_trailIsDragging && _trailGeo) {
+        var rect = canvas.getBoundingClientRect();
+        var sx = _trailGeo.screenW / rect.width;
+        var sy = _trailGeo.screenH / rect.height;
+        var dx = (e.clientX - _trailDragStartX) * sx;
+        var dy = (e.clientY - _trailDragStartY) * sy;
+        var lonDelta = -dx * _trailGeo.degreePerPixel / Math.cos(_trailGeo.center.lat * Math.PI / 180);
+        var latDelta = dy * _trailGeo.degreePerPixel;
+        _trailGeo.setCenter({lat: _trailDragCenterLat + latDelta, lon: _trailDragCenterLon + lonDelta});
+        _redrawTrail();
+        return;
+      }
+    });
+
+    // 鼠标释放
+    window.addEventListener('mouseup', function() {
+      if (_trailIsDragging) {
+        _trailIsDragging = false;
+        if (canvas) canvas.style.cursor = 'grab';
+      }
+    });
+
+    canvas.style.cursor = 'grab';
+  }
+
+  // ── 单航班轨迹渲染核心（用当前 _trailGeo 绘制，不重算 geo） ──
+  function _renderTrailOnGeo(canvas, callsign, points, trailColor,
+    entryPt, exitPt, termDuration, termText, isArrival) {
+    var container = canvas.parentElement;
+    var w = container.clientWidth;
+    var h = container.clientHeight;
+    if (w < 100) w = 800;
+    if (h < 100) h = 500;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    // 背景
+    ctx.fillStyle = _MAP_BG;
+    ctx.fillRect(0, 0, w, h);
+
+    // 地图元素
+    _trailMapElements = _trailState.mapElements || [];
+    if (Object.keys(_trailMapLayerData).length > 0) {
+      _trailMapElements = [];
+      for (var li = 0; li < _trailMapLayerOrder.length; li++) {
+        var lname = _trailMapLayerOrder[li];
+        var ld = _trailMapLayerData[lname];
+        if (ld && ld.enabled) _trailMapElements = _trailMapElements.concat(ld.elements);
+      }
+    }
+    for (var i = 0; i < _trailMapElements.length; i++) {
+      drawElement(ctx, _trailMapElements[i], _trailGeo);
+    }
+
+    // 像素点
+    var pixelPts = [];
+    for (var i = 0; i < points.length; i++) {
+      var lt = parseFloat(points[i].lt);
+      var ln = parseFloat(points[i].ln);
+      if (isNaN(lt) || isNaN(ln)) continue;
+      var sp = _trailGeo.realToPixel({lat: lt, lon: ln});
+      pixelPts.push(sp);
+    }
+
+    if (pixelPts.length < 2) {
+      drawTrailEmpty(canvas, '航班 ' + callsign + ' 轨迹点不足');
+      return;
+    }
+
+    // 轨迹线
+    ctx.beginPath();
+    ctx.moveTo(pixelPts[0].x, pixelPts[0].y);
+    for (var i = 1; i < pixelPts.length; i++) {
+      ctx.lineTo(pixelPts[i].x, pixelPts[i].y);
+    }
+    ctx.strokeStyle = trailColor;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.stroke();
+
+    // 进出终端标记
+    var markerLabelColor = '#e2e8f0';
+    function drawTermMarker(pt, color) {
+      var sp = _trailGeo.realToPixel({lat: pt.lat, lon: pt.lon});
+      if (!sp || isNaN(sp.x) || isNaN(sp.y)) return;
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 7, 0, 2 * Math.PI);
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.9;
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      var tsLocal = (pt.ts || '').slice(11, 19);
+      ctx.fillStyle = markerLabelColor;
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(tsLocal, sp.x + 10, sp.y - 3);
+    }
+    if (entryPt) drawTermMarker(entryPt, '#22c55e');
+    if (exitPt) drawTermMarker(exitPt, '#ef4444');
+
+    // 底部信息栏
+    var bottomY = h - 12;
+    ctx.fillStyle = trailColor;
+    ctx.font = 'bold 13px Consolas, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    var trailLabel = isArrival ? '进港' : '出港';
+    ctx.fillText(callsign + ' ' + trailLabel, 12, bottomY);
+
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#94a3b8';
     if (termText) {
       ctx.textBaseline = 'bottom';
       ctx.textAlign = 'right';
       ctx.fillText(termText, w - 12, bottomY);
     }
 
-    // ── 点数和时间范围（右上角） ──
+    // 点数和时间范围（右上角）
     var firstTs = (points[0].ts || '').slice(0, 19).replace('T', ' ');
     var lastTs = (points[points.length-1].ts || '').slice(0, 19).replace('T', ' ');
     ctx.fillStyle = '#64748b';
@@ -3036,6 +3130,81 @@ function esc(s) {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillText(points.length + ' 个点  |  ' + firstTs + ' ~ ' + lastTs, 12, 12);
+  }
+
+  // ── 批量轨迹渲染核心（用当前 _trailGeo 绘制，不重算 geo） ──
+  function _renderMultiTrailOnGeo(canvas, batchData, mapElements) {
+    var container = canvas.parentElement;
+    var w = container.clientWidth;
+    var h = container.clientHeight;
+    if (w < 100) w = 800;
+    if (h < 100) h = 500;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    ctx.fillStyle = '#0a1628';
+    ctx.fillRect(0, 0, w, h);
+
+    // 地图背景
+    for (var i = 0; i < mapElements.length; i++) {
+      drawElement(ctx, mapElements[i], _trailGeo);
+    }
+
+    // 图例
+    var legendX = 12, legendY = 36, legendSpacing = 20;
+    var legendItems = [
+      { label: '进港', color: '#eab308' },
+      { label: '出港', color: '#3b82f6' },
+    ];
+    for (var li = 0; li < legendItems.length; li++) {
+      var item = legendItems[li];
+      ctx.fillStyle = item.color;
+      ctx.fillRect(legendX, legendY, 14, 3);
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(item.label, legendX + 20, legendY + 2);
+      legendY += legendSpacing;
+    }
+
+    // 每条轨迹
+    for (var t = 0; t < batchData.length; t++) {
+      var trk = batchData[t];
+      var pts = trk.points;
+      var color = trk.color || '#eab308';
+      var pixelPts = [];
+      for (var i = 0; i < pts.length; i++) {
+        var lt = parseFloat(pts[i].lt);
+        var ln = parseFloat(pts[i].ln);
+        if (isNaN(lt) || isNaN(ln)) continue;
+        var sp = _trailGeo.realToPixel({lat: lt, lon: ln});
+        pixelPts.push(sp);
+      }
+      if (pixelPts.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(pixelPts[0].x, pixelPts[0].y);
+      ctx.globalAlpha = 0.7;
+      for (var i = 1; i < pixelPts.length; i++) {
+        ctx.lineTo(pixelPts[i].x, pixelPts[i].y);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]);
+      ctx.stroke();
+      ctx.globalAlpha = 1.0;
+    }
+
+    ctx.fillStyle = '#64748b';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(batchData.length + ' 条航迹', 12, h - 12);
   }
 
   // 暴露给 HTML onclick（函数定义在 IIFE 内，需要挂到 window）
@@ -3200,13 +3369,6 @@ function esc(s) {
     var h = container.clientHeight;
     if (w < 100) w = 800;
     if (h < 100) h = 500;
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = w + 'px';
-    canvas.style.height = h + 'px';
-    var ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
 
     // 计算包围盒
     var minLat = Infinity, maxLat = -Infinity;
@@ -3240,73 +3402,18 @@ function esc(s) {
 
     _trailGeo = new GeoTransform({lat: centerLat, lon: centerLon}, scale, w, h);
 
-    ctx.fillStyle = '#0a1628';
-    ctx.fillRect(0, 0, w, h);
+    // 存储渲染状态
+    _trailRenderState = {
+      mode: 'multi',
+      batchData: batchData,
+      mapElements: mapElements || []
+    };
 
-    // 绘制地图背景
-    _trailMapElements = mapElements || [];
-    for (var i = 0; i < _trailMapElements.length; i++) {
-      drawElement(ctx, _trailMapElements[i], _trailGeo);
-    }
+    // 渲染
+    _renderMultiTrailOnGeo(canvas, batchData, mapElements || []);
 
-    // 图例（仅进港/出港两种颜色）
-    var legendX = 12;
-    var legendY = 36;
-    var legendSpacing = 20;
-    var legendItems = [
-      { label: '进港', color: '#eab308' },
-      { label: '出港', color: '#3b82f6' },
-    ];
-    for (var li = 0; li < legendItems.length; li++) {
-      var item = legendItems[li];
-      ctx.fillStyle = item.color;
-      ctx.fillRect(legendX, legendY, 14, 3);
-      ctx.fillStyle = '#cbd5e1';
-      ctx.font = '11px sans-serif';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(item.label, legendX + 20, legendY + 2);
-      legendY += legendSpacing;
-    }
-
-    // 绘制每条轨迹（只画 1px 线，无端点标记、无呼号标签）
-    for (var t = 0; t < batchData.length; t++) {
-      var trk = batchData[t];
-      var pts = trk.points;
-      var color = trk.color || '#eab308';
-
-      // 转换像素点
-      var pixelPts = [];
-      for (var i = 0; i < pts.length; i++) {
-        var lt = parseFloat(pts[i].lt);
-        var ln = parseFloat(pts[i].ln);
-        if (isNaN(lt) || isNaN(ln)) continue;
-        var sp = _trailGeo.realToPixel({lat: lt, lon: ln});
-        pixelPts.push(sp);
-      }
-
-      if (pixelPts.length < 2) continue;
-
-      // 纯轨迹线（1px，无标注）
-      ctx.beginPath();
-      ctx.moveTo(pixelPts[0].x, pixelPts[0].y);
-      ctx.globalAlpha = 0.7;
-      for (var i = 1; i < pixelPts.length; i++) {
-        ctx.lineTo(pixelPts[i].x, pixelPts[i].y);
-      }
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([]);
-      ctx.stroke();
-      ctx.globalAlpha = 1.0;
-    }
-
-    // 底部信息
-    ctx.fillStyle = '#64748b';
-    ctx.font = '11px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'bottom';
-    ctx.fillText(batchData.length + ' 条航迹', 12, h - 12);
+    // 启用鼠标交互
+    setupTrailInteraction();
   }
 
   // ── 缩放与拖动 + 悬停检测 ──
