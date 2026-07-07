@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.1.82</title>
+<title>ATC综合数据中心 v2.1.83</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.82</span>
+  <span class="badge">v2.1.83</span>
 </div>
 
 <div class="tabs">
@@ -945,7 +945,7 @@ canvas#radarMap {
         <label><span>起始</span><input type="date" id="asrQueryDateFrom"></label>
         <label><span>截止</span><input type="date" id="asrQueryDateTo"></label>
         <button class="btn btn-primary btn-sm" onclick="asrQueryRecords()">🔍 查询</button>
-        <button class="btn btn-sm" onclick="asrExport()" style="background:var(--accent-green);color:#fff;border-color:var(--accent-green);">📥 导出TXT</button>
+        <button class="btn btn-sm" onclick="asrExport()" style="background:var(--accent-green);color:#fff;border-color:var(--accent-green);">📥 导出CSV</button>
       </div>
     </div>
     <div id="asrQueryInfo" style="padding:8px 0;font-size:12px;color:var(--text-muted);display:none;"></div>
@@ -4978,8 +4978,18 @@ function asrQueryRecords() {
     });
 }
 
+function _csvEscape(v) {
+  if (v == null) return '';
+  v = String(v);
+  // 如果包含逗号、双引号或换行符，用双引号包裹
+  if (v.indexOf(',') >= 0 || v.indexOf('"') >= 0 || v.indexOf('\n') >= 0 || v.indexOf('\r') >= 0) {
+    v = '"' + v.replace(/"/g, '""') + '"';
+  }
+  return v;
+}
+
 function asrExport() {
-  // 用当前查询条件重新拉完整数据
+  // 用当前查询条件拉所有满足条件的记录
   var sector = document.getElementById('asrQuerySector').value;
   var callsign = document.getElementById('asrQueryCallsign').value.trim();
   var dateFrom = document.getElementById('asrQueryDateFrom').value;
@@ -4990,7 +5000,7 @@ function asrExport() {
   if (callsign) url += 'callsign=' + encodeURIComponent(callsign) + '&';
   if (dateFrom) url += 'date_from=' + encodeURIComponent(dateFrom) + '&';
   if (dateTo) url += 'date_to=' + encodeURIComponent(dateTo) + '&';
-  url += 'limit=5000';
+  url += 'limit=50000';
 
   var infoEl = document.getElementById('asrQueryInfo');
   infoEl.style.display = 'block';
@@ -5005,23 +5015,32 @@ function asrExport() {
         return;
       }
 
-      var lines = [];
+      var rows = [];
+      // CSV 表头
+      var header = ['扇区','开始时间','航班号','说话人','识别文本'];
+      rows.push(header.join(','));
+
       for (var i = 0; i < records.length; i++) {
         var r = records[i];
         var wt = (r.wavbegintime || r.received_at || '').trim();
-        if (wt.length >= 19) wt = wt.slice(5, 19);
-        else if (wt.length >= 16) wt = wt.slice(5, 16);
-        var speaker = r.speaker || '';
+        var cs = (r.callsign || '').trim();
+        var speaker = (r.speaker || '').trim();
         var text = _cleanAsrText(r.processedCommand || '');
-        lines.push(wt + '  ' + speaker + '  ' + text);
+        rows.push([
+          _csvEscape(r.sector || ''),
+          _csvEscape(wt),
+          _csvEscape(cs),
+          _csvEscape(speaker),
+          _csvEscape(text)
+        ].join(','));
       }
 
-      var content = lines.join('\n');
-      var blob = new Blob([content], {type: 'text/plain;charset=utf-8'});
+      var content = '\uFEFF' + rows.join('\r\n');
+      var blob = new Blob([content], {type: 'text/csv;charset=utf-8'});
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       var now = new Date();
-      var filename = 'asr_' + now.getUTCFullYear() + _zp(now.getUTCMonth()+1) + _zp(now.getUTCDate()) + '_' + _zp(now.getUTCHours()) + _zp(now.getUTCMinutes()) + '.txt';
+      var filename = 'asr_' + now.getUTCFullYear() + _zp(now.getUTCMonth()+1) + _zp(now.getUTCDate()) + '_' + _zp(now.getUTCHours()) + _zp(now.getUTCMinutes()) + '.csv';
       a.download = filename;
       document.body.appendChild(a);
       a.click();
