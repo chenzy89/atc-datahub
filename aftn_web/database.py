@@ -884,16 +884,17 @@ class Database:
                 # FDR 重启后 terminal_accum_seconds 归零会导致写入 0。
                 # 1) 单调性保护：不覆盖已有的大值
                 # 2) 已结束航班：从 entry→exit/ata 补算
+                _stored_cur = None
                 if entry_time and terminal_flight_time >= 0:
-                    _cur = conn.execute(
+                    _stored_cur = conn.execute(
                         "SELECT terminal_flight_time, exit_time, ata, entry_time FROM flight_plans WHERE id=?",
                         (match["id"],),
                     ).fetchone()
-                    if _cur:
+                    if _stored_cur:
                         # 当 entry_time 和 exit_time/ata 都已知时，用时间跨度替代 FDR 累计值
                         # FDR 累计只在高度≥终端区底部时计数，下降穿底后停止，导致值偏小
-                        _end = exit_time or _cur["exit_time"] or _cur["ata"] or ""
-                        _start = entry_time or _cur["entry_time"] or ""
+                        _end = exit_time or _stored_cur["exit_time"] or _stored_cur["ata"] or ""
+                        _start = entry_time or _stored_cur["entry_time"] or ""
                         if _start and _end:
                             try:
                                 from datetime import datetime as _dt2, timezone as _tz2
@@ -913,6 +914,10 @@ class Database:
                                 logger.debug("[TERM] %s 补算失败: %s", callsign, _ex)
 
                 now = _fmt_dt(datetime.utcnow())
+                # 单调性保护：终端时长只增不减（防止 FDR 记录过期重建后的小值覆盖大值）
+                _stored_term = _stored_cur["terminal_flight_time"] if _stored_cur else 0
+                _final_term = max(terminal_flight_time, _stored_term)
+
                 cur = conn.execute(
                     "UPDATE flight_plans SET"
                     " entry_time=CASE WHEN entry_time='' OR (?!='' AND ?<entry_time) THEN ? ELSE entry_time END,"
@@ -926,11 +931,11 @@ class Database:
                     "      OR terminal_flight_time!=?)",
                     (entry_time, entry_time, entry_time,  # CASE entry_time
                      exit_time, exit_time, exit_time,  # CASE exit_time
-                     terminal_flight_time, now,
+                     _final_term, now,
                      match["id"],
                      entry_time, entry_time,  # WHERE: entry_time 只允许提前
                      exit_time, exit_time,  # WHERE: exit_time 只允许推后
-                     terminal_flight_time),  # WHERE: 飞行时间有变化
+                     _final_term),  # WHERE: 终端时长有变化
                 )
                 conn.commit()
                 affected = cur.rowcount

@@ -581,14 +581,17 @@ class FDRStore:
             # 1. 清理超时
             expired = [k for k, r in self._records.items()
                        if now - r.last_update > FDR_TTL_SECONDS]
-            # 1a. 已进终端区、已落地（_landed=True）、但缺退出时间的，暂不删
-            #     用 ATA 填充退出时间（落地后雷达信号是假信号，不用等 FDR 检测出界）
-            #     未落地的过期记录直接删，不填退出时间（可能只是暂时飞出雷达覆盖）
+            # 1a. 已进终端区但缺退出时间的，暂不删
+            #     两种情形保留记录：
+            #     - 已落地（_landed=True）：用 ATA 填充退出时间（落地后雷达信号是假信号）
+            #     - 未落地但终端累计时间 ≥ 60s：说明已稳定在终端区内，短时雷达间隙不应丢失状态
+            #     未进终端区或终端时间很短（< 60s）的过期记录直接删（可能只是短暂飞过边界）
             fill_ata_keys = []
             for k in expired:
                 r = self._records[k]
-                if r.terminal_entry_ts and not r.terminal_exit_ts and r.callsign and r._landed:
-                    fill_ata_keys.append(k)
+                if r.terminal_entry_ts and not r.terminal_exit_ts and r.callsign:
+                    if r._landed or r.terminal_accum_seconds >= 60:
+                        fill_ata_keys.append(k)
             # 1b. 正常过期立即删除
             for k in expired:
                 if k not in fill_ata_keys:

@@ -5,3 +5,11 @@ MC_A_16	true
 SD_A_23	true
 BACKGROUND	false
 NAV_FIX	true
+SZ_D_NORTH	false
+SZ_D_SOUTH	false
+SZ_A_34R	false
+SZ_A_33	false
+SZ_A_34L	false
+SZ_A_16L	false
+SZ_A_15	false
+SZ_A_16R	false
