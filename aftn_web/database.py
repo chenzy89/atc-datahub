@@ -1964,12 +1964,8 @@ class Database:
     def insert_or_update_cloud_cover(self, date: str, hour: int,
                                       avg_kb: float, count: int) -> None:
         """插入或更新云量数据"""
-        level = 0
-        thresholds = [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 99999]
-        for i, t in enumerate(thresholds):
-            if avg_kb <= t:
-                level = i
-                break
+        from .wx_cloud import get_cloud_level
+        level = get_cloud_level(avg_kb)
         now = _fmt_dt(datetime.utcnow())
         conn = self._get_conn()
         conn.execute(
