@@ -24,6 +24,7 @@ from .parser import AftnParser, split_multi_aftn
 from .receiver import UdpReceiver
 from .voice_receiver import VoiceReceiver
 from .webapp import create_app
+from .mcp_server import start_mcp_server
 
 logger = logging.getLogger("aftn_web")
 
@@ -601,6 +602,18 @@ def main(argv: list[str] | None = None) -> int:
 
     # Flask web 服务
     app = create_app(config, db, fdr_store=fdr_store, radar_history_store=radar_history_store, voice_receiver=voice_receiver, asr_receiver=asr_receiver)
+
+    # MCP Server（提供 OpenClaw MCP 协议接口）
+    mcp_server = start_mcp_server(
+        db=db,
+        fdr_store=fdr_store,
+        radar_history_store=radar_history_store,
+        voice_receiver=voice_receiver,
+        asr_receiver=asr_receiver,
+        config=config,
+        host="127.0.0.1",
+        port=18766,
+    )
     web_host = config.web.host
     web_port = config.web.port
 
@@ -636,6 +649,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  语音接收: {config.voice.multicast_group}:{config.voice.port}")
     if config.asr.enabled:
         print(f"  ASR接收:  {config.asr.multicast_group}:{config.asr.port}")
+    print(f"  MCP Server: http://127.0.0.1:18766")
     print(f"  数据库:   {config.db_path}")
     print(f"{'='*50}\n")
 

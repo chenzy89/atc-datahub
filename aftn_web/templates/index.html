@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.1.84</title>
+<title>ATC综合数据中心 v2.1.85</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.84</span>
+  <span class="badge">v2.1.85</span>
 </div>
 
 <div class="tabs">
@@ -3269,9 +3269,8 @@ function esc(s) {
       return trackType === 'DEPARTURE' ? '#3b82f6' : '#eab308';
     }
 
-    // 按呼号查
+    // 按呼号查（不传 dof，进港航班保存航迹时的日期可能与飞行计划 DOF 不同）
     var url = '/api/flight_tracks/batch?callsigns=' + callsigns.map(function(c) { return encodeURIComponent(c); }).join(',');
-    if (dof) url += '&dof=' + encodeURIComponent(dof);
 
     Promise.all([
       fetch(url).then(function(r) { return r.json(); }),
