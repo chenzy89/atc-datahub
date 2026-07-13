@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.1.86</title>
+<title>ATC综合数据中心 v2.1.87</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.86</span>
+  <span class="badge">v2.1.87</span>
 </div>
 
 <div class="tabs">
@@ -3219,40 +3219,6 @@ function esc(s) {
   // ══════════════════════════════════════════════════════════
 
   function batchFlightTrail() {
-    // 获取表格中所有显示的行
-    var table = document.getElementById('tbl-fpl');
-    if (!table) return;
-    var rows = table.querySelectorAll('tr');
-    if (rows.length === 0) { alert('暂无航班记录'); return; }
-
-    // 收集呼号和 DOF
-    var pairs = {};
-    var dofSet = new Set();
-    for (var i = 0; i < rows.length; i++) {
-      var link = rows[i].querySelector('.callsign a');
-      if (link) {
-        var cs = link.dataset.callsign;
-        var d = link.dataset.dof;
-        if (cs) {
-          pairs[cs] = d || '';
-          if (d) dofSet.add(d);
-        }
-      }
-    }
-    var callsigns = Object.keys(pairs);
-    if (callsigns.length === 0) { alert('暂无有效航班号'); return; }
-
-    // 轨迹数上限检查
-    var MAX_TRACKS = 9999;
-    if (callsigns.length > MAX_TRACKS) {
-      alert('轨迹数量（' + callsigns.length + ' 架次）超过上限 ' + MAX_TRACKS + ' 条，无法批量显示。请缩小筛选范围。');
-      return;
-    }
-
-    // 用最多的那个 DOF（通常所有航班同一天）
-    var dof = '';
-    if (dofSet.size === 1) dof = dofSet.values().next().value;
-
     var modal = document.getElementById('modal-trail');
     var canvas = document.getElementById('trailCanvas');
     var loading = document.getElementById('trail-loading');
@@ -3260,49 +3226,88 @@ function esc(s) {
     var filter = document.getElementById('trail-time-filter');
     if (!modal || !canvas) return;
 
-    title.textContent = '批量轨迹 (' + callsigns.length + ' 架次)';
     modal.style.display = 'flex';
     loading.style.display = 'flex';
     if (filter) filter.style.display = 'none';
 
-    // 保存状态
-    _trailState.callsign = '';
-    _trailState.dateStr = dof;
-    _trailState.allPoints = [];
-    _trailState.ata = '';
-    _trailLoading = false;
+    // 从当前搜索条件重新拉取全部飞行计划（不分页），确保拿到所有呼号
+    var fpParams = new URLSearchParams({limit: 10000, offset: 0});
+    var v = function(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    var c = v('qfc'); var a = v('qfa'); var d = v('qfd'); var d2 = v('qfd2');
+    var air = v('qair'); var fr = v('qfr'); var fr2 = v('qfr2'); var hp = v('qhp');
+    if (c) { fpParams.set('callsign', c); }
+    if (a) { fpParams.set('adep', a); }
+    if (d) { fpParams.set('adest', d); }
+    if (d2) { fpParams.set('dof', d2); }
+    if (air) { fpParams.set('airport', air); }
+    if (fr) { fpParams.set('route', fr); }
+    if (fr2) { fpParams.set('flight_rule', fr2); }
+    if (hp) { fpParams.set('handover_pt', hp); }
 
     function getBatchTrailColor(trackType) {
       return trackType === 'DEPARTURE' ? '#3b82f6' : '#eab308';
     }
 
-    // 按呼号查（不传 dof，进港航班保存航迹时的日期可能与飞行计划 DOF 不同）
-    var url = '/api/flight_tracks/batch?callsigns=' + callsigns.map(function(c) { return encodeURIComponent(c); }).join(',');
+    // 第一步：获取当前搜索条件下的全部飞行计划
+    fetch('/api/flight_plans?' + fpParams.toString())
+    .then(function(r) { return r.json(); })
+    .then(function(fpData) {
+      var records = fpData.records || [];
+      var callsigns = [];
+      for (var i = 0; i < records.length; i++) {
+        if (records[i].callsign) {
+          callsigns.push(records[i].callsign);
+        }
+      }
 
-    Promise.all([
-      fetch(url).then(function(r) { return r.json(); }),
-      fetch('/api/maplist').then(function(r) { return r.json(); }).then(function(fileList) {
-        if (fileList.length === 0) return {order:[], layers:{}};
-        var promises = fileList.map(function(entry) {
-          return fetch('/api/map_file/' + encodeURIComponent(entry.name))
-            .then(function(r) { return r.ok ? r.text() : ''; });
-        });
-        return Promise.all(promises).then(function(texts) {
-          var order = [];
-          var layers = {};
-          for (var i = 0; i < fileList.length; i++) {
-            var name = fileList[i].name;
-            order.push(name);
-            layers[name] = {
-              enabled: !!(mapLayers[name] ? mapLayers[name].enabled : fileList[i].enabled),
-              elements: texts[i] ? parseMapFile(texts[i]) : []
-            };
-          }
-          return {order: order, layers: layers};
-        });
-      }),
-      fetch('/api/config/terminal_airports').then(function(r) { return r.json(); }).catch(function() { return {}; }),
-    ]).then(function(results) {
+      if (callsigns.length === 0) {
+        loading.style.display = 'none';
+        drawTrailEmpty(canvas, '没有匹配的飞行计划');
+        return;
+      }
+
+      // 轨迹数上限检查
+      var MAX_TRACKS = 9999;
+      if (callsigns.length > MAX_TRACKS) {
+        loading.style.display = 'none';
+        alert('轨迹数量（' + callsigns.length + ' 架次）超过上限 ' + MAX_TRACKS + ' 条，无法批量显示。请缩小筛选范围。');
+        modal.style.display = 'none';
+        return;
+      }
+
+      title.textContent = '批量轨迹 (' + callsigns.length + ' 架次)';
+
+      // 第二步：按呼号查航迹（用 POST 避免 URL 超长）
+      return Promise.all([
+        fetch('/api/flight_tracks/batch', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({callsigns: callsigns})
+        }).then(function(r) { return r.json(); }),
+        fetch('/api/maplist').then(function(r) { return r.json(); }).then(function(fileList) {
+          if (fileList.length === 0) return {order:[], layers:{}};
+          var promises = fileList.map(function(entry) {
+            return fetch('/api/map_file/' + encodeURIComponent(entry.name))
+              .then(function(r) { return r.ok ? r.text() : ''; });
+          });
+          return Promise.all(promises).then(function(texts) {
+            var order = [];
+            var layers = {};
+            for (var i = 0; i < fileList.length; i++) {
+              var name = fileList[i].name;
+              order.push(name);
+              layers[name] = {
+                enabled: !!(mapLayers[name] ? mapLayers[name].enabled : fileList[i].enabled),
+                elements: texts[i] ? parseMapFile(texts[i]) : []
+              };
+            }
+            return {order: order, layers: layers};
+          });
+        }),
+        fetch('/api/config/terminal_airports').then(function(r) { return r.json(); }).catch(function() { return {}; }),
+      ]);
+    })
+    .then(function(results) {
       var tracks = results[0] || [];
       var mapData = results[1] || {order:[], layers:{}};
       var terminalConfig = results[2] || {};
@@ -3338,10 +3343,10 @@ function esc(s) {
         }
       }
 
-      title.textContent = '批量轨迹 (' + batchData.length + ' 架次 / ' + callsigns.length + ' 架次)';
+      title.textContent = '批量轨迹 (' + batchData.length + ' 架次 / ' + (tracks.length) + ' 架次)';
 
       if (batchData.length === 0) {
-        drawTrailEmpty(canvas, '无有效航迹数据\n（仅有 ' + callsigns.length + ' 个飞行计划，' + tracks.length + ' 个有航迹记录）');
+        drawTrailEmpty(canvas, '无有效航迹数据\n（共 ' + tracks.length + ' 个航班有航迹记录）');
         return;
       }
 

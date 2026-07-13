@@ -266,19 +266,28 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             })
         return jsonify(result)
 
-    @app.route("/api/flight_tracks/batch")
+    @app.route("/api/flight_tracks/batch", methods=["GET", "POST"])
     def api_flight_tracks_batch():
         """批量查询多个呼号的航迹（用于飞行计划页批量轨迹图）
 
-        Query params:
-            callsigns: 逗号分隔的呼号列表
-            dof: 执行日期 (YYYY-MM-DD)，选填
+        GET:  ?callsigns=CS1,CS2,... &dof=YYYY-MM-DD（选填）
+        POST: JSON body: {"callsigns": ["CS1","CS2",...], "dof": "YYYY-MM-DD"}
         """
-        cs_str = _req_str("callsigns")
-        if not cs_str:
+        if request.method == "POST":
+            body = request.get_json(silent=True) or {}
+            callsigns = body.get("callsigns", [])
+            dof = body.get("dof", "") or ""
+            if not isinstance(callsigns, list):
+                callsigns = []
+        else:
+            cs_str = _req_str("callsigns")
+            if not cs_str:
+                return jsonify([])
+            callsigns = [c.strip() for c in cs_str.split(",") if c.strip()]
+            dof = _req_str("dof") or ""
+
+        if not callsigns:
             return jsonify([])
-        callsigns = [c.strip() for c in cs_str.split(",") if c.strip()]
-        dof = _req_str("dof") or ""
 
         from .database import query_flight_tracks_by_callsigns
         records = query_flight_tracks_by_callsigns(db, callsigns, dof)
