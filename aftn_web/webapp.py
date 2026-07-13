@@ -533,6 +533,8 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         limit = request.args.get("limit", 100, type=int)
         offset = request.args.get("offset", 0, type=int)
 
+        # 批量轨迹等场景需要拉全量呼号，放宽上限到 10000
+        max_limit = 10000 if limit > 1000 else 500
         records = db.query_flight_plans(
             callsign=callsign,
             adep=adep,
@@ -545,7 +547,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             handover_pt=handover_pt,
             sort_by=sort_by,
             sort_order=sort_order,
-            limit=min(limit, 500),
+            limit=min(limit, max_limit),
             offset=offset,
         )
         total = db.count_flight_plans(
