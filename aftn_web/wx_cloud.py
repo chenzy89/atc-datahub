@@ -1,7 +1,7 @@
 """气象云图云量处理模块
 
 从 /mnt/WXMap/<MMDD>/ 读取 PNG 气象云图，
-裁剪上半部分(高度/2)，记录裁剪后文件大小(KB)作为云量指标，
+裁剪右上四分之一(宽/2, 高/2)，记录裁剪后文件大小(KB)作为云量指标，
 按小时聚合计算平均云量，存入数据库。
 
 云量等级划分（12级，基于文件大小 KB）：
@@ -96,23 +96,29 @@ def get_cloud_color(kb: float) -> str:
     return CLOUD_COLORS[level]
 
 
-def crop_top_half_size_bytes(image_path: str | Path) -> int | None:
-    """裁剪PNG图片的上半部分，返回裁剪后图片的文件大小(字节)
+def crop_top_right_quarter_size_bytes(image_path: str | Path) -> int | None:
+    """将PNG图片平均裁剪4份（宽/2，高/2），返回右上部分的文件大小(字节)
 
     若失败返回 None。
     """
     try:
         img = Image.open(str(image_path))
         w, h = img.size
-        # 裁剪上半部分 (高度/2)
-        crop_h = h // 2
-        cropped = img.crop((0, 0, w, crop_h))
+        half_w = w // 2
+        half_h = h // 2
+        # 右上部分: (left, upper, right, lower)
+        cropped = img.crop((half_w, 0, w, half_h))
         buf = io.BytesIO()
         cropped.save(buf, format="PNG")
         return buf.tell()
     except Exception as e:
         logger.warning("裁剪失败 %s: %s", image_path, e)
         return None
+
+
+# 别名，兼容旧引用
+def crop_top_half_size_bytes(image_path: str | Path) -> int | None:
+    return crop_top_right_quarter_size_bytes(image_path)
 
 
 def _parse_mmdd_year(mmdd_str: str) -> tuple[int, int, int] | None:
