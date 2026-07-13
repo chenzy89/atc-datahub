@@ -13,7 +13,4 @@ SZ_A_34L	false
 SZ_A_16L	false
 SZ_A_15	false
 SZ_A_16R	false
-ROUTE1_11	true
-ROUTE2_11	true
-route1	true
-route2	true
+MSAW false

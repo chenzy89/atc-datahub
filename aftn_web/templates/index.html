@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.1.88</title>
+<title>ATC综合数据中心 v2.2.1</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.1.88</span>
+  <span class="badge">v2.2.1</span>
 </div>
 
 <div class="tabs">
@@ -4584,39 +4584,45 @@ function voiceLoadChart(idx) {
   var url = '/api/voice/duration?date=' + encodeURIComponent(dateStr) + '&channel=' + ch;
   if (isToday) url += '&include_yesterday=1';
 
-  fetch(url)
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
+  var cloudUrl = '/api/cloud-cover?date=' + encodeURIComponent(dateStr);
+  var cloudFetch = fetch(cloudUrl).then(function(r) { return r.json(); }).catch(function() { return null; });
+  var voiceFetch = fetch(url).then(function(r) { return r.json(); }).catch(function() { return null; });
+
+  Promise.all([voiceFetch, cloudFetch])
+    .then(function(results) {
+      var data = results[0];
+      var cloudData = results[1];
       var emptyEl = _chartEl('voiceChartEmpty', idx);
+      if (!data || data.error) {
+        if (emptyEl) { emptyEl.textContent = '查询失败'; emptyEl.style.display = 'block'; }
+        return;
+      }
       if (emptyEl) emptyEl.style.display = 'none';
       var serverMax = data.flight_count_max || 18;
       var useMax = flightMax || serverMax;
       voiceDrawChart(
         data.duration || [], data.flight_count || [], dateStr, ch, data.terminal_code || '', useMax,
-        isToday, data.yesterday_duration || null, data.yesterday_flight_count || null, idx
+        isToday, data.yesterday_duration || null, data.yesterday_flight_count || null, idx,
+        cloudData
       );
-    })
-    .catch(function() {
-      var emptyEl = _chartEl('voiceChartEmpty', idx);
-      if (emptyEl) emptyEl.textContent = '查询失败';
     });
 }
 
-function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCode, flightMax, isToday, yesterdayDuration, yesterdayFlight, canvasIdx) {
+function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCode, flightMax, isToday, yesterdayDuration, yesterdayFlight, canvasIdx, cloudData) {
   if (canvasIdx === undefined) canvasIdx = 0;
   var canvas = document.getElementById('voiceChart_' + canvasIdx);
   if (!canvas || !durationData) return;
 
   var ctx = canvas.getContext('2d');
   var W = canvas.parentElement.clientWidth || 800;
-  var H = 300;
+  var H = 360;  // 增加高度给云量条留空间
   canvas.width = W * (window.devicePixelRatio || 1);
   canvas.height = H * (window.devicePixelRatio || 1);
   canvas.style.width = W + 'px';
   canvas.style.height = H + 'px';
   ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
 
-  var PAD = {top: 30, bottom: 40, left: 55, right: 50};
+  var PAD = {top: 30, bottom: 75, left: 55, right: 50};  // 底部留空间给云量条
   var plotW = W - PAD.left - PAD.right;
   var plotH = H - PAD.top - PAD.bottom;
 
@@ -4663,12 +4669,77 @@ function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCo
   ctx.fillStyle = '#8b949e';
   ctx.font = '10px sans-serif';
   ctx.textAlign = 'center';
+  var xAxisY = PAD.top + plotH + 25;
   for (var h = 0; h < 24; h += 2) {
     var idx = h * 6;
     var xx = PAD.left + (idx / 143) * plotW;
     ctx.fillText((h === 0 ? '0:00' : h + ':00'), xx, H - 8);
   }
   ctx.fillText('24:00', W - PAD.right, H - 8);
+
+  // ════════════════════════════════════════════
+  // 云量条（每小时色块）
+  // ════════════════════════════════════════════
+  if (cloudData && cloudData.hours && cloudData.colors) {
+    var cloudBarY = PAD.top + plotH + 6;
+    var cloudBarH = 14;
+    var cloudColors = cloudData.colors;
+
+    // 定义12级云量 KB 阈值（与后端一致）
+    var cloudThresholds = [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 99999];
+
+    for (var hh = 0; hh < 24; hh++) {
+      var x1 = PAD.left + (hh * 6 / 143) * plotW;
+      var x2 = PAD.left + ((hh + 1) * 6 / 143) * plotW;
+      if (hh === 23) x2 = W - PAD.right;
+      var w = x2 - x1;
+
+      var hourData = cloudData.hours[hh];
+      if (hourData && hourData.avg_kb > 0) {
+        // 有云量数据 — 根据等级着色
+        var level = hourData.level;
+        if (level !== undefined && level !== null) {
+          var color = cloudColors[level] || cloudColors[0];
+          if (color && color !== 'transparent') {
+            ctx.fillStyle = color;
+            ctx.fillRect(x1, cloudBarY, w, cloudBarH);
+          }
+        }
+      }
+      // 无数据则保持透明（不画任何东西）
+    }
+
+    // 云量条边框
+    ctx.strokeStyle = 'rgba(139,148,158,0.3)';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(PAD.left, cloudBarY, plotW, cloudBarH);
+
+    // 云量标签
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('☁ 云量', PAD.left - 6, cloudBarY + cloudBarH - 2);
+
+    // 小图例（显示当前平均云量值）
+    var avgTot = 0, avgCnt = 0;
+    for (var hh = 0; hh < 24; hh++) {
+      var hd = cloudData.hours[hh];
+      if (hd && hd.avg_kb > 0) { avgTot += hd.avg_kb; avgCnt++; }
+    }
+    if (avgCnt > 0) {
+      var dayAvg = (avgTot / avgCnt).toFixed(1);
+      ctx.fillStyle = '#8b949e';
+      ctx.font = '9px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('日均 ' + dayAvg + 'KB (' + avgCnt + 'h)', W - PAD.right + 6, cloudBarY + cloudBarH - 2);
+    }
+  } else {
+    // 无云量数据，画一条提示线
+    ctx.fillStyle = 'rgba(139,148,158,0.2)';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('无云量数据', PAD.left + plotW / 2, PAD.top + plotH + 16);
+  }
 
   // ════════════════════════════════════════════
   // 昨日参考数据（位于遮罩层下层）

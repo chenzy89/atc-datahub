@@ -346,6 +346,39 @@ def main(argv: list[str] | None = None) -> int:
     else:
         logger.info("radar receiver: disabled")
 
+    # ── 气象云量定时处理（每小时） ──
+    _last_cloud_hour = [-1]
+
+    def cloud_processor():
+        while not stop_requested[0]:
+            time.sleep(300)  # 每5分钟检查一次
+            if stop_requested[0]:
+                break
+            try:
+                now = datetime.now()
+                current_hour = now.hour
+                if _last_cloud_hour[0] != current_hour:
+                    from .wx_cloud import process_today_hourly
+                    processed = process_today_hourly(db)
+                    if processed > 0:
+                        logger.info("云量定时处理: %s", now.strftime("%Y-%m-%d %H:00"))
+                    _last_cloud_hour[0] = current_hour
+            except Exception:
+                logger.exception("云量处理异常")
+
+    cloud_thread = Thread(target=cloud_processor, daemon=True, name="cloud-cover")
+    cloud_thread.start()
+    logger.info("Cloud cover processor started")
+
+    # 初始扫描：处理所有历史云图
+    try:
+        from .wx_cloud import scan_all
+        total_hours = scan_all(db)
+        if total_hours > 0:
+            logger.info("云量初始扫描完成: %d 小时数据", total_hours)
+    except Exception:
+        logger.exception("云量初始扫描异常")
+
     # UDP 接收器
     total_received = [0]
     total_parsed = [0]

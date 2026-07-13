@@ -919,6 +919,24 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
         return jsonify(result)
 
+    @app.route("/api/cloud-cover")
+    def api_cloud_cover():
+        """返回指定日期的云量数据（24小时）"""
+        date_str = request.args.get("date", datetime.utcnow().strftime("%Y-%m-%d"))
+        from .wx_cloud import CLOUD_COLORS
+        data = db.get_cloud_cover_day(date_str)
+        result = {
+            "date": date_str,
+            "hours": data,
+            "colors": CLOUD_COLORS,
+        }
+        return jsonify(result)
+
+    @app.route("/api/weather/cloud-cover")
+    def api_weather_cloud_cover():
+        """兼容旧版"""
+        return api_cloud_cover()
+
     @app.route("/api/voice/stream")
     def api_voice_stream():
         """SSE 端点：流式推送选中通道的 PCM 音频数据给浏览器"""

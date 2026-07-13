@@ -196,6 +196,18 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_asr_time
                 ON asr_text(received_at);
         """)
+        # ── 气象云量表 ──
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS cloud_cover (
+                date TEXT NOT NULL,
+                hour INTEGER NOT NULL,
+                avg_kb REAL NOT NULL DEFAULT 0,
+                count INTEGER NOT NULL DEFAULT 0,
+                level INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (date, hour)
+            );
+        """)
         conn.commit()
 
         # ── 航迹保存表（flight_tracks） ──
@@ -1946,6 +1958,49 @@ class Database:
         )
         conn.commit()
         return True
+
+    # ── 气象云量数据 ──
+
+    def insert_or_update_cloud_cover(self, date: str, hour: int,
+                                      avg_kb: float, count: int) -> None:
+        """插入或更新云量数据"""
+        level = 0
+        thresholds = [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 99999]
+        for i, t in enumerate(thresholds):
+            if avg_kb <= t:
+                level = i
+                break
+        now = _fmt_dt(datetime.utcnow())
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO cloud_cover(date, hour, avg_kb, count, level, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (date, hour, avg_kb, count, level, now),
+        )
+        conn.commit()
+
+    def get_cloud_cover(self, date: str, hour: int) -> dict[str, Any] | None:
+        """获取指定日期小时的云量数据"""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM cloud_cover WHERE date=? AND hour=?",
+            (date, hour),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_cloud_cover_day(self, date: str) -> list[dict[str, Any]]:
+        """获取指定日期所有小时的云量数据（24个slot）"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM cloud_cover WHERE date=? ORDER BY hour",
+            (date,),
+        ).fetchall()
+        result_hours = {r["hour"]: dict(r) for r in rows}
+        # 填充24小时，无数据时返回None
+        result = []
+        for h in range(24):
+            result.append(result_hours.get(h))
+        return result
 
 
 def _build_fpl_conditions(
