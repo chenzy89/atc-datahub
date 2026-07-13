@@ -4686,7 +4686,7 @@ function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCo
     var cloudColors = cloudData.colors;
 
     // 定义12级云量 KB 阈值（与后端一致）
-    var cloudThresholds = [0, 3, 6, 9, 12, 15, 18, 21, 24, 28, 36, 99999];
+    var cloudThresholds = [0, 0.18, 0.25, 0.5, 1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 99999];
 
     for (var hh = 0; hh < 24; hh++) {
       var x1 = PAD.left + (hh * 6 / 143) * plotW;

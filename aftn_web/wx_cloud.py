@@ -1,7 +1,8 @@
 """气象云图云量处理模块
 
 从 /mnt/WXMap/<MMDD>/ 读取 PNG 气象云图，
-裁剪右上四分之一(宽/2, 高/2)，记录裁剪后文件大小(KB)作为云量指标，
+裁剪指定像素区域(X:550~780, Y:280~380)，
+记录裁剪后文件大小(KB)作为云量指标，
 按小时聚合计算平均云量，存入数据库。
 
 云量等级划分（12级，基于文件大小 KB）：
@@ -49,20 +50,20 @@ logger = logging.getLogger("aftn_web.wx_cloud")
 
 WXMAP_DIR = Path("/mnt/WXMap")
 
-# 云量等级阈值（KB）—— 云图裁剪后通常在 36KB 以下，按 3KB 一档细分
+# 云量等级阈值（KB）—— 裁剪区域 X550~780, Y280~380，范围约 0.16~8 KB
 CLOUD_LEVELS = [
-    (0, 0),      # 等级0: 0 KB
-    (1, 3),      # 等级1: 1-3 KB
-    (2, 6),      # 等级2: 4-6 KB
-    (3, 9),      # 等级3: 7-9 KB
-    (4, 12),     # 等级4: 10-12 KB
-    (5, 15),     # 等级5: 13-15 KB
-    (6, 18),     # 等级6: 16-18 KB
-    (7, 21),     # 等级7: 19-21 KB
-    (8, 24),     # 等级8: 22-24 KB
-    (9, 28),     # 等级9: 25-28 KB
-    (10, 36),    # 等级10: 29-36 KB
-    (11, 99999), # 等级11: >36 KB
+    (0, 0),       # 等级0: 0 KB
+    (1, 0.18),    # 等级1: <=0.18 KB  晴/无云
+    (2, 0.25),    # 等级2: 0.18-0.25 KB
+    (3, 0.5),     # 等级3: 0.25-0.5 KB
+    (4, 1.0),     # 等级4: 0.5-1.0 KB
+    (5, 1.5),     # 等级5: 1.0-1.5 KB
+    (6, 2.5),     # 等级6: 1.5-2.5 KB
+    (7, 4.0),     # 等级7: 2.5-4.0 KB
+    (8, 6.0),     # 等级8: 4.0-6.0 KB
+    (9, 8.0),     # 等级9: 6.0-8.0 KB
+    (10, 12.0),   # 等级10: 8.0-12.0 KB
+    (11, 99999),  # 等级11: >12 KB
 ]
 
 # 云量等级背景色（12色，蓝色系从浅到深）
@@ -96,18 +97,17 @@ def get_cloud_color(kb: float) -> str:
     return CLOUD_COLORS[level]
 
 
-def crop_top_right_quarter_size_bytes(image_path: str | Path) -> int | None:
-    """将PNG图片平均裁剪4份（宽/2，高/2），返回右上部分的文件大小(字节)
+def crop_region_size_bytes(image_path: str | Path) -> int | None:
+    """裁剪图片指定像素区域（X: 550~780, Y: 280~380），返回裁剪后文件大小(字节)
 
+    图片尺寸 990×959，原点(0,0)在左上角，正X向右，正Y向下。
+    用该区域的像素大小来表达云量。
     若失败返回 None。
     """
     try:
         img = Image.open(str(image_path))
-        w, h = img.size
-        half_w = w // 2
-        half_h = h // 2
-        # 右上部分: (left, upper, right, lower)
-        cropped = img.crop((half_w, 0, w, half_h))
+        # (left, upper, right, lower)
+        cropped = img.crop((550, 280, 780, 380))
         buf = io.BytesIO()
         cropped.save(buf, format="PNG")
         return buf.tell()
@@ -118,7 +118,7 @@ def crop_top_right_quarter_size_bytes(image_path: str | Path) -> int | None:
 
 # 别名，兼容旧引用
 def crop_top_half_size_bytes(image_path: str | Path) -> int | None:
-    return crop_top_right_quarter_size_bytes(image_path)
+    return crop_region_size_bytes(image_path)
 
 
 def _parse_mmdd_year(mmdd_str: str) -> tuple[int, int, int] | None:
