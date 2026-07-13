@@ -1998,6 +1998,49 @@ class Database:
             result.append(result_hours.get(h))
         return result
 
+    def get_cloud_cover_month(self, year: int, month: int) -> dict[str, dict]:
+        """获取指定年月的每日云量数据，返回 {date: {daily_avg, hour_count, hours: [24 hourly or None]}}"""
+        from calendar import monthrange
+        _, last_day = monthrange(year, month)
+        date_from = f"{year:04d}-{month:02d}-01"
+        date_to = f"{year:04d}-{month:02d}-{last_day:02d}"
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM cloud_cover WHERE date>=? AND date<=? ORDER BY date, hour",
+            (date_from, date_to),
+        ).fetchall()
+        # 按日期分组
+        days_data: dict[str, dict] = {}
+        for r in rows:
+            d = r["date"]
+            if d not in days_data:
+                days_data[d] = {"hours": {}}
+            days_data[d]["hours"][r["hour"]] = {
+                "avg_kb": r["avg_kb"],
+                "level": r["level"],
+                "count": r["count"],
+            }
+        # 填充完整月，计算每日均值
+        result: dict[str, dict] = {}
+        for day in range(1, last_day + 1):
+            d = f"{year:04d}-{month:02d}-{day:02d}"
+            hours = [None] * 24
+            daily_kb_total = 0.0
+            daily_hour_count = 0
+            if d in days_data:
+                for h in range(24):
+                    if h in days_data[d]["hours"]:
+                        hours[h] = days_data[d]["hours"][h]
+                        daily_kb_total += days_data[d]["hours"][h]["avg_kb"]
+                        daily_hour_count += 1
+            result[d] = {
+                "date": d,
+                "daily_avg_kb": round(daily_kb_total / daily_hour_count, 2) if daily_hour_count > 0 else 0,
+                "hour_count": daily_hour_count,
+                "hours": hours,
+            }
+        return result
+
 
 def _build_fpl_conditions(
     callsign: str | None = None,

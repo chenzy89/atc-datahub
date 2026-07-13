@@ -932,6 +932,41 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         }
         return jsonify(result)
 
+    @app.route("/api/cloud-cover/monthly")
+    def api_cloud_cover_monthly():
+        """返回指定年月每日云量数据（按月查看）"""
+        import calendar
+        now_utc = datetime.utcnow()
+        try:
+            year = int(request.args.get("year", now_utc.year))
+            month = int(request.args.get("month", now_utc.month))
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid year/month"}), 400
+        if month < 1 or month > 12:
+            return jsonify({"error": "month out of range"}), 400
+        _, last_day = calendar.monthrange(year, month)
+        from .wx_cloud import CLOUD_COLORS, CLOUD_LEVELS
+        data = db.get_cloud_cover_month(year, month)
+        # 转为有序数组
+        days_list = []
+        for day in range(1, last_day + 1):
+            d = f"{year:04d}-{month:02d}-{day:02d}"
+            days_list.append(data.get(d, {
+                "date": d,
+                "daily_avg_kb": 0,
+                "hour_count": 0,
+                "hours": [None] * 24,
+            }))
+        result = {
+            "year": year,
+            "month": month,
+            "total_days": last_day,
+            "days": days_list,
+            "colors": CLOUD_COLORS,
+            "levels": CLOUD_LEVELS,
+        }
+        return jsonify(result)
+
     @app.route("/api/weather/cloud-cover")
     def api_weather_cloud_cover():
         """兼容旧版"""

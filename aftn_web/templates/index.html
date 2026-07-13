@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.1</title>
+<title>ATC综合数据中心 v2.2.2</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.1</span>
+  <span class="badge">v2.2.2</span>
 </div>
 
 <div class="tabs">
@@ -865,6 +865,30 @@ canvas#radarMap {
     <div style="flex:1;position:relative;overflow:hidden;">
       <canvas id="trailCanvas"></canvas>
       <div id="trail-loading" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(10,22,40,0.85);z-index:10;align-items:center;justify-content:center;flex-direction:column;">
+        <div style="width:32px;height:32px;border:3px solid #1e3a5f;border-top-color:#58a6ff;border-radius:50%;animation:rl-spin .8s linear infinite;margin-bottom:16px;"></div>
+        <div style="color:#94a3b8;font-size:16px;">加载中...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 云量月视图弹窗 ── -->
+<div id="modal-cloud-month" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:1600;align-items:center;justify-content:center;" onclick="if(event.target===this)closeCloudMonthModal()">
+  <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;max-width:1000px;width:94%;max-height:90vh;display:flex;flex-direction:column;padding:20px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-shrink:0;">
+      <h2 style="font-size:16px;font-weight:600;">☁ 云量月视图</h2>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:12px;color:var(--text-muted);">选择年月</span>
+        <select id="cloudMonthYear" onchange="cloudMonthLoad()" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:13px;"></select>
+        <span style="font-size:12px;color:var(--text-muted);">年</span>
+        <select id="cloudMonthSel" onchange="cloudMonthLoad()" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:13px;"></select>
+        <span style="font-size:12px;color:var(--text-muted);">月</span>
+        <button onclick="closeCloudMonthModal()" style="background:none;border:none;color:var(--text-muted);font-size:22px;cursor:pointer;line-height:1;margin-left:8px;">&times;</button>
+      </div>
+    </div>
+    <div style="flex:1;min-height:0;position:relative;overflow:hidden;" id="cloudMonthWrap">
+      <canvas id="cloudMonthCanvas" style="width:100%;height:100%;display:block;"></canvas>
+      <div id="cloudMonthLoading" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(10,22,40,0.85);z-index:10;align-items:center;justify-content:center;flex-direction:column;">
         <div style="width:32px;height:32px;border:3px solid #1e3a5f;border-top-color:#58a6ff;border-radius:50%;animation:rl-spin .8s linear infinite;margin-bottom:16px;"></div>
         <div style="color:#94a3b8;font-size:16px;">加载中...</div>
       </div>
@@ -4939,6 +4963,298 @@ function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCo
   ctx.font = '9px sans-serif';
   ctx.textAlign = 'right';
   ctx.fillText('max 600s / ' + maxFlights + '架次', W - PAD.right - 6, PAD.top - 2);
+
+  // 存储云量条位置，供点击检测
+  canvas._cloudBarY = cloudData && cloudData.hours ? PAD.top + plotH + 6 : -1;
+  canvas._cloudBarH = cloudData && cloudData.hours ? 14 : 0;
+  canvas._cloudBarLeft = PAD.left;
+  canvas._cloudBarRight = W - PAD.right;
+  canvas._chartDateStr = dateStr;
+
+  // 绑定点击事件（只绑一次）
+  if (!canvas._cloudClickBound) {
+    canvas._cloudClickBound = true;
+    canvas.addEventListener('click', function(e) {
+      var rect = canvas.getBoundingClientRect();
+      var scaleX = canvas.width / (canvas.clientWidth || 1) / (window.devicePixelRatio || 1);
+      var scaleY = canvas.height / (canvas.clientHeight || 1) / (window.devicePixelRatio || 1);
+      var mx = (e.clientX - rect.left) * scaleX;
+      var my = (e.clientY - rect.top) * scaleY;
+      if (canvas._cloudBarY >= 0 && my >= canvas._cloudBarY && my <= canvas._cloudBarY + canvas._cloudBarH && mx >= canvas._cloudBarLeft && mx <= canvas._cloudBarRight) {
+        // 点击云量条，打开月视图弹窗
+        var dateStr = canvas._chartDateStr || '';
+        var parts = dateStr.split('-');
+        if (parts.length === 3) {
+          openCloudMonthModal(parseInt(parts[0]), parseInt(parts[1]));
+        } else {
+          openCloudMonthModal();
+        }
+      }
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// 云量月视图弹窗
+// ═══════════════════════════════════════════════════════
+
+var _cloudMonthData = null;
+
+function openCloudMonthModal(year, month) {
+  var modal = document.getElementById('modal-cloud-month');
+  if (!modal) return;
+  modal.style.display = 'flex';
+
+  // 填充年月选择器
+  var now = new Date();
+  var curYear = year || now.getUTCFullYear();
+  var curMonth = month || (now.getUTCMonth() + 1);
+
+  var yrSel = document.getElementById('cloudMonthYear');
+  var moSel = document.getElementById('cloudMonthSel');
+  yrSel.innerHTML = '';
+  for (var y = 2025; y <= 2028; y++) {
+    var opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = y;
+    if (y === curYear) opt.selected = true;
+    yrSel.appendChild(opt);
+  }
+  moSel.innerHTML = '';
+  for (var m = 1; m <= 12; m++) {
+    var opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = m + '月';
+    if (m === curMonth) opt.selected = true;
+    moSel.appendChild(opt);
+  }
+
+  cloudMonthLoad();
+}
+
+function closeCloudMonthModal() {
+  document.getElementById('modal-cloud-month').style.display = 'none';
+}
+
+function cloudMonthLoad() {
+  var yrSel = document.getElementById('cloudMonthYear');
+  var moSel = document.getElementById('cloudMonthSel');
+  if (!yrSel || !moSel) return;
+  var year = parseInt(yrSel.value);
+  var month = parseInt(moSel.value);
+
+  var loading = document.getElementById('cloudMonthLoading');
+  if (loading) loading.style.display = 'flex';
+
+  fetch('/api/cloud-cover/monthly?year=' + year + '&month=' + month)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (loading) loading.style.display = 'none';
+      _cloudMonthData = data;
+      cloudMonthDraw();
+    })
+    .catch(function() {
+      if (loading) loading.style.display = 'none';
+    });
+}
+
+function cloudMonthDraw() {
+  var data = _cloudMonthData;
+  if (!data || !data.days) return;
+
+  var canvas = document.getElementById('cloudMonthCanvas');
+  if (!canvas) return;
+  var wrap = document.getElementById('cloudMonthWrap');
+  if (!wrap) return;
+
+  var W = wrap.clientWidth || 900;
+  var H = wrap.clientHeight || 500;
+  var dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  var ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  var PAD = {top: 30, bottom: 60, left: 55, right: 30};
+  var plotW = W - PAD.left - PAD.right;
+  var plotH = H - PAD.top - PAD.bottom - 30; // 底部留空间给小时热力图标签
+
+  var days = data.days;
+  var totalDays = days.length;
+  if (totalDays === 0) {
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('无数据', W / 2, H / 2);
+    return;
+  }
+
+  // 计算最大云量 KB
+  var maxKb = 0;
+  for (var i = 0; i < days.length; i++) {
+    if (days[i].daily_avg_kb > maxKb) maxKb = days[i].daily_avg_kb;
+  }
+  if (maxKb < 1) maxKb = 1;
+  if (maxKb < 0.5) maxKb = 0.5;
+  // 向上取整到最近的0.5KB
+  maxKb = Math.ceil(maxKb * 2) / 2;
+
+  var cloudColors = data.colors;
+
+  // 标题
+  ctx.fillStyle = '#e6edf3';
+  ctx.font = 'bold 13px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('☁ 云量月视图 — ' + data.year + '年' + data.month + '月', PAD.left, PAD.top - 5);
+
+  // Y轴标签
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  var yTicks = 5;
+  for (var t = 0; t <= yTicks; t++) {
+    var val = (maxKb / yTicks) * t;
+    var y = PAD.top + plotH - (t / yTicks) * plotH;
+    ctx.fillText(val.toFixed(1) + 'KB', PAD.left - 6, y + 4);
+    // 横网格线
+    ctx.strokeStyle = 'rgba(139,148,158,0.1)';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(PAD.left, y);
+    ctx.lineTo(W - PAD.right, y);
+    ctx.stroke();
+  }
+
+  // 绘制柱形图（每日平均KB）
+  var barGap = 2;
+  var barTotalW = plotW / totalDays;
+  var barW = Math.max(3, barTotalW - barGap);
+
+  for (var i = 0; i < totalDays; i++) {
+    var day = days[i];
+    var avgKb = day.daily_avg_kb || 0;
+    var x = PAD.left + i * barTotalW + barGap / 2;
+    var barH = (avgKb / maxKb) * plotH;
+    var y = PAD.top + plotH - barH;
+
+    // 柱形阴影
+    ctx.fillStyle = 'rgba(88,166,255,0.15)';
+    ctx.fillRect(x + 1, y + 1, barW, barH);
+
+    // 柱形 — 若云量>0用云量颜色，否则灰色
+    if (avgKb > 0) {
+      // 用云量等级找颜色
+      var level = 0;
+      var thresholds = [0, 0.18, 0.25, 0.5, 1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 99999];
+      for (var l = 0; l < thresholds.length; l++) {
+        if (avgKb <= thresholds[l]) { level = l; break; }
+      }
+      ctx.fillStyle = cloudColors[level] || cloudColors[0];
+    } else {
+      ctx.fillStyle = 'rgba(139,148,158,0.2)';
+    }
+    ctx.fillRect(x, y, barW, barH);
+
+    // 柱形顶部数值（只标有数据的）
+    if (avgKb > 0 && barH > 20) {
+      ctx.fillStyle = '#e6edf3';
+      ctx.font = '8px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(avgKb.toFixed(1), x + barW / 2, y - 3);
+    }
+
+    // X轴日期标签（隔天标注）
+    if (i % 2 === 0 || i === totalDays - 1) {
+      var dayNum = parseInt(day.date.split('-')[2]);
+      ctx.fillStyle = '#8b949e';
+      ctx.font = '9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(dayNum + '日', x + barW / 2, PAD.top + plotH + 14);
+    }
+  }
+
+  // Y轴单位
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('日均云量 (KB)', PAD.left - 2, PAD.top + plotH / 2);
+
+  // ════════════════════════════════════════════
+  // 下方云量小时色带（逐日24h）
+  // ════════════════════════════════════════════
+  var heatY = PAD.top + plotH + 28;
+  var heatH = 16;
+  var heatThresholds = [0, 0.18, 0.25, 0.5, 1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 99999];
+
+  // 标题
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('逐日小时云量', PAD.left, heatY - 3);
+
+  // 小时标签
+  ctx.fillStyle = 'rgba(139,148,158,0.6)';
+  ctx.font = '7px sans-serif';
+  ctx.textAlign = 'center';
+  for (var h = 0; h < 24; h += 4) {
+    var hx = PAD.left + (h / 24) * plotW;
+    ctx.fillText(h + ':00', hx, heatY + heatH + 10);
+  }
+
+  // 逐日绘制小时热力小色块
+  var cellW = plotW / totalDays / 24; // 每个小格宽度
+  var cellH = heatH;
+
+  for (var i = 0; i < totalDays; i++) {
+    var day = days[i];
+    var hours = day.hours;
+    if (!hours) continue;
+    for (var h = 0; h < 24; h++) {
+      var hd = hours[h];
+      var cx = PAD.left + (i * 24 + h) * cellW;
+      if (hd && hd.avg_kb > 0) {
+        var level = 0;
+        for (var l = 0; l < heatThresholds.length; l++) {
+          if (hd.avg_kb <= heatThresholds[l]) { level = l; break; }
+        }
+        ctx.fillStyle = cloudColors[level] || cloudColors[0];
+      } else {
+        ctx.fillStyle = 'rgba(139,148,158,0.08)';
+      }
+      ctx.fillRect(cx, heatY, Math.max(1, cellW), cellH);
+    }
+  }
+
+  // 热力色带边框
+  ctx.strokeStyle = 'rgba(139,148,158,0.2)';
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(PAD.left, heatY, plotW, heatH);
+
+  // 图例：云量等级色阶
+  var legY = heatY + heatH + 14;
+  var legW = plotW * 0.7;
+  var legX = PAD.left + (plotW - legW) / 2;
+  var legH = 10;
+  var legStep = legW / (cloudColors.length - 1);
+  for (var i = 0; i < cloudColors.length; i++) {
+    var c = cloudColors[i];
+    if (c === 'transparent') c = 'rgba(0,0,0,0)';
+    ctx.fillStyle = c;
+    ctx.fillRect(legX + i * legStep, legY, legStep + 1, legH);
+  }
+  ctx.strokeStyle = 'rgba(139,148,158,0.2)';
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(legX, legY, legW, legH);
+
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '8px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('少云', legX, legY + legH + 12);
+  ctx.fillText('多云', legX + legW / 2, legY + legH + 12);
+  ctx.fillText('阴', legX + legW, legY + legH + 12);
 }
 
 // 启动轮询
