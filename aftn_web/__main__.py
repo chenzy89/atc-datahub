@@ -370,14 +370,17 @@ def main(argv: list[str] | None = None) -> int:
     cloud_thread.start()
     logger.info("Cloud cover processor started")
 
-    # 初始扫描：处理所有历史云图
-    try:
-        from .wx_cloud import scan_all
-        total_hours = scan_all(db)
-        if total_hours > 0:
-            logger.info("云量初始扫描完成: %d 小时数据", total_hours)
-    except Exception:
-        logger.exception("云量初始扫描异常")
+    # 初始扫描：后台线程处理所有历史云图，避免阻塞 Web 服务启动
+    def initial_scan():
+        try:
+            from .wx_cloud import scan_all
+            total_hours = scan_all(db)
+            if total_hours > 0:
+                logger.info("云量初始扫描完成: %d 小时数据", total_hours)
+        except Exception:
+            logger.exception("云量初始扫描异常")
+
+    Thread(target=initial_scan, daemon=True, name="cloud-init-scan").start()
 
     # UDP 接收器
     total_received = [0]
