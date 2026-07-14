@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.2</title>
+<title>ATC综合数据中心 v2.2.3</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.2</span>
+  <span class="badge">v2.2.3</span>
 </div>
 
 <div class="tabs">
@@ -1053,14 +1053,7 @@ function loadStats() {
       '<div class="stat-card"><div class="num">' + (f.ARR||0) + '</div><div class="label">ARR</div></div>' +
       '<div class="stat-card"><div class="num">' + (f.DLA||0) + '</div><div class="label">DLA</div></div>';
     document.getElementById('stats-aftn').innerHTML =
-      '<div class="stat-card"><div class="num">' + (s.total_aftn_messages||0) + '</div><div class="label">AFTN 报文</div></div>' +
-      '<div class="stat-card"><div class="num">' + (m.FPL||0) + '</div><div class="label">FPL</div></div>' +
-      '<div class="stat-card"><div class="num">' + (m.DEP||0) + '</div><div class="label">DEP</div></div>' +
-      '<div class="stat-card"><div class="num">' + (m.ARR||0) + '</div><div class="label">ARR</div></div>' +
-      '<div class="stat-card"><div class="num">' + (m.DLA||0) + '</div><div class="label">DLA</div></div>' +
-      '<div class="stat-card"><div class="num">' + (m.EST||0) + '</div><div class="label">EST</div></div>' +
-      '<div class="stat-card"><div class="num">' + (m.HQ||0) + '</div><div class="label">HQ</div></div>' +
-      '<div class="stat-card"><div class="num">' + (m.METAR||0) + '</div><div class="label">METAR</div></div>';
+      '<div class="stat-card"><div class="num">' + (s.total_aftn_messages||0) + '</div><div class="label">AFTN报文总数</div></div>';
   }).catch(function() {});
 }
 
@@ -4284,7 +4277,7 @@ function voiceRenderChannels(channels, playing) {
           + '<span class="vc-asr-label">🗣</span> '
           + _truncateText(_escapeHtml(_cleanAsrText(c.asr_text)), 30)
           + '</div>'
-        : '')
+        : '<div class="vc-asr-text vc-asr-stale" style="opacity:0.35;">&nbsp;</div>')
       + '</div>';
   }
   container.innerHTML = html;

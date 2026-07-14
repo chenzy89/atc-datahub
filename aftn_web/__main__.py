@@ -395,6 +395,72 @@ def main(argv: list[str] | None = None) -> int:
 
     Thread(target=initial_scan, daemon=True, name="cloud-init-scan").start()
 
+    # ── 每日清理线程：凌晨自动清理过期数据 ──
+    _last_clean_date = [""]
+
+    def daily_cleanup():
+        while not stop_requested[0]:
+            time.sleep(3600)  # 每小时检查一次
+            if stop_requested[0]:
+                break
+            try:
+                now = datetime.utcnow()
+                today = now.strftime("%Y-%m-%d")
+                if _last_clean_date[0] == today:
+                    continue
+                # 仅在北京时凌晨 02:00 之后执行（UTC 18:00 前一天）
+                # 确保只执行一次
+                if now.hour != 18:  # UTC 18:00 = 北京时 02:00
+                    continue
+                _last_clean_date[0] = today
+
+                import datetime as dt_mod
+                cutoff = now - dt_mod.timedelta(days=180)
+                cutoff_str = cutoff.strftime("%Y-%m-%d")
+                logger.info("每日清理: 删除 %s 之前的 AFTN 报文和航迹历史", cutoff_str)
+
+                # 清理 AFTN 报文
+                try:
+                    conn = db._get_conn()
+                    result = conn.execute(
+                        "DELETE FROM aftn_messages WHERE received_at < ?",
+                        (cutoff_str,),
+                    )
+                    deleted = result.rowcount
+                    conn.commit()
+                    logger.info("每日清理: 删除 %d 条 AFTN 报文", deleted)
+                except Exception as exc:
+                    logger.exception("每日清理: AFTN 报文删除异常: %s", exc)
+
+                # 清理 radar_history 文件
+                try:
+                    from pathlib import Path
+                    rad_dir = Path(db.db_path.replace(".db", "")).parent / "radar_history"
+                    if rad_dir.is_dir():
+                        removed = 0
+                        for f in sorted(rad_dir.iterdir()):
+                            if not f.name.endswith(".jsonl.gz"):
+                                continue
+                            # 文件名格式: radar_YYYYMMDD.jsonl.gz
+                            fname = f.stem.replace(".jsonl", "")
+                            if fname.startswith("radar_"):
+                                date_part = fname.replace("radar_", "")
+                                try:
+                                    fdate = datetime.strptime(date_part, "%Y%m%d")
+                                    if (now - fdate).days > 180:
+                                        f.unlink(missing_ok=True)
+                                        removed += 1
+                                except ValueError:
+                                    pass
+                        logger.info("每日清理: 删除 %d 个 radar_history 文件", removed)
+                except Exception as exc:
+                    logger.exception("每日清理: radar_history 文件删除异常: %s", exc)
+            except Exception:
+                logger.exception("每日清理异常")
+
+    Thread(target=daily_cleanup, daemon=True, name="daily-cleanup").start()
+    logger.info("Daily cleanup thread started")
+
     # UDP 接收器
     total_received = [0]
     total_parsed = [0]
