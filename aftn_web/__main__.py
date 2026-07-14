@@ -347,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("radar receiver: disabled")
 
     # ── 气象云量定时处理（每小时） ──
-    _last_cloud_hour = [-1]
+    _last_cloud_date = [""]
 
     def cloud_processor():
         while not stop_requested[0]:
@@ -355,14 +355,27 @@ def main(argv: list[str] | None = None) -> int:
             if stop_requested[0]:
                 break
             try:
-                now = datetime.now()
-                current_hour = now.hour
-                if _last_cloud_hour[0] != current_hour:
-                    from .wx_cloud import process_today_hourly
-                    processed = process_today_hourly(db)
+                now = datetime.utcnow()
+                today = now.strftime("%Y-%m-%d")
+
+                # 每天首次运行：回扫今日所有小时，补上因云图迟到漏掉的数据
+                if _last_cloud_date[0] != today:
+                    from .wx_cloud import process_and_store_day
+                    from datetime import timedelta
+                    # 北京时目录名
+                    bj_dt = now + timedelta(hours=8)
+                    mmdd_str = f"{bj_dt.month:02d}{bj_dt.day:02d}"
+                    processed = process_and_store_day(db, mmdd_str)
                     if processed > 0:
-                        logger.info("云量定时处理: %s", now.strftime("%Y-%m-%d %H:00"))
-                    _last_cloud_hour[0] = current_hour
+                        logger.info("云量日扫描 %s: %d 小时数据", mmdd_str, processed)
+                    _last_cloud_date[0] = today
+
+                # 每5分钟处理当前小时（允许迟到云图补录，内部有去重）
+                from .wx_cloud import process_today_hourly
+                ph = process_today_hourly(db)
+                if ph > 0:
+                    logger.info("云量小时处理: UTC %s/%d", today, now.hour)
+
             except Exception:
                 logger.exception("云量处理异常")
 
