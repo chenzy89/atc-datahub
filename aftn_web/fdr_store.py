@@ -182,7 +182,9 @@ class FDRRecord:
             self._landed = True
             self._landed_at = time.monotonic()
             self.in_terminal = False
-            logger.debug("[TERM] %s 已落地，停止终端检测", self.callsign)
+            # 落地时立即赋值退出时间（UTC），无需等ATA
+            self.terminal_exit_ts = utc_iso
+            logger.debug("[TERM] %s 已落地(exit=%s)，停止终端检测", self.callsign, utc_iso)
             return
 
         prev = self.in_terminal
@@ -590,69 +592,24 @@ class FDRStore:
             # 1. 清理超时
             expired = [k for k, r in self._records.items()
                        if now - r.last_update > FDR_TTL_SECONDS]
-            # 1a. 已进终端区但缺退出时间的，暂不删
-            #     两种情形保留记录：
-            #     - 已落地（_landed=True）：用 ATA 填充退出时间（落地后雷达信号是假信号）
-            #     - 未落地但终端累计时间 ≥ 60s：说明已稳定在终端区内，短时雷达间隙不应丢失状态
-            #     未进终端区或终端时间很短（< 60s）的过期记录直接删（可能只是短暂飞过边界）
-            fill_ata_keys = []
+            # 1a. 已进终端区且未离区的暂不删，避免短时雷达间隙丢失终端状态
+            keep_keys = []
             for k in expired:
                 r = self._records[k]
                 if r.terminal_entry_ts and not r.terminal_exit_ts and r.callsign:
-                    if r._landed or r.terminal_accum_seconds >= 60:
-                        fill_ata_keys.append(k)
-            # 1b. 正常过期立即删除
+                    if r.terminal_accum_seconds >= 60:
+                        keep_keys.append(k)
             for k in expired:
-                if k not in fill_ata_keys:
+                if k not in keep_keys:
                     del self._records[k]
             if expired:
                 logger.debug(
-                    "FDR cleanup: removed %d expired records (%d 需补ATA)",
-                    len(expired) - len(fill_ata_keys), len(fill_ata_keys),
+                    "FDR cleanup: removed %d expired records (%d 保留)",
+                    len(expired) - len(keep_keys), len(keep_keys),
                 )
 
-            # 2. 收集需要处理的记录快照（含暂存的补ATA记录）
+            # 2. 收集需要处理的记录快照
             candidates = [r for r in self._records.values() if r.callsign]
-
-        # 2b. 对进过终端区、已落地、但缺退出时间的记录，查ATA补退出时间
-        for rec in candidates:
-            if rec.terminal_entry_ts and not rec.terminal_exit_ts and rec._landed:
-                try:
-                    # DOF 候选从 entry_time 日期推导（而非当前时间），防定期航班取到昨日 ATA
-                    from datetime import timedelta as _td
-                    from datetime import datetime as _dt
-                    _entry_dt = _dt.fromisoformat(rec.terminal_entry_ts.replace("Z", "+00:00"))
-                    _dof_today = _entry_dt.date()
-                    _dof_yesterday = _dof_today - _td(days=1)
-                    plan = None
-                    for _dof in (_dof_today, _dof_yesterday):
-                        plan = db.find_flight_plan(
-                            rec.callsign, rec.adep, rec.adest,
-                            dof=_dof,
-                            exclude_cancelled=True,
-                        )
-                        if plan and plan.get("ata"):
-                            # 验证 ATA 不早于 entry_time（防定期航班跨日误取）
-                            _ata_str = str(plan["ata"]).replace("Z", "+00:00")
-                            try:
-                                _ata_dt = _dt.fromisoformat(_ata_str)
-                                if _ata_dt < _entry_dt:
-                                    logger.debug(
-                                        "[TERM] %s dof=%s ATA(%s) 早于 entry(%s)，跳过",
-                                        rec.callsign, _dof, _ata_str, rec.terminal_entry_ts,
-                                    )
-                                    continue
-                            except Exception:
-                                pass
-                            break
-                    if plan and plan.get("ata"):
-                        rec.terminal_exit_ts = plan["ata"]
-                        logger.info(
-                            "[TERM] %s FDR删除时从ATA补终端退出时间: %s",
-                            rec.callsign, plan["ata"],
-                        )
-                except Exception:
-                    pass
 
         # 3. 逐条更新飞行计划
         radar_updated = 0
@@ -702,10 +659,10 @@ class FDRStore:
         if self._track_enabled:
             self._process_track_save(db, candidates)
 
-        # 6. 删除已补ATA的过期记录（处理完这一轮才真正清理）
-        if fill_ata_keys:
+        # 6. 删除已保留的过期记录（处理完这一轮才真正清理）
+        if keep_keys:
             with self._lock:
-                for k in fill_ata_keys:
+                for k in keep_keys:
                     self._records.pop(k, None)
 
         if radar_updated:
