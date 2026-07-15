@@ -89,6 +89,8 @@ class FDRRecord:
     longitude: float = 0.0
     heading: float = 0.0
     flight_level: float = 0.0
+    qnh_height: float = 0.0           # QNH 修正高度 (米)，来自 CAT062 I135
+    qnh_applied: bool = False         # I135 QNH 修正标志
     prev_flight_level: float = 0.0
     speed: float = 0.0
     trail: list[tuple[float, float]] = field(default_factory=list)  # 历史尾迹 [(lat,lon),...]
@@ -447,6 +449,13 @@ class FDRStore:
             if abs(new_fl - rec.flight_level) > 0.5:
                 rec.prev_flight_level = rec.flight_level
             rec.flight_level = new_fl
+
+            # QNH 修正高度：优先用于落地检测和轨迹记录
+            rec.qnh_height = parsed.get("qnh_height_m", 0.0)
+            rec.qnh_applied = parsed.get("qnh_applied", False)
+            # 有效高度：QNH 修正 >=0 且标记已修正时用 QNH，否则用标准气压高度
+            eff_fl = rec.qnh_height if (rec.qnh_applied and rec.qnh_height >= 0) else new_fl
+
             rec.speed = parsed.get("speed", 0.0)
 
             # 尾迹（仅显示用，保留最近5个）
@@ -482,7 +491,7 @@ class FDRStore:
             # ── 全量航迹点采集（所有航班都采集，仅在配置启用时保存） ──
             if lat or lon:
                 rec.record_full_track_point(
-                    lat, lon, new_fl,
+                    lat, lon, eff_fl,
                     rec.heading, rec.speed,
                     rec.runway, rec.flight_procedure,
                     rec.adep, rec.adest,
@@ -526,8 +535,8 @@ class FDRStore:
 
             # ── 终端区进出检测 ──────────────────────────
             # 有有效位置且高度 > 0 时才检查
-            if lat and lon and new_fl > 0:
-                rec.check_terminal_transition(lat, lon, new_fl, now, utc_iso)
+            if lat and lon and eff_fl > 0:
+                rec.check_terminal_transition(lat, lon, eff_fl, now, utc_iso)
 
     def _save_track(self, db: Any, rec: FDRRecord, track_type: str) -> bool:
         """保存航迹到数据库
@@ -734,6 +743,8 @@ class FDRStore:
             for rec in self._records.values():
                 if now - rec.last_update > FDR_TTL_SECONDS:
                     continue
+                # 对外暴露有效高度（QNH 修正优先）
+                disp_fl = rec.qnh_height if (rec.qnh_applied and rec.qnh_height >= 0) else rec.flight_level
                 fl_diff = rec.flight_level - rec.prev_flight_level
                 level_trend = 'c' if abs(fl_diff) > 1.0 and fl_diff > 0 else \
                               'd' if abs(fl_diff) > 1.0 else 'm'
@@ -743,7 +754,7 @@ class FDRStore:
                     "latitude": rec.latitude,
                     "longitude": rec.longitude,
                     "heading": rec.heading,
-                    "flight_level": rec.flight_level,
+                    "flight_level": disp_fl,
                     "speed": rec.speed,
                     "level_trend": level_trend,
                     "trail": rec.trail[-5:],
