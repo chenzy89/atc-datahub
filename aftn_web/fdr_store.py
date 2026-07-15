@@ -618,19 +618,32 @@ class FDRStore:
         for rec in candidates:
             if rec.terminal_entry_ts and not rec.terminal_exit_ts and rec._landed:
                 try:
-                    # 先试今日 DOF，再试昨日 DOF（跨午夜航班）
+                    # DOF 候选从 entry_time 日期推导（而非当前时间），防定期航班取到昨日 ATA
                     from datetime import timedelta as _td
-                    _now = datetime.utcnow()
-                    _today = _now.date()
-                    _yesterday = (_now - _td(days=1)).date()
+                    from datetime import datetime as _dt
+                    _entry_dt = _dt.fromisoformat(rec.terminal_entry_ts.replace("Z", "+00:00"))
+                    _dof_today = _entry_dt.date()
+                    _dof_yesterday = _dof_today - _td(days=1)
                     plan = None
-                    for _dof in (_today, _yesterday):
+                    for _dof in (_dof_today, _dof_yesterday):
                         plan = db.find_flight_plan(
                             rec.callsign, rec.adep, rec.adest,
                             dof=_dof,
                             exclude_cancelled=True,
                         )
                         if plan and plan.get("ata"):
+                            # 验证 ATA 不早于 entry_time（防定期航班跨日误取）
+                            _ata_str = str(plan["ata"]).replace("Z", "+00:00")
+                            try:
+                                _ata_dt = _dt.fromisoformat(_ata_str)
+                                if _ata_dt < _entry_dt:
+                                    logger.debug(
+                                        "[TERM] %s dof=%s ATA(%s) 早于 entry(%s)，跳过",
+                                        rec.callsign, _dof, _ata_str, rec.terminal_entry_ts,
+                                    )
+                                    continue
+                            except Exception:
+                                pass
                             break
                     if plan and plan.get("ata"):
                         rec.terminal_exit_ts = plan["ata"]
