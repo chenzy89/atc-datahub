@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.3</title>
+<title>ATC综合数据中心 v2.2.4</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.3</span>
+  <span class="badge">v2.2.4</span>
 </div>
 
 <div class="tabs">
@@ -3299,7 +3299,7 @@ function esc(s) {
         fetch('/api/flight_tracks/batch', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({callsigns: callsigns})
+          body: JSON.stringify({callsigns: callsigns, dof: d2 || ''})
         }).then(function(r) { return r.json(); }),
         fetch('/api/maplist').then(function(r) { return r.json(); }).then(function(fileList) {
           if (fileList.length === 0) return {order:[], layers:{}};
