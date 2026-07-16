@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.10</title>
+<title>ATC综合数据中心 v2.2.11</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.10</span>
+  <span class="badge">v2.2.11</span>
 </div>
 
 <div class="tabs">
@@ -2532,6 +2532,9 @@ function esc(s) {
     if (filter) filter.style.display = 'flex';
     _trailLoading = false;
 
+    // 检查是否已起飞（有ATD/ATA/entryTime任一表示已运行过）
+    var hasFlown = !!(atd || ata || entryTime || exitTime);
+
     // 清空画布显示提示
     clearCanvas(canvas);
     var ctx = canvas.getContext('2d');
@@ -2541,13 +2544,23 @@ function esc(s) {
     ctx.textBaseline = 'middle';
     var w = canvas.parentElement.clientWidth || 800;
     var h = canvas.parentElement.clientHeight || 500;
-    ctx.fillText('输入时间范围后点「确认」或点「全部轨迹」', w/2, h/2);
+    if (!hasFlown) {
+      ctx.fillStyle = '#f85149';
+      ctx.font = '16px sans-serif';
+      ctx.fillText('⚠ 该航班未起飞，暂无轨迹数据', w/2, h/2);
+      ctx.fillStyle = '#8b949e';
+      ctx.font = '13px sans-serif';
+      ctx.fillText('可修改日期后点「确认」查看历史同日轨迹', w/2, h/2 + 28);
+    } else {
+      ctx.fillText('输入时间范围后点「确认」或点「全部轨迹」', w/2, h/2);
+    }
 
     // 保存状态
     _trailState.callsign = callsign;
     _trailState.dateStr = dateStr || '';
     _trailState.allPoints = [];
     _trailState.ata = ata || '';
+    _trailState.hasFlown = hasFlown;
 
     // 设置日期（默认点选记录的DOF，用户可以改）
     var dateEl = document.getElementById('trailDate');
@@ -2580,11 +2593,31 @@ function esc(s) {
 
   function _loadAndDrawTrail(dateStr, fromTime, durationStr) {
     if (_trailLoading) return;
-    _trailLoading = true;
 
     var canvas = document.getElementById('trailCanvas');
     var loading = document.getElementById('trail-loading');
     var _startTime = Date.now();
+
+    // 未起飞航班且未手动改日期 → 直接提示，不查询
+    if (!_trailState.hasFlown && (!dateStr || dateStr === _trailState.dateStr)) {
+      loading.style.display = 'none';
+      clearCanvas(canvas);
+      var ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#f85149';
+      ctx.font = '16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      var w = canvas.parentElement.clientWidth || 800;
+      var h = canvas.parentElement.clientHeight || 500;
+      ctx.fillText('⚠ 该航班未起飞，暂无轨迹数据', w/2, h/2);
+      ctx.fillStyle = '#8b949e';
+      ctx.font = '13px sans-serif';
+      ctx.fillText('可修改日期后点「确认」查看历史同日轨迹', w/2, h/2 + 28);
+      _trailLoading = false;
+      return;
+    }
+
+    _trailLoading = true;
 
     // 显示加载遮罩
     loading.style.display = 'flex';
