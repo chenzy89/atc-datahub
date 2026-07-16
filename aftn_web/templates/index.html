@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.9</title>
+<title>ATC综合数据中心 v2.2.10</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.9</span>
+  <span class="badge">v2.2.10</span>
 </div>
 
 <div class="tabs">
@@ -851,6 +851,8 @@ canvas#radarMap {
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);flex-shrink:0;gap:10px;flex-wrap:wrap;">
       <h2 id="trail-title" style="font-size:15px;font-weight:600;color:var(--accent-green);">历史轨迹</h2>
       <div id="trail-time-filter" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+        <span style="font-size:11px;color:var(--text-muted);">日期</span>
+        <input type="date" id="trailDate" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:135px;">
         <span style="font-size:11px;color:var(--text-muted);">UTC</span>
         <input type="time" id="trailFromTime" value="00:00" step="1" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:120px;">
         <span style="font-size:11px;color:var(--text-muted);">时长</span>
@@ -2547,6 +2549,10 @@ function esc(s) {
     _trailState.allPoints = [];
     _trailState.ata = ata || '';
 
+    // 设置日期（默认点选记录的DOF，用户可以改）
+    var dateEl = document.getElementById('trailDate');
+    if (dateEl) dateEl.value = (dateStr || '').slice(0, 10);
+
     // 设置智能默认值
     var defaults = _computeTrailDefaults(atd, ata, entryTime, exitTime);
     var fromEl = document.getElementById('trailFromTime');
@@ -2556,19 +2562,23 @@ function esc(s) {
   }
 
   function applyTrailFilter() {
+    var dateEl = document.getElementById('trailDate');
     var fromEl = document.getElementById('trailFromTime');
     var durEl = document.getElementById('trailDuration');
+    var dateStr = dateEl ? dateEl.value : _trailState.dateStr;
     var fromTime = fromEl ? fromEl.value : '';
     var durStr = durEl ? durEl.value : '';
     if (!durStr) { alert('请输入时长（分钟）'); return; }
-    _loadAndDrawTrail(fromTime, durStr);
+    _loadAndDrawTrail(dateStr, fromTime, durStr);
   }
 
   function skipTrailFilter() {
-    _loadAndDrawTrail(null, null);
+    var dateEl = document.getElementById('trailDate');
+    var dateStr = dateEl ? dateEl.value : _trailState.dateStr;
+    _loadAndDrawTrail(dateStr, null, null);
   }
 
-  function _loadAndDrawTrail(fromTime, durationStr) {
+  function _loadAndDrawTrail(dateStr, fromTime, durationStr) {
     if (_trailLoading) return;
     _trailLoading = true;
 
@@ -2582,26 +2592,32 @@ function esc(s) {
     // 画布保持之前的内容（由 showFlightTrail 绘制的提示文字）
 
     var callsign = _trailState.callsign;
-    var dateStr = _trailState.dateStr;
     var ata = _trailState.ata;
+    var planDate = dateStr || _trailState.dateStr;
+    _trailState.dateStr = planDate;
 
     // 并行请求：轨迹数据（优先查 DB flight_tracks，无数据时回退到 gzip 历史文件） + 地图背景 + 终端区配置
-    // 全部轨迹时（fromTime/durationStr 均为 null）不传 dof，让后端返回该呼号所有航迹
-    var trackUrl = '/api/flight_tracks?callsign=' + encodeURIComponent(callsign);
-    if (fromTime && durationStr) {
-      trackUrl += '&dof=' + encodeURIComponent(dateStr || '');
-    }
+    // 传 plan_date 让后端按计划 DOF 匹配航迹（跨日自动扩展）
+    var trackUrl = '/api/flight_tracks?callsign=' + encodeURIComponent(callsign) + '&plan_date=' + encodeURIComponent(planDate || '');
     var trailPromise = fetch(trackUrl)
       .then(function(r) { return r.json(); })
       .then(function(tracks) {
         // flight_tracks 返回 [{id, callsign, track_type, points, ...}]
-        if (tracks && tracks.length > 0 && tracks[0].points && tracks[0].points.length >= 2) {
-          return tracks[0].points;
+        if (tracks && tracks.length > 0) {
+          // 合并所有匹配航迹的轨迹点，按时间排序
+          var merged = [];
+          for (var ti = 0; ti < tracks.length; ti++) {
+            if (tracks[ti].points && tracks[ti].points.length >= 2) {
+              merged = merged.concat(tracks[ti].points);
+            }
+          }
+          if (merged.length >= 2) {
+            merged.sort(function(a, b) { return (a.ts || '').localeCompare(b.ts || ''); });
+            return merged;
+          }
         }
         // 回退到旧的 gzip 扫描方式
-        // 对于全部轨迹，不传 date 让后端用今日 UTC
-        var fallbackDate = (fromTime && durationStr) ? dateStr : '';
-        return fetch('/api/flight_trail?callsign=' + encodeURIComponent(callsign) + '&date=' + encodeURIComponent(fallbackDate))
+        return fetch('/api/flight_trail?callsign=' + encodeURIComponent(callsign) + '&date=' + encodeURIComponent(planDate || ''))
           .then(function(r2) { return r2.json(); });
       });
 

@@ -246,14 +246,17 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         """
         callsign = _req_str("callsign")
         dof = _req_str("dof") or ""
+        plan_date = _req_str("plan_date") or ""
         adep = _req_str("adep")
         adest = _req_str("adest")
         track_type = _req_str("track_type")
 
         from .database import query_flight_tracks
+        # 有 plan_date 时：不按 dof 过滤，查该呼号所有航迹，再按日期范围筛选
+        use_plan_date = bool(plan_date)  # 前端指定的计划日期（DOF）
         records = query_flight_tracks(
             db, callsign=callsign or "",
-            dof=dof or "",
+            dof="" if use_plan_date else dof,  # 有plan_date时跳过dof过滤，在下面按plan_date筛选
             adep=adep or "",
             adest=adest or "",
             track_type=track_type or "",
@@ -267,6 +270,23 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
                 points = json.loads(r.get("points_json", "[]"))
             except (json.JSONDecodeError, TypeError):
                 pass
+            # plan_date 过滤：航迹起点或终点落在 [plan_date, plan_date+1day] 范围内
+            if use_plan_date:
+                _start = r.get("start_time", "")
+                _end = r.get("end_time", "")
+                try:
+                    from datetime import datetime as _ddt, timedelta as _td
+                    pd = _ddt.strptime(plan_date, "%Y-%m-%d")
+                    _range_start = pd.strftime("%Y-%m-%d")
+                    _range_end = (pd + _td(days=1)).strftime("%Y-%m-%d")
+                    # 检查 start_time 或 end_time 的日期是否在范围内
+                    _s_date = _start[:10] if len(_start) >= 10 else ""
+                    _e_date = _end[:10] if len(_end) >= 10 else ""
+                    if not ((_s_date == _range_start or _s_date == _range_end)
+                            or (_e_date == _range_start or _e_date == _range_end)):
+                        continue
+                except Exception:
+                    pass
             result.append({
                 "id": r["id"],
                 "callsign": r["callsign"],
