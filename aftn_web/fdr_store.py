@@ -195,12 +195,18 @@ class FDRRecord:
         self._last_terminal_check_time = check_time
 
         if now_in and not prev:
-            # 进终端
-            self.terminal_entry_ts = utc_iso
-            self.terminal_entry_lat = lat
-            self.terminal_entry_lon = lon
-            logger.debug("[TERM] %s 进终端区 @ %s (%.4f, %.4f) %.0fm",
-                         self.callsign, utc_iso, lat, lon, alt_m)
+            if not self.terminal_entry_ts:
+                # 进终端（仅第一次记录，避免重新进入时覆盖导致 entry_time 不正确）
+                self.terminal_entry_ts = utc_iso
+                self.terminal_entry_lat = lat
+                self.terminal_entry_lon = lon
+                logger.debug("[TERM] %s 进终端区 @ %s (%.4f, %.4f) %.0fm",
+                             self.callsign, utc_iso, lat, lon, alt_m)
+            else:
+                # 重新进入终端区：只清退出时间，不覆盖进入时间
+                self.terminal_exit_ts = ""
+                logger.debug("[TERM] %s 重新进终端区 @ %s (保留首次entry=%s)",
+                             self.callsign, utc_iso, self.terminal_entry_ts)
         elif not now_in and prev:
             # 出终端
             self.terminal_exit_ts = utc_iso

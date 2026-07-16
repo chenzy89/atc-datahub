@@ -47,8 +47,8 @@ class RadarEndpointConfig:
 
 @dataclass
 class VoiceEndpointConfig:
-    multicast_group: str = "229.34.34.34"
-    port: int = 34034
+    multicast_group: str = "238.1.1.1"
+    port: int = 5001
     interface_ip: str = "0.0.0.0"
     enabled: bool = False
 
@@ -125,8 +125,8 @@ def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
             enabled=bool(radar_raw.get("enabled", False)),
         ),
         voice=VoiceEndpointConfig(
-            multicast_group=voice_raw.get("multicast_group", "229.34.34.34"),
-            port=int(voice_raw.get("port", 34034)),
+            multicast_group=voice_raw.get("multicast_group", "238.1.1.1"),
+            port=int(voice_raw.get("port", 5001)),
             interface_ip=voice_raw.get("interface_ip", "0.0.0.0"),
             enabled=bool(voice_raw.get("enabled", False)),
         ),

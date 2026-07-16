@@ -15,8 +15,8 @@
       "enabled": true
     },
     "voice": {
-      "multicast_group": "229.34.34.34",
-      "port": 34034,
+      "multicast_group": "238.1.1.1",
+      "port": 5001,
       "interface_ip": "172.50.100.76",
       "enabled": true
     },
