@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.7</title>
+<title>ATC综合数据中心 v2.2.8</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -420,7 +420,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.7</span>
+  <span class="badge">v2.2.8</span>
 </div>
 
 <div class="tabs">
@@ -2587,7 +2587,12 @@ function esc(s) {
     var ata = _trailState.ata;
 
     // 并行请求：轨迹数据（优先查 DB flight_tracks，无数据时回退到 gzip 历史文件） + 地图背景 + 终端区配置
-    var trailPromise = fetch('/api/flight_tracks?callsign=' + encodeURIComponent(callsign) + '&dof=' + encodeURIComponent(dateStr || ''))
+    // 全部轨迹时（fromTime/durationStr 均为 null）不传 dof，让后端返回该呼号所有航迹
+    var trackUrl = '/api/flight_tracks?callsign=' + encodeURIComponent(callsign);
+    if (fromTime && durationStr) {
+      trackUrl += '&dof=' + encodeURIComponent(dateStr || '');
+    }
+    var trailPromise = fetch(trackUrl)
       .then(function(r) { return r.json(); })
       .then(function(tracks) {
         // flight_tracks 返回 [{id, callsign, track_type, points, ...}]
@@ -2595,7 +2600,9 @@ function esc(s) {
           return tracks[0].points;
         }
         // 回退到旧的 gzip 扫描方式
-        return fetch('/api/flight_trail?callsign=' + encodeURIComponent(callsign) + '&date=' + encodeURIComponent(dateStr || ''))
+        // 对于全部轨迹，不传 date 让后端用今日 UTC
+        var fallbackDate = (fromTime && durationStr) ? dateStr : '';
+        return fetch('/api/flight_trail?callsign=' + encodeURIComponent(callsign) + '&date=' + encodeURIComponent(fallbackDate))
           .then(function(r2) { return r2.json(); });
       });
 

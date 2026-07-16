@@ -185,10 +185,24 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
         # 查询主日期
         pts = radar_history_store.query(ts_from, ts_to, callsign)
+        pts_sorted = sorted(pts, key=lambda p: p.get("ts", ""))
+
+        # 主日期无数据时，尝试前一天（计划 DOF ≠ 航迹日期时有用）
+        if not pts_sorted:
+            try:
+                prev_dt = datetime.strptime(date_str, "%Y-%m-%d") - timedelta(days=1)
+                prev_date = prev_dt.strftime("%Y-%m-%d")
+                prev_from = f"{prev_date}T00:00:00.000Z"
+                prev_to = f"{prev_date}T23:59:59.000Z"
+                prev_pts = radar_history_store.query(prev_from, prev_to, callsign)
+                if prev_pts:
+                    pts_sorted = sorted(prev_pts, key=lambda p: p.get("ts", ""))
+                    date_str = prev_date  # 更新 date_str 为实际数据日期，用于后续跨日判断
+            except Exception:
+                pass
 
         # 检查是否需要扩展查询到次日（跨午夜航班）
         # 如果最后航迹点在 23:50 之后，自动查询次日 0-2 小时的数据
-        pts_sorted = sorted(pts, key=lambda p: p.get("ts", ""))
         extend_to_next = False
         if pts_sorted:
             last_ts = pts_sorted[-1].get("ts", "")
@@ -231,7 +245,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             track_type: ARRIVAL / DEPARTURE
         """
         callsign = _req_str("callsign")
-        dof = _req_str("dof") or datetime.utcnow().strftime("%Y-%m-%d")
+        dof = _req_str("dof") or ""
         adep = _req_str("adep")
         adest = _req_str("adest")
         track_type = _req_str("track_type")
