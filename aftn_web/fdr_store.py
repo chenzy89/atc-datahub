@@ -177,14 +177,21 @@ class FDRRecord:
             return
 
         # 检测是否落地：高度低于终端区底部，标记为已落地
+        # ⚠️ 仅当航班曾进入过终端区时才标记落地，避免将离港爬升中
+        #   的第一次低空雷达回波误判为落地（cover 761/2115 离港航班）
         cfg = load_terminal_config()
         if alt_m > 0 and alt_m < cfg["floor_m"]:
-            self._landed = True
-            self._landed_at = time.monotonic()
-            self.in_terminal = False
-            # 落地时立即赋值退出时间（UTC），无需等ATA
-            self.terminal_exit_ts = utc_iso
-            logger.debug("[TERM] %s 已落地(exit=%s)，停止终端检测", self.callsign, utc_iso)
+            if self.terminal_entry_ts:
+                self._landed = True
+                self._landed_at = time.monotonic()
+                self.in_terminal = False
+                # 落地时立即赋值退出时间（UTC），无需等ATA
+                self.terminal_exit_ts = utc_iso
+                logger.debug("[TERM] %s 已落地(exit=%s)，停止终端检测", self.callsign, utc_iso)
+            else:
+                # 从未进过终端区 → 离港爬升中，跳过，等后续雷达点
+                # 高度高于底部后自然触发终端区进出检测
+                self.in_terminal = False
             return
 
         prev = self.in_terminal
