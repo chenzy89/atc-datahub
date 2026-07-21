@@ -636,21 +636,42 @@ class Database:
     def find_closest_plan_by_etd(self, callsign: str, adep: str, adest: str, dof: date, target_time: datetime,
                                  max_diff_seconds: int = MAX_ETD_DIFF_SECONDS,
                                  exclude_cancelled: bool = False) -> dict[str, Any] | None:
-        """找 ETD 离 target_time 最近的计划（DEP 用），差值超过阈值则返回 None"""
+        """找 ETD 离 target_time 最近的计划（DEP 用），差值超过阈值则返回 None
+
+        注意：同 DOF+呼号+起降地匹配是强信号。即使所有计划都超阈值，
+        也返回最近的那个（常见于 DLA 延误使 ETD 大幅偏移的场景）。
+        """
         if not target_time:
             return None
         plans = self.find_flight_plans_by_key(callsign, adep, adest, dof, exclude_cancelled=exclude_cancelled)
-        best, _ = _pick_closest_datetime(plans, "etd", target_time, max_diff_seconds)
+        if not plans:
+            return None
+        best, best_diff = _pick_closest_datetime(plans, "etd", target_time, max_diff_seconds)
+        if best:
+            return best
+        # 同 DOF 有计划但全超阈值 → 返回 ETD 最接近的那个（DOF+呼号起降地匹配是强信号）
+        # 常见场景：DLA 将 ETD 大幅后移（如 23:50→次日 00:40），ATD落在新 ETD 附近但原 ETD 超阈值
+        best, _ = _pick_closest_datetime(plans, "etd", target_time, float("inf"))
         return best
 
     def find_closest_plan_by_eta(self, callsign: str, adep: str, adest: str, dof: date, target_time: datetime,
                                  max_diff_seconds: int = MAX_ETD_DIFF_SECONDS,
                                  exclude_cancelled: bool = False) -> dict[str, Any] | None:
-        """找 ETA（从 eta 字段）离 target_time 最近的计划（ARR 用），差值超过阈值则返回 None"""
+        """找 ETA 离 target_time 最近的计划（ARR 用），差值超过阈值则返回 None
+
+        注意：同 DOF+呼号+起降地匹配是强信号。即使所有计划都超阈值，
+        也返回最近的那个。
+        """
         if not target_time:
             return None
         plans = self.find_flight_plans_by_key(callsign, adep, adest, dof, exclude_cancelled=exclude_cancelled)
-        best, _ = _pick_closest_datetime(plans, "eta", target_time, max_diff_seconds)
+        if not plans:
+            return None
+        best, best_diff = _pick_closest_datetime(plans, "eta", target_time, max_diff_seconds)
+        if best:
+            return best
+        # 同 DOF 有计划但全超阈值 → 返回 ETA 最接近的那个
+        best, _ = _pick_closest_datetime(plans, "eta", target_time, float("inf"))
         return best
 
     def update_flight_plan_atd(self, fpl_id: int, atd: datetime, ssr: str = "", source_message_type: str = "") -> bool:

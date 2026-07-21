@@ -324,13 +324,12 @@ class AftnParser:
         else:
             dof = base_day
 
-        # ETD 优先基于 DOF 日期，无 DOF 时回退到收报日期
-        if dof_utc_day is not None:
-            time_utc = self._combine_day_hhmm(dof_utc_day, hhmm)
-        else:
-            time_utc = self._combine_day_hhmm(base_day, hhmm)
-            if time_utc < message_time:
-                time_utc = self._combine_day_hhmm(base_day + timedelta(days=1), hhmm)
+        # DLA 延误报：DOF 仅标识原计划，不用于推算新 ETD 的日期。
+        # 延误后的新 ETD 一定晚于原 ETD，用收报日期推算。
+        # 若拼出的时间早于收报时间，说明跨日（如原 23:50 延误到次日 00:40），加一天。
+        time_utc = self._combine_day_hhmm(base_day, hhmm)
+        if time_utc < message_time:
+            time_utc = self._combine_day_hhmm(base_day + timedelta(days=1), hhmm)
 
         plan = FlightPlan(
             callsign=callsign,
