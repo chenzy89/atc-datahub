@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.49</title>
+<title>ATC综合数据中心 v2.2.50</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -161,6 +161,79 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   background: rgba(30,58,95,0.8);
   color: #e2e8f0;
 }
+
+/* ── 航班搜索窗（空格键开/关，匹配航迹+标牌琥珀高亮）── */
+.track-search {
+  display: none;
+  position: absolute;
+  top: 44px;
+  right: 10px;
+  z-index: 40;
+  width: 310px;
+  background: #0f1a2e;
+  border: 1px solid #1e3a5f;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  color: #e2e8f0;
+  font-size: 13px;
+  overflow: hidden;
+}
+.track-search.open { display: block; }
+.ts-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 12px;
+  background: rgba(30,58,95,.35);
+  border-bottom: 1px solid #1e3a5f;
+}
+.ts-title { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+.ts-close {
+  background: none; border: none; color: #94a3b8; font-size: 13px;
+  cursor: pointer; padding: 0 2px; line-height: 1; font-family: inherit;
+}
+.ts-close:hover { color: #fff; }
+.ts-hint { padding: 5px 12px 0; font-size: 10px; color: #64748b; line-height: 1.5; }
+#trackSearchInput {
+  display: block;
+  width: calc(100% - 24px);
+  margin: 7px 12px;
+  padding: 6px 8px;
+  background: #0d1a2e;
+  border: 1px solid #1e3a5f;
+  border-radius: 4px;
+  color: #e2e8f0;
+  font-family: Consolas, monospace;
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+#trackSearchInput:focus { border-color: #fbbf24; box-shadow: 0 0 0 2px rgba(251,191,36,.15); }
+#trackSearchInput::placeholder { color: #64748b; font-family: inherit; }
+.ts-count { padding: 0 12px 6px; font-size: 11px; color: #fbbf24; }
+.ts-list { max-height: 320px; overflow-y: auto; border-top: 1px solid rgba(30,58,95,.7); }
+.ts-empty { padding: 14px 12px; color: #64748b; font-size: 12px; text-align: center; }
+.ts-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(30,58,95,.5);
+}
+.ts-item:hover { background: rgba(30,58,95,.55); }
+.ts-item .cs {
+  color: #fbbf24; font-weight: 600;
+  font-family: Consolas, monospace; font-size: 13px; white-space: nowrap;
+}
+.ts-item .mt {
+  color: #8b949e; font-size: 11px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 175px;
+  font-family: Consolas, monospace; text-align: right;
+}
+.ts-item.sel .cs { color: #ffffff; }
+.ts-item.sel { background: rgba(251,191,36,.10); }
 
 /* ── 地图图层弹窗 ── */
 .map-layers-overlay {
@@ -465,7 +538,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.49</span>
+  <span class="badge">v2.2.50</span>
 </div>
 
 <div class="tabs">
@@ -751,6 +824,17 @@ canvas#radarMap {
     </div>
     <div class="map-time-label" id="mapTimeLabel">--:--:-- UTC</div>
     <div class="coord-bar" id="coordBar"></div>
+    <!-- ── 航班搜索窗（空格键开/关，匹配航迹+标牌琥珀高亮）── -->
+    <div class="track-search" id="trackSearchPanel">
+      <div class="ts-head">
+        <span class="ts-title">✈ 航班搜索</span>
+        <button type="button" class="ts-close" id="tsCloseBtn" title="关闭 (Esc)">✕</button>
+      </div>
+      <div class="ts-hint">空格键开/关 · Esc 关闭 · 输入航班号部分即可，匹配航迹与标牌琥珀色高亮</div>
+      <input id="trackSearchInput" type="text" placeholder="如 CSN 或 101" autocomplete="off" spellcheck="false">
+      <div class="ts-count" id="tsCount"></div>
+      <div class="ts-list" id="tsList"></div>
+    </div>
   </div>
   <!-- ── 地图图层弹窗 ── -->
   <div class="map-layers-overlay" id="mapLayersOverlay">
@@ -2393,9 +2477,11 @@ function esc(s) {
         var associated = !!(trk.adep && trk.adest);
         // 关注：同时满足机场 AND 扇区
         var isWatched = calcWatched(trk);
-        // 未选扇区 → 全部灰色
-        var dotColor = isWatched ? '#34d399' : '#64748b';
-        var labelColor = isWatched ? '#34d399' : '#94a3b8';
+        // 航班搜索命中：航迹点+标牌+引线琥珀高亮
+        var isHit = isSearchHit(trk);
+        // 未选扇区 → 全部灰色（优先级：搜索琥珀 > 关注绿）
+        var dotColor = isHit ? '#fbbf24' : (isWatched ? '#34d399' : '#64748b');
+        var labelColor = isHit ? '#fbbf24' : (isWatched ? '#34d399' : '#94a3b8');
         // 选中高亮状态（单击航迹圆切换）
         var sel = isTrackSelected(trk);
 
@@ -2424,6 +2510,13 @@ function esc(s) {
         if (sel) {
           ctx.strokeStyle = 'rgba(255,255,255,0.85)';
           ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, 8, 0, Math.PI * 2);
+          ctx.stroke();
+        } else if (isHit) {
+          // 搜索命中：外圈琥珀色强调环
+          ctx.strokeStyle = 'rgba(251,191,36,0.9)';
+          ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.arc(sp.x, sp.y, 8, 0, Math.PI * 2);
           ctx.stroke();
@@ -2465,8 +2558,8 @@ function esc(s) {
         if (_SHOW_RADAR) {
           var label = (trk.callsign || trk.ssr || '').trim();
           if (label) {
-            var lblColor = sel ? '#ffffff' : (isWatched ? '#34d399' : labelColor);
-            var altLblColor = sel ? '#ffffff' : (isWatched ? '#34d399' : '#64748b');
+            var lblColor = sel ? '#ffffff' : (isHit ? '#fbbf24' : (isWatched ? '#34d399' : labelColor));
+            var altLblColor = sel ? '#ffffff' : (isHit ? '#fcd34d' : (isWatched ? '#34d399' : '#64748b'));
 
             // 高度变化箭头 + 速度(4位)
             var trendChar = '>';
@@ -2498,6 +2591,7 @@ function esc(s) {
               var ux = ldx / llen, uy = ldy / llen;
               ctx.strokeStyle = isMoving ? 'rgba(255,255,255,0.95)'
                 : sel ? 'rgba(255,255,255,0.9)'
+                : isHit ? 'rgba(251,191,36,0.9)'
                 : isWatched ? 'rgba(52,211,153,0.8)' : 'rgba(148,163,184,0.65)';
               ctx.lineWidth = 1.2;
               ctx.setLineDash([]);
@@ -4362,6 +4456,8 @@ function esc(s) {
         // 回放开始后忽略迟到的实时数据
         if (window._replayActive) return;
         window._radarTracks = data;
+        // 航迹刷新 → 同步航班搜索命中集与结果列表
+        refreshSearchLive();
         var activeTab = document.querySelector('.tab-btn.active');
         if (activeTab && activeTab.textContent.trim() === '雷达地图') {
           drawMap();
@@ -4590,6 +4686,202 @@ function esc(s) {
       drawMap();
     }
   });
+
+  // ═════════════════════════════════════════════════════════
+  // 航班搜索（空格键呼出）：航班号模糊匹配 → 命中航迹+标牌高亮
+  // ═════════════════════════════════════════════════════════
+  var _searchOpen = false;    // 搜索窗是否展开
+  var _searchQuery = '';      // 当前查询串（小写）
+  var _searchKeys = {};       // 命中航迹 key → true（关闭弹窗后高亮保留）
+  var _searchDeb = null;
+
+  // 判断是否在雷达地图页
+  function onMapPage() {
+    var t = document.querySelector('.tab-btn.active');
+    return !!t && t.textContent.trim() === '雷达地图';
+  }
+
+  // 该航迹是否命中当前搜索（drawMap 内判定用；无查询时恒 false）
+  function isSearchHit(trk) {
+    if (!trk || !_searchQuery || !_searchKeys) return false;
+    var k = (trk.callsign || trk.ssr || '').trim();
+    return !!k && _searchKeys[k] === true;
+  }
+
+  // 收集命中航迹（按当前航迹顺序，排除无呼号目标）
+  function collectSearchMatches() {
+    var list = window._radarTracks || [];
+    var hits = [];
+    var keys = {};
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      var cs = (t.callsign || '').trim();
+      if (!cs) continue;
+      if (cs.toLowerCase().indexOf(_searchQuery) !== -1) {
+        var k = (t.callsign || t.ssr || '').trim();
+        if (k) { keys[k] = true; hits.push(t); }
+      }
+    }
+    _searchKeys = keys;
+    return hits;
+  }
+
+  // 每次航迹刷新（fetchTracks）调用：重算命中集；弹窗开着时同步列表；不主动重绘
+  function refreshSearchLive() {
+    if (!_searchQuery) return;
+    var hits = collectSearchMatches();
+    if (_searchOpen) renderSearchList(hits);
+  }
+
+  function renderSearchList(hits) {
+    var listEl = document.getElementById('tsList');
+    var cntEl = document.getElementById('tsCount');
+    if (!listEl || !cntEl) return;
+    hits = hits || [];
+    cntEl.textContent = _searchQuery ? '匹配 ' + hits.length + ' 架' : '';
+    if (!_searchQuery) {
+      listEl.innerHTML = '<div class="ts-empty">输入航班号（可部分）开始匹配</div>';
+      return;
+    }
+    if (hits.length === 0) {
+      listEl.innerHTML = '<div class="ts-empty">无匹配航班</div>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < hits.length; i++) {
+      var t = hits[i];
+      var cs = (t.callsign || t.ssr || '').trim();
+      var k = cs;
+      var route = ((t.adep || '--') + '→' + (t.adest || '--'));
+      var meta = route;
+      if (t.speed) meta += '  ' + Math.round(parseFloat(t.speed)) + 'km/h';
+      if (t.sector_code) meta += '  ' + t.sector_code;
+      var selCls = (k && _selectedTracks[k]) ? ' sel' : '';
+      html += '<div class="ts-item' + selCls + '" data-key="' + esc(k) + '">'
+        + '<span class="cs">' + esc(cs) + '</span>'
+        + '<span class="mt">' + esc(meta) + '</span></div>';
+    }
+    listEl.innerHTML = html;
+    // 命中行：点击 → 居中 + 选中高亮
+    var items = listEl.querySelectorAll('.ts-item');
+    for (var j = 0; j < items.length; j++) {
+      items[j].addEventListener('click', function() {
+        centerSelectTrack(this.getAttribute('data-key'));
+      });
+    }
+  }
+
+  // 按 key 找航迹；有则居中地图并加入选中高亮（白）
+  function centerSelectTrack(key) {
+    if (!key || !geo) return;
+    var list = window._radarTracks || [];
+    var t = null;
+    for (var i = 0; i < list.length; i++) {
+      var k = (list[i].callsign || list[i].ssr || '').trim();
+      if (k === key) { t = list[i]; break; }
+    }
+    if (!t) return;
+    var la = parseFloat(t.latitude), lo = parseFloat(t.longitude);
+    if (isFinite(la) && isFinite(lo)) {
+      geo.center.lat = la;
+      geo.center.lon = lo;
+    }
+    _selectedTracks[key] = true;
+    drawMap();
+    // 刷新列表行选中态
+    if (_searchOpen) {
+      var hits = collectSearchMatches();
+      renderSearchList(hits);
+    }
+  }
+
+  // 当前查询应用（输入防抖后 / 打开时）
+  function applySearchFilter() {
+    var inp = document.getElementById('trackSearchInput');
+    _searchQuery = (inp ? inp.value : '').trim().toLowerCase();
+    var hits = collectSearchMatches();
+    if (_searchOpen) renderSearchList(hits);
+    drawMap();
+  }
+
+  function openTrackSearch() {
+    var panel = document.getElementById('trackSearchPanel');
+    var inp = document.getElementById('trackSearchInput');
+    if (!panel) return;
+    _searchOpen = true;
+    panel.classList.add('open');
+    if (inp) { inp.focus(); inp.select(); }
+    // 打开时按已有查询立即刷新（保留上次高亮）
+    applySearchFilter();
+  }
+
+  function closeTrackSearch() {
+    var panel = document.getElementById('trackSearchPanel');
+    _searchOpen = false;
+    if (panel) panel.classList.remove('open');
+    // 关闭仅收起弹窗，高亮保留在地图上供观察；Esc/✕/点击地图/再按空格可关闭
+  }
+
+  // 空格键开/关（仅雷达地图页；输入框/下拉/按钮聚焦时不抢占）
+  document.addEventListener('keydown', function(e) {
+    if (e.key !== ' ' && e.code !== 'Space') return;
+    if (!onMapPage()) return;
+    // 其它浮层（图层/机场/扇区等）打开时不响应
+    if (document.querySelector('.map-layers-overlay.show')) return;
+    var ae = document.activeElement;
+    if (ae && ae.tagName && ae !== document.getElementById('trackSearchInput')) {
+      var tag = ae.tagName.toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return;
+    }
+    e.preventDefault();
+    if (_searchOpen) closeTrackSearch(); else openTrackSearch();
+  });
+
+  // Esc 关闭搜索窗（高亮保留）
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && _searchOpen) closeTrackSearch();
+  });
+
+  // 输入实时过滤（防抖 120ms）
+  var sInput = document.getElementById('trackSearchInput');
+  if (sInput) {
+    sInput.addEventListener('input', function() {
+      clearTimeout(_searchDeb);
+      _searchDeb = setTimeout(applySearchFilter, 120);
+    });
+    // 回车 → 定位第一个命中
+    sInput.addEventListener('keydown', function(e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      var hits = collectSearchMatches();
+      if (hits.length > 0) {
+        var k0 = (hits[0].callsign || hits[0].ssr || '').trim();
+        centerSelectTrack(k0);
+      }
+    });
+  }
+
+  // ✕ 按钮关闭
+  var sClose = document.getElementById('tsCloseBtn');
+  if (sClose) sClose.addEventListener('click', function() { closeTrackSearch(); });
+
+  // 点击地图画布（任意键）→ 收起搜索窗（高亮保留）
+  var mapCanvas = document.getElementById('radarMap');
+  if (mapCanvas) {
+    mapCanvas.addEventListener('mousedown', function() {
+      if (_searchOpen) closeTrackSearch();
+    });
+  }
+
+  // 切离雷达地图页自动收起（防止高亮弹窗残留记忆）
+  var _prevSwitch = window.switchTab;
+  window.switchTab = function(n) {
+    _prevSwitch(n);
+    if (n !== 'map' && _searchOpen) closeTrackSearch();
+  };
+
+  window.openTrackSearch = openTrackSearch;
+  window.closeTrackSearch = closeTrackSearch;
 })();
 
 // ══════════════════════════════════════════════════════════════
