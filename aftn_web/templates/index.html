@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.47</title>
+<title>ATC综合数据中心 v2.2.48</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -448,7 +448,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.47</span>
+  <span class="badge">v2.2.48</span>
 </div>
 
 <div class="tabs">
@@ -2362,7 +2362,6 @@ function esc(s) {
     if (_SHOW_RADAR && window._radarTracks && window._radarTracks.length > 0 && !mapError) {
       _labelRects = [];   // 重建本轮标牌命中区
       _speedRects = [];   // 重建本轮速度文字命中区
-      _predSegs = [];     // 重建本轮预计线段
       for (var ti = 0; ti < window._radarTracks.length; ti++) {
         var trk = window._radarTracks[ti];
         var lat = parseFloat(trk.latitude);
@@ -2434,7 +2433,6 @@ function esc(s) {
           ctx.stroke();
           ctx.setLineDash([]);
           ctx.globalAlpha = 1.0;
-          if (tkKey) _predSegs.push({trk: trk, key: tkKey, x0: sp.x, y0: sp.y, x1: predPt.x, y1: predPt.y});
         }
 
         // ── 高度(4位, 单位10m) ──
@@ -3772,7 +3770,6 @@ function esc(s) {
   var _predForce = {};        // key → true/false：点击速度文字手动开关该航班 1 分钟预计线
   var _labelRects = [];       // 本次 drawMap 各航班号标牌的命中矩形 {trk,x0,y0,x1,y1}
   var _speedRects = [];       // 本次 drawMap 各航迹速度文字的命中矩形
-  var _predSegs = [];         // 本次 drawMap 各航迹1分钟预计线段 {trk,key,x0,y0,x1,y1}（双击命中删除用）
   var _lblDir = {};           // 航迹key → 标牌槽位 0..7（0右、1右下、2下、3左下、4左、5左上、6上、7右上）
   var _lblMovingKey = null;   // 右键正在拖动标牌中的航迹 key（再次右键同一航迹取消）
   var _lastLdownT = 0, _lastLdownX = 0, _lastLdownY = 0;   // 左键双击判定（第二击抑制单击动作，交给 dblclick）
@@ -3903,19 +3900,20 @@ function esc(s) {
         || findTrackLabelAt(canvas, clientX, clientY);
   }
 
-  // 点击命中某航迹的 1 分钟预计线段（点到线段距离 ≤10px；返回 trk 或 null）
-  function findPredSegAt(canvas, clientX, clientY) {
-    if (!_predSegs.length || !geo) return null;
-    var rect = canvas.getBoundingClientRect();
-    var sx = geo.screenW / rect.width;
-    var sy = geo.screenH / rect.height;
-    var px = (clientX - rect.left) * sx;
-    var py = (clientY - rect.top) * sy;
-    for (var i = _predSegs.length - 1; i >= 0; i--) {
-      var s = _predSegs[i];
-      if (pointSegDist(px, py, s.x0, s.y0, s.x1, s.y1) <= 10) return s.trk;
+  // 双击左键：删除点中的测距线（点-线距≤6px；一次删一条，返回是否删除）
+  function deleteRulerAt(px, py) {
+    for (var i = _rulers.length - 1; i >= 0; i--) {
+      var r = _rulers[i];
+      var ga = resolveAnchor(r.a), gb = resolveAnchor(r.b);
+      if (!ga || !gb) continue;
+      var pa = geo.realToPixel(ga), pb = geo.realToPixel(gb);
+      if (pa && pb && isFinite(pa.x) && isFinite(pb.x) &&
+          pointSegDist(px, py, pa.x, pa.y, pb.x, pb.y) <= 6) {
+        _rulers.splice(i, 1);
+        return true;
+      }
     }
-    return null;
+    return false;
   }
 
   // 点击命中“速度文字”（返回该航迹；未命中返回 null）—— 用于切换预计线显隐
@@ -4085,7 +4083,7 @@ function esc(s) {
       drawMap();
     }, {passive: false});
 
-    // 禁用右键菜单（右键用于取消/删除测距）
+    // 禁用右键菜单（右键用于取消测距/移动标牌）
     canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
     // 阻止中键浏览器默认行为（自动滚动等）
     canvas.addEventListener('auxclick', function(e) { if (e.button === 1) e.preventDefault(); });
@@ -4119,7 +4117,7 @@ function esc(s) {
         return;
       }
 
-      // ── 右键：取消进行中的测距；命中航迹→移动/取消移动标牌；否则删除点中的测距线 ──
+      // ── 右键：取消进行中的测距；命中航迹→移动/取消移动标牌；未命中航迹→结束标牌移动 ──
       if (e.button === 2) {
         e.preventDefault();
         if (!geo) return;
@@ -4148,28 +4146,15 @@ function esc(s) {
           }
           return;
         }
-        // 未命中航迹：结束进行中的标牌移动
+        // 未命中航迹：结束进行中的标牌移动（删除测距线已改双击左键）
         if (_lblMovingKey) {
           _lblMovingKey = null;
           drawMap();
         }
-        // 删除点中的测距线（原有）
-        for (var i = _rulers.length - 1; i >= 0; i--) {
-          var r = _rulers[i];
-          var ga = resolveAnchor(r.a), gb = resolveAnchor(r.b);
-          if (!ga || !gb) continue;
-          var pa = geo.realToPixel(ga), pb = geo.realToPixel(gb);
-          if (pa && pb && isFinite(pa.x) && isFinite(pb.x) &&
-              pointSegDist(px, py, pa.x, pa.y, pb.x, pb.y) <= 6) {
-            _rulers.splice(i, 1);
-            drawMap();
-            break;
-          }
-        }
         return;
       }
 
-      // ── 左键：双击第二击抑制（交给 dblclick：删除该航迹预计线），单击才走下面逻辑 ──
+      // ── 左键：双击第二击抑制（交给 dblclick：删除点中的测距线），单击才走下面逻辑 ──
       if (e.button !== 0) return;
       var _ldNow = Date.now();
       if (_ldNow - _lastLdownT < 400 && Math.abs(e.clientX - _lastLdownX) < 6 && Math.abs(e.clientY - _lastLdownY) < 6) {
@@ -4224,22 +4209,16 @@ function esc(s) {
       }, 220);
     });
 
-    // 双击左键：命中航迹（中心圆/标牌/速度文字/预计线）→ 删除（隐藏）该航迹 1 分钟预计线并取消其选中高亮
+    // 双击左键：删除点中的测距线（单条；命中线上任意位置≤6px 即删）。删除全部测距线仍用 F5
     canvas.addEventListener('dblclick', function(e) {
       if (!geo) return;
       e.preventDefault();
-      var dtrk = findTrackAt(canvas, e.clientX, e.clientY)
-              || findSpeedAt(canvas, e.clientX, e.clientY)
-              || findTrackLabelAt(canvas, e.clientX, e.clientY)
-              || findPredSegAt(canvas, e.clientX, e.clientY);
-      if (!dtrk) return;
-      var dk = (dtrk.callsign || dtrk.ssr || '').trim();
-      if (!dk) return;
-      // 双击第一击可能已把该航迹选中 → 一并取消
-      if (_selectedTracks[dk]) delete _selectedTracks[dk];
-      _predForce[dk] = false;          // 隐藏该航迹 1 分钟预计线（需恢复请单击其速度文字）
-      closeTrackPopup();
-      drawMap();
+      var rect = canvas.getBoundingClientRect();
+      var sx = geo.screenW / rect.width;
+      var sy = geo.screenH / rect.height;
+      var px = (e.clientX - rect.left) * sx;
+      var py = (e.clientY - rect.top) * sy;
+      if (deleteRulerAt(px, py)) drawMap();
     });
 
     // 鼠标移动：拖拽 / 标牌移动 / 测距线跟随 / 悬停检测
