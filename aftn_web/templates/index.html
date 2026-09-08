@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.46</title>
+<title>ATC综合数据中心 v2.2.47</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -448,7 +448,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.46</span>
+  <span class="badge">v2.2.47</span>
 </div>
 
 <div class="tabs">
@@ -2362,6 +2362,7 @@ function esc(s) {
     if (_SHOW_RADAR && window._radarTracks && window._radarTracks.length > 0 && !mapError) {
       _labelRects = [];   // 重建本轮标牌命中区
       _speedRects = [];   // 重建本轮速度文字命中区
+      _predSegs = [];     // 重建本轮预计线段
       for (var ti = 0; ti < window._radarTracks.length; ti++) {
         var trk = window._radarTracks[ti];
         var lat = parseFloat(trk.latitude);
@@ -2433,6 +2434,7 @@ function esc(s) {
           ctx.stroke();
           ctx.setLineDash([]);
           ctx.globalAlpha = 1.0;
+          if (tkKey) _predSegs.push({trk: trk, key: tkKey, x0: sp.x, y0: sp.y, x1: predPt.x, y1: predPt.y});
         }
 
         // ── 高度(4位, 单位10m) ──
@@ -2442,40 +2444,67 @@ function esc(s) {
         }
         var altStr = ('0000' + Math.abs(alt10m)).slice(-4);
 
-        // ── 航班号 + 高度标签 ──
+        // ── 航班号 + 高度标签（标牌：0°起45°均分8方向槽位+引线；右键拖标牌换方向） ──
         if (_SHOW_RADAR) {
-          var lblColor = sel ? '#ffffff' : (isWatched ? '#34d399' : labelColor);
-          var altLblColor = sel ? '#ffffff' : (isWatched ? '#34d399' : '#64748b');
-
-          ctx.font = 'bold 11px Consolas, monospace';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'bottom';
           var label = (trk.callsign || trk.ssr || '').trim();
           if (label) {
-            // 选中仅改颜色（白色），标牌位置/样式与未选中一致，不画引线不外移
-            var lx = sp.x + 8;
-            ctx.fillStyle = lblColor;
-            ctx.fillText(label, lx, sp.y - 6);
-            // 记录航班号标牌命中区（单击文字弹详情窗）
-            var lw = ctx.measureText(label).width;
-            _labelRects.push({trk: trk, x0: lx - 3, y0: sp.y - 19, x1: lx + lw + 3, y1: sp.y - 4});
+            var lblColor = sel ? '#ffffff' : (isWatched ? '#34d399' : labelColor);
+            var altLblColor = sel ? '#ffffff' : (isWatched ? '#34d399' : '#64748b');
 
-            // 高度变化箭头
+            // 高度变化箭头 + 速度(4位)
             var trendChar = '>';
             if (trk.level_trend === 'c') trendChar = '↑';
             else if (trk.level_trend === 'd') trendChar = '↓';
-
-            // 速度(4位)
             var spdVal = 0;
             if (trk.speed) spdVal = Math.round(parseFloat(trk.speed));
             var spdStr = ('0000' + Math.abs(spdVal)).slice(-4);
+            var row2 = altStr + trendChar + '  ' + spdStr;
 
+            // 量宽定块宽
+            ctx.font = 'bold 11px Consolas, monospace';
+            var lw = ctx.measureText(label).width;
+            ctx.font = '10px Consolas, monospace';
+            var r2w = ctx.measureText(row2).width;
+            var bw = Math.max(lw, r2w) + 8;
+            var bh = 26;
+
+            // 槽位方向（未定制默认 0 = 正右，与旧布局一致）
+            var sdir = (tkKey && _lblDir[tkKey] !== undefined) ? _lblDir[tkKey] : 0;
+            var slot = labelSlot(sp.x, sp.y, sdir, bw, bh, 16);
+            var isMoving = !!(tkKey && _lblMovingKey && _lblMovingKey === tkKey);
+
+            // ── 标牌引线：航迹圆边缘 → 标牌锚点（选中/拖动亮白，关注青，普通浅灰） ──
+            var ldx = slot.ax - sp.x, ldy = slot.ay - sp.y;
+            var llen = Math.sqrt(ldx * ldx + ldy * ldy);
+            if (llen > 0.1) {
+              var rad = sel ? 8 : 6;   // 圆半径5(选中外圈8)，引线从圆边外 1px 起
+              var ux = ldx / llen, uy = ldy / llen;
+              ctx.strokeStyle = isMoving ? 'rgba(255,255,255,0.95)'
+                : sel ? 'rgba(255,255,255,0.9)'
+                : isWatched ? 'rgba(52,211,153,0.8)' : 'rgba(148,163,184,0.65)';
+              ctx.lineWidth = 1.2;
+              ctx.setLineDash([]);
+              ctx.beginPath();
+              ctx.moveTo(sp.x + ux * rad, sp.y + uy * rad);
+              ctx.lineTo(slot.ax, slot.ay);
+              ctx.stroke();
+              ctx.setLineDash([]);
+            }
+
+            // 行1 航班号（单击弹详情窗）
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'bottom';
+            ctx.font = 'bold 11px Consolas, monospace';
+            ctx.fillStyle = lblColor;
+            ctx.fillText(label, slot.bx + 4, slot.by + 11);
+            _labelRects.push({trk: trk, x0: slot.bx + 1, y0: slot.by - 2, x1: slot.bx + lw + 7, y1: slot.by + 12});
+
+            // 行2 高度+速度（单击速度文字切换该航班预计线显隐）
             ctx.font = '10px Consolas, monospace';
             ctx.fillStyle = altLblColor;
-            ctx.fillText(altStr + trendChar + '  ' + spdStr, lx, sp.y + 6);
-            // 速度文字命中区（点击切换该航班预计线显隐）
-            var _spdX0 = lx + ctx.measureText(altStr + trendChar + '  ').width;
-            _speedRects.push({trk: trk, x0: _spdX0 - 2, y0: sp.y - 5, x1: _spdX0 + ctx.measureText(spdStr).width + 2, y1: sp.y + 8});
+            ctx.fillText(row2, slot.bx + 4, slot.by + 23);
+            var spdX = slot.bx + 4 + ctx.measureText(altStr + trendChar + '  ').width;
+            _speedRects.push({trk: trk, x0: spdX - 2, y0: slot.by + 13, x1: spdX + ctx.measureText(spdStr).width + 2, y1: slot.by + 27});
           }
         }
       }
@@ -2556,6 +2585,8 @@ function esc(s) {
   function showTrackPopup(trk) {
     // 关闭已有弹窗
     closeTrackPopup();
+    // 令牌防抖：双击/关闭后迟到的 fetch 结果不再弹窗
+    var myToken = ++_popupToken;
 
     // 查询完整飞行计划信息
     var params = new URLSearchParams({callsign: trk.callsign || ''});
@@ -2568,6 +2599,7 @@ function esc(s) {
         return r.json();
       })
       .then(function(data) {
+        if (myToken !== _popupToken) return;   // 期间已被关闭/替换
         var popup = document.createElement('div');
         popup.id = 'track-popup';
         popup.style.cssText =
@@ -2612,6 +2644,7 @@ function esc(s) {
         document.body.appendChild(popup);
       })
       .catch(function(err) {
+        if (myToken !== _popupToken) return;   // 期间已被关闭/替换
         // 无飞行计划时回退显示雷达数据
         var popup = document.createElement('div');
         popup.id = 'track-popup';
@@ -2645,7 +2678,9 @@ function esc(s) {
       });
   }
 
+  var _popupToken = 0;   // 详情窗令牌：closeTrackPopup/showTrackPopup 递增，作废在途 fetch
   function closeTrackPopup() {
+    _popupToken++;
     var popup = document.getElementById('track-popup');
     var overlay = document.getElementById('track-popup-overlay');
     if (popup) { popup.remove(); }
@@ -3737,6 +3772,10 @@ function esc(s) {
   var _predForce = {};        // key → true/false：点击速度文字手动开关该航班 1 分钟预计线
   var _labelRects = [];       // 本次 drawMap 各航班号标牌的命中矩形 {trk,x0,y0,x1,y1}
   var _speedRects = [];       // 本次 drawMap 各航迹速度文字的命中矩形
+  var _predSegs = [];         // 本次 drawMap 各航迹1分钟预计线段 {trk,key,x0,y0,x1,y1}（双击命中删除用）
+  var _lblDir = {};           // 航迹key → 标牌槽位 0..7（0右、1右下、2下、3左下、4左、5左上、6上、7右上）
+  var _lblMovingKey = null;   // 右键正在拖动标牌中的航迹 key（再次右键同一航迹取消）
+  var _lastLdownT = 0, _lastLdownX = 0, _lastLdownY = 0;   // 左键双击判定（第二击抑制单击动作，交给 dblclick）
 
   // ── 缩放与拖动 + 悬停检测 ──
   var isDragging = false;
@@ -3813,6 +3852,70 @@ function esc(s) {
       }
     }
     return false;
+  }
+
+  // 标牌槽位布局：从 0°(正右) 起以 45° 均分 360° 共 8 方向；返回块左上角(bx,by)与引线锚点(ax,ay)
+  function labelSlot(cx, cy, dir, w, h, gap) {
+    var g = (gap === undefined) ? 14 : gap;
+    var c = 0.7071067811865476;   // cos45°
+    var bx = cx + g, by = cy - h / 2, ax = bx, ay = cy;   // 默认 0 右
+    var d = ((dir % 8) + 8) % 8;
+    switch (d) {
+      case 1: bx = cx + g * c; by = cy + g * c; ax = bx; ay = by; break;                 // 右下(45°)
+      case 2: bx = cx - w / 2; by = cy + g; ax = cx; ay = by; break;                     // 下(90°)
+      case 3: bx = cx - g * c - w; by = cy + g * c; ax = bx + w; ay = by; break;         // 左下(135°)
+      case 4: bx = cx - g - w; by = cy - h / 2; ax = bx + w; ay = cy; break;             // 左(180°)
+      case 5: bx = cx - g * c - w; by = cy - g * c - h; ax = bx + w; ay = by + h; break; // 左上(225°)
+      case 6: bx = cx - w / 2; by = cy - g - h; ax = cx; ay = by + h; break;             // 上(270°)
+      case 7: bx = cx + g * c; by = cy - g * c - h; ax = bx; ay = by + h; break;         // 右上(315°)
+    }
+    return {bx: bx, by: by, ax: ax, ay: ay};
+  }
+
+  // 标牌移动中：鼠标相对该航迹圆心方位角 → 最近 45° 档（画布坐标 0°=右、90°=下，顺时针）
+  function labelDirFromMouse(msp, mx, my) {
+    var ang = Math.atan2(my - msp.y, mx - msp.x) * 180 / Math.PI;
+    if (ang < 0) ang += 360;
+    return Math.round(ang / 45) % 8;
+  }
+
+  // 按当前鼠标位置更新某航迹标牌槽位（右键刚按下进入移动时立即定位一次）
+  function snapLabelDirToMouse(key) {
+    if (!geo) return;
+    var list = window._radarTracks || [];
+    var t = null;
+    for (var i = 0; i < list.length; i++) {
+      var tt = list[i];
+      var kk = (tt.callsign || tt.ssr || '').trim();
+      if (kk && kk === key) { t = tt; break; }
+    }
+    if (!t) return;
+    var la = parseFloat(t.latitude), lo = parseFloat(t.longitude);
+    if (!isFinite(la) || !isFinite(lo)) return;
+    var sp = geo.realToPixel({lat: la, lon: lo});
+    _lblDir[key] = labelDirFromMouse(sp, _mousePX, _mousePY);
+  }
+
+  // 命中航迹“任意可点部位”（中心圆/航班号文字/速度文字）—— 右键标牌移动用；返回 trk 或 null
+  function findTrackAnyAt(canvas, clientX, clientY) {
+    return findTrackAt(canvas, clientX, clientY)
+        || findSpeedAt(canvas, clientX, clientY)
+        || findTrackLabelAt(canvas, clientX, clientY);
+  }
+
+  // 点击命中某航迹的 1 分钟预计线段（点到线段距离 ≤10px；返回 trk 或 null）
+  function findPredSegAt(canvas, clientX, clientY) {
+    if (!_predSegs.length || !geo) return null;
+    var rect = canvas.getBoundingClientRect();
+    var sx = geo.screenW / rect.width;
+    var sy = geo.screenH / rect.height;
+    var px = (clientX - rect.left) * sx;
+    var py = (clientY - rect.top) * sy;
+    for (var i = _predSegs.length - 1; i >= 0; i--) {
+      var s = _predSegs[i];
+      if (pointSegDist(px, py, s.x0, s.y0, s.x1, s.y1) <= 10) return s.trk;
+    }
+    return null;
   }
 
   // 点击命中“速度文字”（返回该航迹；未命中返回 null）—— 用于切换预计线显隐
@@ -4016,7 +4119,7 @@ function esc(s) {
         return;
       }
 
-      // ── 右键：取消进行中的测距；无进行中时删除点中的测距线 ──
+      // ── 右键：取消进行中的测距；命中航迹→移动/取消移动标牌；否则删除点中的测距线 ──
       if (e.button === 2) {
         e.preventDefault();
         if (!geo) return;
@@ -4030,6 +4133,27 @@ function esc(s) {
         rect = canvas.getBoundingClientRect();
         sx = geo.screenW / rect.width; sy = geo.screenH / rect.height;
         px = (e.clientX - rect.left) * sx; py = (e.clientY - rect.top) * sy;
+        // 命中航迹（中心圆/航班号/速度文字）→ 标牌移动：再次右键同航迹取消，否则进入/转移
+        var rHit = findTrackAnyAt(canvas, e.clientX, e.clientY);
+        if (rHit) {
+          var rk = (rHit.callsign || rHit.ssr || '').trim();
+          if (rk) {
+            if (_lblMovingKey === rk) {
+              _lblMovingKey = null;               // 再次右键同一航迹 → 取消移动，标牌停在当前槽位
+            } else {
+              _lblMovingKey = rk;                  // 进入（或转移）标牌移动
+              snapLabelDirToMouse(rk);             // 先按当前光标位置定一次方向
+            }
+            drawMap();
+          }
+          return;
+        }
+        // 未命中航迹：结束进行中的标牌移动
+        if (_lblMovingKey) {
+          _lblMovingKey = null;
+          drawMap();
+        }
+        // 删除点中的测距线（原有）
         for (var i = _rulers.length - 1; i >= 0; i--) {
           var r = _rulers[i];
           var ga = resolveAnchor(r.a), gb = resolveAnchor(r.b);
@@ -4045,8 +4169,15 @@ function esc(s) {
         return;
       }
 
-      // ── 左键：速度文字切预计线；航班号弹详情；航迹圆选中/取消高亮；否则长按(或移动)才拖拽地图 ──
+      // ── 左键：双击第二击抑制（交给 dblclick：删除该航迹预计线），单击才走下面逻辑 ──
       if (e.button !== 0) return;
+      var _ldNow = Date.now();
+      if (_ldNow - _lastLdownT < 400 && Math.abs(e.clientX - _lastLdownX) < 6 && Math.abs(e.clientY - _lastLdownY) < 6) {
+        _lastLdownT = 0;   // 已作为双击第二击处理，防第三击误判
+        e.preventDefault();
+        return;
+      }
+      _lastLdownT = _ldNow; _lastLdownX = e.clientX; _lastLdownY = e.clientY;
       // 速度文字 → 切换该航班 1 分钟预计线显示/隐藏
       var hitSpd = findSpeedAt(canvas, e.clientX, e.clientY);
       if (hitSpd) {
@@ -4093,13 +4224,51 @@ function esc(s) {
       }, 220);
     });
 
-    // 鼠标移动：拖拽 / 测距线跟随 / 悬停检测
+    // 双击左键：命中航迹（中心圆/标牌/速度文字/预计线）→ 删除（隐藏）该航迹 1 分钟预计线并取消其选中高亮
+    canvas.addEventListener('dblclick', function(e) {
+      if (!geo) return;
+      e.preventDefault();
+      var dtrk = findTrackAt(canvas, e.clientX, e.clientY)
+              || findSpeedAt(canvas, e.clientX, e.clientY)
+              || findTrackLabelAt(canvas, e.clientX, e.clientY)
+              || findPredSegAt(canvas, e.clientX, e.clientY);
+      if (!dtrk) return;
+      var dk = (dtrk.callsign || dtrk.ssr || '').trim();
+      if (!dk) return;
+      // 双击第一击可能已把该航迹选中 → 一并取消
+      if (_selectedTracks[dk]) delete _selectedTracks[dk];
+      _predForce[dk] = false;          // 隐藏该航迹 1 分钟预计线（需恢复请单击其速度文字）
+      closeTrackPopup();
+      drawMap();
+    });
+
+    // 鼠标移动：拖拽 / 标牌移动 / 测距线跟随 / 悬停检测
     canvas.addEventListener('mousemove', function(e) {
       var rect = canvas.getBoundingClientRect();
       var sx = geo ? geo.screenW / rect.width : 1;
       var sy = geo ? geo.screenH / rect.height : 1;
       _mousePX = (e.clientX - rect.left) * sx;
       _mousePY = (e.clientY - rect.top) * sy;
+
+      // 标牌移动中：方向跟鼠标（45° 吸附 8 档），航迹消失则自动结束
+      if (_lblMovingKey) {
+        var mlist = window._radarTracks || [];
+        var mt = null;
+        for (var mi = 0; mi < mlist.length; mi++) {
+          var mtk = (mlist[mi].callsign || mlist[mi].ssr || '').trim();
+          if (mtk && mtk === _lblMovingKey) { mt = mlist[mi]; break; }
+        }
+        if (!mt) { _lblMovingKey = null; return; }
+        var mla = parseFloat(mt.latitude), mlo = parseFloat(mt.longitude);
+        if (!isFinite(mla) || !isFinite(mlo)) { _lblMovingKey = null; return; }
+        var msp = geo.realToPixel({lat: mla, lon: mlo});
+        var ndir = labelDirFromMouse(msp, _mousePX, _mousePY);
+        if (_lblDir[_lblMovingKey] !== ndir) {
+          _lblDir[_lblMovingKey] = ndir;
+          drawMap();
+        }
+        return;
+      }
 
       // 拖拽中：移动地图
       if (isDragging && geo) {
