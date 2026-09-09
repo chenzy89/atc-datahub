@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.50</title>
+<title>ATC综合数据中心 v2.2.51</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -335,20 +335,54 @@ canvas#radarMap {
   .stat-card .num { font-size: 16px; }
 }
 
-/* ── 地图时间标签 ── */
+/* ── 地图顶栏：时间标签（画布上方居中）+ 光标坐标读数 ── */
+.map-headbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 10px 12px 0;
+  min-height: 30px;
+  user-select: none;
+}
+.map-clock-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .map-time-label {
-  position: absolute;
-  top: 8px;
-  right: 100px;
   color: #e2e8f0;
   font-size: 13px;
   font-family: 'Consolas', monospace;
   background: rgba(15,23,42,0.85);
-  padding: 3px 10px;
+  padding: 4px 12px;
   border-radius: 4px;
-  pointer-events: none;
-  z-index: 10;
   border: 1px solid #1e3a5f;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.coord-readout {
+  color: #cbd5e1;
+  font-size: 12px;
+  font-family: 'Consolas', monospace;
+  background: rgba(15,23,42,0.85);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid #1e3a5f;
+  min-width: 230px;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.map-key-hint {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #64748b;
+  font-size: 11px;
+  letter-spacing: .3px;
+  pointer-events: none;
 }
 
 /* ── 回放加载遮罩 ── */
@@ -538,7 +572,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.50</span>
+  <span class="badge">v2.2.51</span>
 </div>
 
 <div class="tabs">
@@ -809,6 +843,13 @@ canvas#radarMap {
      Tab 4: 雷达地图
      ════════════════════════════════════════════════════════ -->
 <div class="panel" id="panel-map">
+  <div class="map-headbar" id="mapHeadbar">
+    <div class="map-key-hint">F3 定位 · F4 标点 · F5 清除</div>
+    <div class="map-clock-wrap">
+      <div class="map-time-label" id="mapTimeLabel">--:--:-- UTC</div>
+      <div class="coord-readout" id="coordBar"></div>
+    </div>
+  </div>
   <div class="map-container">
     <canvas id="radarMap"></canvas>
     <div id="replay-loading">
@@ -819,11 +860,9 @@ canvas#radarMap {
     <div class="map-top-toolbar">
       <button class="map-tool-btn" onclick="openMapLayers()">🗺 地图</button>
       <button class="map-tool-btn" id="radarToggleBtn" onclick="toggleRadar()">雷达</button>
-      <button class="map-tool-btn" onclick="openWatchDialog()">机场</button>
+      <button class="map-tool-btn" onclick="openWatchDialog()">筛选</button>
       <button class="map-tool-btn" onclick="openWatchSectorDialog()">扇区</button>
     </div>
-    <div class="map-time-label" id="mapTimeLabel">--:--:-- UTC</div>
-    <div class="coord-bar" id="coordBar"></div>
     <!-- ── 航班搜索窗（空格键开/关，匹配航迹+标牌琥珀高亮）── -->
     <div class="track-search" id="trackSearchPanel">
       <div class="ts-head">
@@ -846,11 +885,44 @@ canvas#radarMap {
       </div>
     </div>
   </div>
-  <!-- ── 关注机场弹窗 ── -->
+  <!-- ── F3 坐标定位弹窗 ── -->
+  <div class="map-layers-overlay" id="gotoOverlay">
+    <div class="map-layers-dialog" style="min-width:400px;">
+      <h3>定位坐标 <span style="font-weight:normal;font-size:12px;color:#64748b;">(F3)</span></h3>
+      <div style="display:flex;gap:10px;margin-bottom:4px;">
+        <label style="flex:1;display:flex;flex-direction:column;gap:4px;">
+          <span style="font-size:11px;color:#8b949e;">纬度（N+/S-）</span>
+          <input id="gotoLatInput" type="text" autocomplete="off" spellcheck="false" placeholder="例 22.6000 或 22,36,00N" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:7px 9px;font-size:13px;outline:none;">
+        </label>
+        <label style="flex:1;display:flex;flex-direction:column;gap:4px;">
+          <span style="font-size:11px;color:#8b949e;">经度（E+/W-）</span>
+          <input id="gotoLonInput" type="text" autocomplete="off" spellcheck="false" placeholder="例 113.9000 或 113,54,00E" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:7px 9px;font-size:13px;outline:none;">
+        </label>
+      </div>
+      <div id="gotoErr" style="display:none;color:#f87171;font-size:12px;margin:2px 0 6px;">坐标格式无法识别：请输入十进制（如 22.6, 113.9）或度分秒（如 22,36,00N 113,54,00E）</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:10px;">定位后该点移至画布中央并画十字标记；F5 清除标记与测距线</div>
+      <div class="map-layers-close">
+        <button onclick="closeGotoDialog()">取消</button>
+        <button onclick="doGotoLocate()" style="background:#1f6feb;border-color:#1f6feb;color:#fff;margin-left:8px;">定位</button>
+      </div>
+    </div>
+  </div>
+  <!-- ── 筛选弹窗（机场 + 关注高度）── -->
   <div class="map-layers-overlay" id="watchOverlay">
-    <div class="map-layers-dialog" style="min-width:340px;">
-      <h3>关注机场</h3>
+    <div class="map-layers-dialog" style="min-width:360px;">
+      <h3>筛选</h3>
+      <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">关注机场（勾选后满足条件的航班标牌为绿色）</div>
       <div id="watchAirportList" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px 12px;"></div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid #1e3a5f;">
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">关注高度（范围外的航班只显示航迹圆，隐藏标牌与引线）</div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input id="altMinInput" type="number" min="0" step="100" value="0" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:5px 8px;font-size:13px;width:90px;outline:none;">
+          <span style="color:#8b949e;">~</span>
+          <input id="altMaxInput" type="number" min="0" step="100" value="6000" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:5px 8px;font-size:13px;width:90px;outline:none;">
+          <span style="color:#8b949e;font-size:12px;">米</span>
+          <span style="margin-left:auto;font-size:11px;color:#64748b;">修改后立即生效</span>
+        </div>
+      </div>
       <div class="map-layers-close">
         <button onclick="closeWatchDialog()">关闭</button>
       </div>
@@ -2424,7 +2496,9 @@ function esc(s) {
     // 计算可用高度：浏览器可视高度 - 画布顶部到视口顶部的距离 - 底部留白
     var mapPanel = document.getElementById('panel-map');
     var mapRect = mapPanel.getBoundingClientRect();
-    var availableH = window.innerHeight - mapRect.top - 70;
+    var headbarEl = document.getElementById('mapHeadbar');
+    var headH = headbarEl ? (headbarEl.offsetHeight || 0) + 10 : 0;
+    var availableH = window.innerHeight - mapRect.top - 70 - headH;
     var displayH = Math.max(200, availableH);
 
     // 初始化 GeoTransform
@@ -2485,6 +2559,13 @@ function esc(s) {
         // 选中高亮状态（单击航迹圆切换）
         var sel = isTrackSelected(trk);
 
+        // 关注高度：范围外的航班只显示航迹圆（隐藏标牌与引线）；搜索命中/选中时照常显示细节
+        var showDetail = trkAltInRange(trk) || sel || isHit;
+        if (!showDetail) {
+          dotColor = '#64748b';
+          labelColor = '#64748b';
+        }
+
         // ── 尾迹点 (2px, 透明70%) ──
         var trail = trk.trail;
         if (trail && trail.length > 0) {
@@ -2527,6 +2608,7 @@ function esc(s) {
         var showPred = (isWatched || sel);
         if (tkKey && _predForce[tkKey] === true) showPred = true;
         else if (tkKey && _predForce[tkKey] === false) showPred = false;
+        if (!showDetail) showPred = false;
         if (showPred && trk.heading >= 0 && trk.speed > 0) {
           var hdg = parseFloat(trk.heading) * Math.PI / 180;
           var spdKph = parseFloat(trk.speed);
@@ -2557,7 +2639,7 @@ function esc(s) {
         // ── 航班号 + 高度标签（标牌：0°起45°均分8方向槽位+引线；右键拖标牌换方向） ──
         if (_SHOW_RADAR) {
           var label = (trk.callsign || trk.ssr || '').trim();
-          if (label) {
+          if (label && showDetail) {
             var lblColor = sel ? '#ffffff' : (isHit ? '#fbbf24' : (isWatched ? '#34d399' : labelColor));
             var altLblColor = sel ? '#ffffff' : (isHit ? '#fcd34d' : (isWatched ? '#34d399' : '#64748b'));
 
@@ -2638,6 +2720,9 @@ function esc(s) {
 
     // ── 测距线（置于最上层：固定测距 + 进行中的动态测距） ──
     drawRulers(ctx, displayW, displayH);
+
+    // ── F3/F4 标记（最上层） ──
+    drawMarkers(ctx, displayW, displayH);
 
 
   }
@@ -3914,6 +3999,142 @@ function esc(s) {
     return "url('data:image/svg+xml," + encodeURIComponent(svg) + "') 10 10, crosshair";
   })();
 
+  // ── F3 定位 / F4 标点 / F5 清除 ──
+  var _markers = [];        // [{kind:'goto'|'point', lat, lon}] F3 定位点 / F4 标点
+  var _altMin = 0;          // 关注高度下限（米）
+  var _altMax = 6000;       // 关注高度上限（米）
+  var _coordEl = document.getElementById('coordBar');   // 光标坐标读数
+
+  // 十进制度 → 度分秒显示（22.6 → 22°36′00″N）
+  function _fmtDMS(deg, isLat) {
+    var hem = deg < 0 ? (isLat ? 'S' : 'W') : (isLat ? 'N' : 'E');
+    var d = Math.abs(deg);
+    var dd = Math.floor(d);
+    var mmf = (d - dd) * 60;
+    var mm = Math.floor(mmf);
+    var ss = Math.round((mmf - mm) * 60);
+    if (ss === 60) { ss = 0; mm++; if (mm === 60) { mm = 0; dd++; } }
+    return dd + '°' + ('0' + mm).slice(-2) + '\u2032' + ('0' + ss).slice(-2) + '\u2033' + hem;
+  }
+
+  // 解析单个坐标串：支持十进制 22.6 / 22.6N、度分秒 22,36,00N / 22°36′00″N / 22 36 00 N
+  function parseCoordStr(s) {
+    if (s === null || s === undefined) return NaN;
+    s = String(s).trim();
+    if (!s) return NaN;
+    var hem = null;
+    var m = s.match(/[NSEW]$/i);
+    if (m) { hem = m[0].toUpperCase(); s = s.slice(0, -1); }
+    m = s.match(/^[NSEW]/i);
+    if (m && !hem) { hem = m[0].toUpperCase(); s = s.slice(1); }
+    s = s.replace(/[°º]/g, ' ').replace(/['′’]/g, ' ').replace(/["″”]/g, ' ');
+    var parts = s.split(/[\s,]+/).filter(function(x) { return x !== ''; });
+    var val;
+    if (parts.length === 1) val = parseFloat(parts[0]);
+    else if (parts.length === 2) val = parseFloat(parts[0]) + parseFloat(parts[1]) / 60;
+    else if (parts.length === 3) val = parseFloat(parts[0]) + parseFloat(parts[1]) / 60 + parseFloat(parts[2]) / 3600;
+    else val = NaN;
+    if (!isFinite(val)) return NaN;
+    if (hem === 'S' || hem === 'W') val = -Math.abs(val);
+    return val;
+  }
+
+  // 该航班高度是否在关注范围内（flight_level 单位米；无高度数据视为在范围内）
+  function trkAltInRange(trk) {
+    if (!trk) return true;
+    var fl = parseFloat(trk.flight_level);
+    if (!isFinite(fl)) return true;
+    return fl >= _altMin && fl <= _altMax;
+  }
+
+  // F3 定位：把给定经纬度移到画布中央并打十字标记（新定位替换旧的定位标记）
+  function centerOnCoord(lat, lon) {
+    if (!geo) return;
+    geo.setCenter({lat: lat, lon: lon});
+    _markers = _markers.filter(function(x) { return x.kind !== 'goto'; });
+    _markers.push({kind: 'goto', lat: lat, lon: lon});
+    drawMap();
+  }
+
+  // F4：在当前光标位置标一个点（旁边灰白色标注坐标）
+  function placeMarkerAtCursor(e) {
+    if (!geo) return;
+    var canvas = document.getElementById('radarMap');
+    if (!canvas) return;
+    var rect = canvas.getBoundingClientRect();
+    var sx = geo.screenW / rect.width;
+    var sy = geo.screenH / rect.height;
+    var px = (e.clientX - rect.left) * sx;
+    var py = (e.clientY - rect.top) * sy;
+    var W = geo.screenW, H = geo.screenH;
+    if (px < 0 || py < 0 || px > W || py > H) return;   // 光标不在画布内
+    var ll = geo.pixelToReal(px, py);
+    _markers.push({kind: 'point', lat: ll.lat, lon: ll.lon});
+    drawMap();
+  }
+
+  // 绘制 F3 定位十字与 F4 标点（含坐标标注）
+  function drawMarkers(ctx, W, H) {
+    if (!_markers || _markers.length === 0) return;
+    ctx.globalAlpha = 1.0;
+    var i, m, p, txt;
+    for (i = 0; i < _markers.length; i++) {
+      m = _markers[i];
+      if (!geo) return;
+      p = geo.realToPixel({lat: m.lat, lon: m.lon});
+      if (p.x < -300 || p.x > W + 300 || p.y < -300 || p.y > H + 300) continue;
+      if (m.kind === 'goto') {
+        // 定位标记：白灰色小十字 + 圆环
+        ctx.strokeStyle = 'rgba(203,213,225,0.95)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(p.x - 10, p.y); ctx.lineTo(p.x - 5, p.y);
+        ctx.moveTo(p.x + 5, p.y); ctx.lineTo(p.x + 10, p.y);
+        ctx.moveTo(p.x, p.y - 10); ctx.lineTo(p.x, p.y - 5);
+        ctx.moveTo(p.x, p.y + 5); ctx.lineTo(p.x, p.y + 10);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        // 标点：实心小圆 + 坐标文字（灰白色）
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#e2e8f0';
+        ctx.fill();
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        txt = _fmtDMS(m.lat, true) + '  ' + _fmtDMS(m.lon, false);
+        ctx.font = '11px Consolas, monospace';
+        var tw = ctx.measureText(txt).width;
+        var tx = p.x + 10, ty = p.y - 8;
+        if (tx + tw > W - 4) tx = p.x - 10 - tw;
+        if (ty - 11 < 4) ty = p.y + 22;
+        ctx.fillStyle = 'rgba(10,22,40,0.75)';
+        ctx.fillRect(tx - 3, ty - 11, tw + 6, 14);
+        ctx.fillStyle = '#d8dee6';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(txt, tx, ty);
+      }
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  // 更新光标坐标读数（时间标签旁）
+  function updateCursorCoord() {
+    var el = _coordEl;
+    if (!el) return;
+    if (!geo) { el.textContent = ''; return; }
+    if (_mousePX < 0 || _mousePY < 0 || _mousePX > geo.screenW || _mousePY > geo.screenH) {
+      el.textContent = '';
+      return;
+    }
+    var ll = geo.pixelToReal(_mousePX, _mousePY);
+    el.textContent = _fmtDMS(ll.lat, true) + '  ' + _fmtDMS(ll.lon, false);
+  }
+
   // 按测距状态恢复画布光标
   function _applyMapCursor(canvas) {
     if (!canvas) return;
@@ -4341,6 +4562,7 @@ function esc(s) {
       var sy = geo ? geo.screenH / rect.height : 1;
       _mousePX = (e.clientX - rect.left) * sx;
       _mousePY = (e.clientY - rect.top) * sy;
+      updateCursorCoord();   // 动态显示光标处坐标（时间标签旁）
 
       // 标牌移动中：方向跟鼠标（45° 吸附 8 档），航迹消失则自动结束
       if (_lblMovingKey) {
@@ -4419,19 +4641,62 @@ function esc(s) {
       }
     });
 
-    // F5：删除全部测距线（仅雷达地图页且确有测距线时拦截，避免影响浏览器刷新）
+    // 鼠标离开画布：清空光标坐标读数
+    canvas.addEventListener('mouseleave', function() {
+      if (_coordEl) _coordEl.textContent = '';
+    });
+
+    // F3 定位坐标 / F4 光标标点 / F5 清除标记与测距线（仅雷达地图页拦截，不影响其它页）
     document.addEventListener('keydown', function(e) {
-      if (e.key !== 'F5' && e.keyCode !== 116) return;
       var activeTab = document.querySelector('.tab-btn.active');
       var onMap = activeTab && activeTab.textContent.trim() === '雷达地图';
       if (!onMap) return;
-      if (_rulers.length === 0 && !_rulerActive) return;
+      // Esc → 关闭 F3 定位弹窗
+      if (e.key === 'Escape') {
+        var goOvl = document.getElementById('gotoOverlay');
+        if (goOvl && goOvl.classList.contains('show')) {
+          e.preventDefault();
+          closeGotoDialog();
+        }
+        return;
+      }
+      var isF3 = e.key === 'F3' || e.keyCode === 114;
+      var isF4 = e.key === 'F4' || e.keyCode === 115;
+      var isF5 = e.key === 'F5' || e.keyCode === 116;
+      if (!isF3 && !isF4 && !isF5) return;
+      // F3/F4 在输入框/下拉聚焦时不抢占（避免干扰打字）
+      if (isF3 || isF4) {
+        var ae = document.activeElement;
+        if (ae && ae.tagName) {
+          var tag = ae.tagName.toUpperCase();
+          if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+            // F3 弹窗已打开时再次按 F3：聚焦输入框，不触发浏览器查找
+            if (isF3) {
+              var goOvl2 = document.getElementById('gotoOverlay');
+              if (goOvl2 && goOvl2.classList.contains('show')) {
+                e.preventDefault();
+                var latIn2 = document.getElementById('gotoLatInput');
+                if (latIn2) { latIn2.focus(); latIn2.select(); }
+              }
+            }
+            return;
+          }
+        }
+      }
       e.preventDefault();
-      _rulers = [];
-      _rulerActive = false;
-      _rulerStart = null;
-      _applyMapCursor(canvas);
-      drawMap();
+      if (isF5) {
+        // 无标记且无测距时放行（交给浏览器默认刷新）
+        if (_markers.length === 0 && _rulers.length === 0 && !_rulerActive) return;
+        _markers = [];
+        _rulers = [];
+        _rulerActive = false;
+        _rulerStart = null;
+        _applyMapCursor(canvas);
+        drawMap();
+        return;
+      }
+      if (isF3) { openGotoDialog(); return; }
+      if (isF4) { placeMarkerAtCursor(e); }
     });
 
     // 默认十字型光标
@@ -4530,11 +4795,16 @@ function esc(s) {
   window.closeMapLayers = closeMapLayers;
   window.fetchTracks = fetchTracks;
 
-  // ── 关注机场弹窗 ──
+  // ── 筛选弹窗（机场 + 关注高度）──
   function openWatchDialog() {
     var overlay = document.getElementById('watchOverlay');
     if (!overlay) return;
     renderWatchAirportList();
+    // 同步关注高度输入框当前值并绑定修改事件
+    var aMin = document.getElementById('altMinInput');
+    var aMax = document.getElementById('altMaxInput');
+    if (aMin) { aMin.value = _altMin; aMin.onchange = watchAltChanged; }
+    if (aMax) { aMax.value = _altMax; aMax.onchange = watchAltChanged; }
     // 延时添加 show 类，避免当前点击事件冒泡到 document 后立即关闭
     setTimeout(function() { overlay.classList.add('show'); }, 10);
   }
@@ -4542,6 +4812,22 @@ function esc(s) {
   function closeWatchDialog() {
     var overlay = document.getElementById('watchOverlay');
     if (overlay) overlay.classList.remove('show');
+  }
+
+  // 关注高度修改 → 立即生效（范围外航班只显示航迹圆）
+  function watchAltChanged() {
+    var aMin = document.getElementById('altMinInput');
+    var aMax = document.getElementById('altMaxInput');
+    if (!aMin || !aMax) return;
+    var lo = parseFloat(aMin.value);
+    var hi = parseFloat(aMax.value);
+    if (!isFinite(lo) || lo < 0) lo = _altMin;
+    if (!isFinite(hi) || hi < 0) hi = _altMax;
+    if (lo > hi) { var t = lo; lo = hi; hi = t; }   // 上下限颠倒时自动互换
+    _altMin = lo; _altMax = hi;
+    aMin.value = lo;
+    aMax.value = hi;
+    drawMap();
   }
 
   function renderWatchAirportList() {
@@ -4585,6 +4871,59 @@ function esc(s) {
   window.closeWatchDialog = closeWatchDialog;
   window.toggleWatchAirport = toggleWatchAirport;
   window.renderWatchAirportList = renderWatchAirportList;
+
+  // ── F3 坐标定位弹窗 ──
+  function openGotoDialog() {
+    var overlay = document.getElementById('gotoOverlay');
+    if (!overlay) return;
+    overlay.classList.add('show');
+    var latIn = document.getElementById('gotoLatInput');
+    var lonIn = document.getElementById('gotoLonInput');
+    // 回车 = 定位
+    var go = function(ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); doGotoLocate(); }
+    };
+    if (latIn) { latIn.onkeydown = go; latIn.focus(); latIn.select(); }
+    if (lonIn) { lonIn.onkeydown = go; }
+  }
+
+  function closeGotoDialog() {
+    var overlay = document.getElementById('gotoOverlay');
+    if (overlay) overlay.classList.remove('show');
+    // 释放输入框焦点，避免键盘后续输入丢到隐藏弹窗里
+    var latIn = document.getElementById('gotoLatInput');
+    if (latIn && document.activeElement === latIn) { latIn.blur(); }
+  }
+
+  function doGotoLocate() {
+    var latIn = document.getElementById('gotoLatInput');
+    var lonIn = document.getElementById('gotoLonInput');
+    if (!latIn || !lonIn || !geo) return;
+    var lat = parseCoordStr(latIn.value);
+    var lon = parseCoordStr(lonIn.value);
+    var errEl = document.getElementById('gotoErr');
+    if (!isFinite(lat) || !isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+      if (errEl) errEl.style.display = 'block';
+      return;
+    }
+    if (errEl) errEl.style.display = 'none';
+    closeGotoDialog();
+    centerOnCoord(lat, lon);
+  }
+
+  // F3 定位弹窗点击遮罩外部关闭
+  document.addEventListener('click', function(e) {
+    var overlay = document.getElementById('gotoOverlay');
+    var dialog = overlay ? overlay.querySelector('.map-layers-dialog') : null;
+    if (overlay && overlay.classList.contains('show') && dialog && !dialog.contains(e.target)) {
+      closeGotoDialog();
+    }
+  });
+
+  window.openGotoDialog = openGotoDialog;
+  window.closeGotoDialog = closeGotoDialog;
+  window.doGotoLocate = doGotoLocate;
+  window.watchAltChanged = watchAltChanged;
 
   // ── 关注扇区弹窗 ──
   function openWatchSectorDialog() {
