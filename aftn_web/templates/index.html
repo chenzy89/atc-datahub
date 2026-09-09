@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.53</title>
+<title>ATC综合数据中心 v2.2.54</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.53</span>
+  <span class="badge">v2.2.54</span>
 </div>
 
 <div class="tabs">
@@ -4082,11 +4082,13 @@ function esc(s) {
         var tx = p.x + 10, ty = p.y - 8;
         if (tx + tw > W - 4) tx = p.x - 10 - tw;
         if (ty - 11 < 4) ty = p.y + 22;
-        ctx.fillStyle = 'rgba(10,22,40,0.75)';
-        ctx.fillRect(tx - 3, ty - 11, tw + 6, 14);
-        ctx.fillStyle = '#d8dee6';
+        // 背景全透明：仅用深色描边保证可读性，无底色块
         ctx.textAlign = 'left';
         ctx.textBaseline = 'bottom';
+        ctx.strokeStyle = 'rgba(10,22,40,0.9)';
+        ctx.lineWidth = 2.5;
+        ctx.strokeText(txt, tx, ty);
+        ctx.fillStyle = '#d8dee6';
         ctx.fillText(txt, tx, ty);
       }
     }
