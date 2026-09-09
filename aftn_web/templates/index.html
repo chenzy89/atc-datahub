@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.51</title>
+<title>ATC综合数据中心 v2.2.52</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -335,20 +335,19 @@ canvas#radarMap {
   .stat-card .num { font-size: 16px; }
 }
 
-/* ── 地图顶栏：时间标签（画布上方居中）+ 光标坐标读数 ── */
-.map-headbar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 10px 12px 0;
-  min-height: 30px;
-  user-select: none;
-}
-.map-clock-wrap {
+/* ── 地图时间标签 + 光标坐标读数（叠在画布顶部居中，不单独占行） ── */
+.map-top-clock {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 10px;
+  z-index: 15;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
 }
 .map-time-label {
   color: #e2e8f0;
@@ -358,7 +357,6 @@ canvas#radarMap {
   padding: 4px 12px;
   border-radius: 4px;
   border: 1px solid #1e3a5f;
-  white-space: nowrap;
   pointer-events: none;
 }
 .coord-readout {
@@ -371,17 +369,6 @@ canvas#radarMap {
   border: 1px solid #1e3a5f;
   min-width: 230px;
   text-align: center;
-  white-space: nowrap;
-  pointer-events: none;
-}
-.map-key-hint {
-  position: absolute;
-  left: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #64748b;
-  font-size: 11px;
-  letter-spacing: .3px;
   pointer-events: none;
 }
 
@@ -572,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.51</span>
+  <span class="badge">v2.2.52</span>
 </div>
 
 <div class="tabs">
@@ -843,15 +830,12 @@ canvas#radarMap {
      Tab 4: 雷达地图
      ════════════════════════════════════════════════════════ -->
 <div class="panel" id="panel-map">
-  <div class="map-headbar" id="mapHeadbar">
-    <div class="map-key-hint">F3 定位 · F4 标点 · F5 清除</div>
-    <div class="map-clock-wrap">
+  <div class="map-container">
+    <canvas id="radarMap"></canvas>
+    <div class="map-top-clock">
       <div class="map-time-label" id="mapTimeLabel">--:--:-- UTC</div>
       <div class="coord-readout" id="coordBar"></div>
     </div>
-  </div>
-  <div class="map-container">
-    <canvas id="radarMap"></canvas>
     <div id="replay-loading">
       <div class="spinner"></div>
       <div class="rl-text">正在加载历史数据...</div>
@@ -2496,9 +2480,7 @@ function esc(s) {
     // 计算可用高度：浏览器可视高度 - 画布顶部到视口顶部的距离 - 底部留白
     var mapPanel = document.getElementById('panel-map');
     var mapRect = mapPanel.getBoundingClientRect();
-    var headbarEl = document.getElementById('mapHeadbar');
-    var headH = headbarEl ? (headbarEl.offsetHeight || 0) + 10 : 0;
-    var availableH = window.innerHeight - mapRect.top - 70 - headH;
+    var availableH = window.innerHeight - mapRect.top - 70;
     var displayH = Math.max(200, availableH);
 
     // 初始化 GeoTransform
@@ -4057,18 +4039,12 @@ function esc(s) {
   }
 
   // F4：在当前光标位置标一个点（旁边灰白色标注坐标）
-  function placeMarkerAtCursor(e) {
+  // 注：键盘事件没有真实光标坐标(clientX/Y 恒为 0)，必须用画布 mousemove 记录的位置
+  function placeMarkerAtCursor() {
     if (!geo) return;
-    var canvas = document.getElementById('radarMap');
-    if (!canvas) return;
-    var rect = canvas.getBoundingClientRect();
-    var sx = geo.screenW / rect.width;
-    var sy = geo.screenH / rect.height;
-    var px = (e.clientX - rect.left) * sx;
-    var py = (e.clientY - rect.top) * sy;
     var W = geo.screenW, H = geo.screenH;
-    if (px < 0 || py < 0 || px > W || py > H) return;   // 光标不在画布内
-    var ll = geo.pixelToReal(px, py);
+    if (_mousePX < 0 || _mousePY < 0 || _mousePX > W || _mousePY > H) return;   // 光标不在画布内
+    var ll = geo.pixelToReal(_mousePX, _mousePY);
     _markers.push({kind: 'point', lat: ll.lat, lon: ll.lon});
     drawMap();
   }
@@ -4696,7 +4672,7 @@ function esc(s) {
         return;
       }
       if (isF3) { openGotoDialog(); return; }
-      if (isF4) { placeMarkerAtCursor(e); }
+      if (isF4) { placeMarkerAtCursor(); }
     });
 
     // 默认十字型光标
