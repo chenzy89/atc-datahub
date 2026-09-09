@@ -70,6 +70,7 @@ def parse_datagram(payload: bytes) -> list[dict[str, Any]]:
             "qnh_applied": t.qnh_applied,
             "speed": t.speed_kmh,
             "sector_index": t.sector_index,
+            "cfl": float(getattr(t, "cfl_m", 0.0) or 0.0),
         })
 
     return records

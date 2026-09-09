@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.54</title>
+<title>ATC综合数据中心 v2.2.55</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.54</span>
+  <span class="badge">v2.2.55</span>
 </div>
 
 <div class="tabs">
@@ -895,7 +895,7 @@ canvas#radarMap {
   <div class="map-layers-overlay" id="watchOverlay">
     <div class="map-layers-dialog" style="min-width:360px;">
       <h3>筛选</h3>
-      <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">关注机场（勾选后满足条件的航班标牌为绿色）</div>
+      <div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">关注机场（勾选，供筛选参考；标牌颜色由“扇区”决定）</div>
       <div id="watchAirportList" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px 12px;"></div>
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid #1e3a5f;">
         <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">关注高度（范围外的航班只显示航迹圆，隐藏标牌与引线）</div>
@@ -916,7 +916,7 @@ canvas#radarMap {
   <div class="map-layers-overlay" id="watchSectorOverlay">
     <div class="map-layers-dialog" style="min-width:360px;">
       <h3>关注扇区</h3>
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">勾选后仅同时满足机场和扇区的航班标牌为绿色；回放时播放勾选扇区的通话语音（可多选）</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">勾选后扇区内的相关航班标牌为绿色（默认相关航班为蓝色）；回放时播放勾选扇区的通话语音（可多选）</div>
       <div id="watchSectorList" style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px 12px;"></div>
       <div class="map-layers-close">
         <button onclick="closeWatchSectorDialog()">关闭</button>
@@ -2529,15 +2529,19 @@ function esc(s) {
         var sp = geo.realToPixel({lat:lat, lon:lon});
         if (sp.x < -80 || sp.x > displayW+80 || sp.y < -80 || sp.y > displayH+80) continue;
 
-        // 是否已相关（有起降地）
+        // 是否已相关计划（有起降地 → 上游已相关飞行计划）
         var associated = !!(trk.adep && trk.adest);
-        // 关注：同时满足机场 AND 扇区
+        // 关注（绿）：相关航班且在关注扇区内
         var isWatched = calcWatched(trk);
         // 航班搜索命中：航迹点+标牌+引线琥珀高亮
         var isHit = isSearchHit(trk);
-        // 未选扇区 → 全部灰色（优先级：搜索琥珀 > 关注绿）
-        var dotColor = isHit ? '#fbbf24' : (isWatched ? '#34d399' : '#64748b');
-        var labelColor = isHit ? '#fbbf24' : (isWatched ? '#34d399' : '#94a3b8');
+        // 颜色：搜索命中琥珀 > 关注绿 > 相关蓝 > 未相关灰
+        var dotColor = isHit ? '#fbbf24'
+          : isWatched ? '#34d399'
+          : associated ? '#3b82f6' : '#64748b';
+        var labelColor = isHit ? '#fbbf24'
+          : isWatched ? '#34d399'
+          : associated ? '#60a5fa' : '#94a3b8';
         // 选中高亮状态（单击航迹圆切换）
         var sel = isTrackSelected(trk);
 
@@ -2618,36 +2622,56 @@ function esc(s) {
         }
         var altStr = ('0000' + Math.abs(alt10m)).slice(-4);
 
-        // ── 航班号 + 高度标签（标牌：0°起45°均分8方向槽位+引线；右键拖标牌换方向） ──
+        // ── 多行标牌（槽位/引线沿用8方向布局；点击任意行弹详情窗） ──
         if (_SHOW_RADAR) {
           var label = (trk.callsign || trk.ssr || '').trim();
           if (label && showDetail) {
-            var lblColor = sel ? '#ffffff' : (isHit ? '#fbbf24' : (isWatched ? '#34d399' : labelColor));
-            var altLblColor = sel ? '#ffffff' : (isHit ? '#fcd34d' : (isWatched ? '#34d399' : '#64748b'));
+            var primaryCol = sel ? '#ffffff' : (isHit ? '#fbbf24' : (isWatched ? '#34d399' : labelColor));
+            var metaCol = sel ? '#ffffff' : (isHit ? '#fcd34d' : (isWatched ? '#6ee7b7' : (associated ? '#8fb9ff' : '#64748b')));
 
-            // 高度变化箭头 + 速度(4位)
+            // 高度变化箭头（现有功能）
             var trendChar = '>';
             if (trk.level_trend === 'c') trendChar = '↑';
             else if (trk.level_trend === 'd') trendChar = '↓';
             var spdVal = 0;
             if (trk.speed) spdVal = Math.round(parseFloat(trk.speed));
             var spdStr = ('0000' + Math.abs(spdVal)).slice(-4);
-            var row2 = altStr + trendChar + '  ' + spdStr;
+            // CFL 许可高度：米→十米4位；无 CFL 显示 0000
+            var cflVal = parseFloat(trk.cfl);
+            var cfl10 = (isFinite(cflVal) && cflVal > 0) ? Math.round(cflVal / 10) : 0;
+            var cflStr = ('0000' + Math.abs(cfl10)).slice(-4);
+            // 高度行 = 高度 + 升降箭头 + CFL + 速度
+            var row2 = altStr + trendChar + ' ' + cflStr + '  ' + spdStr;
 
-            // 量宽定块宽
-            ctx.font = 'bold 11px Consolas, monospace';
-            var lw = ctx.measureText(label).width;
-            ctx.font = '10px Consolas, monospace';
-            var r2w = ctx.measureText(row2).width;
-            var bw = Math.max(lw, r2w) + 8;
-            var bh = 26;
+            // ── 行内容（进港跑道行在航班号上方；目的地+机型在最低行） ──
+            var rows = [];
+            if (associated && isArrivalDest(trk.adest)) {
+              var rwStr = (trk.runway || '').trim();
+              if (rwStr.length >= 2 && rwStr.length <= 3) rows.push({t: rwStr, bold: false, meta: true, col: metaCol});
+            }
+            rows.push({t: label, bold: true, meta: false, col: primaryCol});
+            rows.push({t: row2, bold: false, meta: true, col: metaCol});
+            if (associated) {
+              rows.push({t: (trk.adest || '--') + '   ' + planAircraftType(trk), bold: false, meta: true, col: metaCol});
+            }
+
+            // 量宽定块宽高（行高 12px）
+            var lineH = 12;
+            var maxW = 0;
+            for (var rqi = 0; rqi < rows.length; rqi++) {
+              ctx.font = rows[rqi].bold ? 'bold 11px Consolas, monospace' : '10px Consolas, monospace';
+              var rqw = ctx.measureText(rows[rqi].t).width;
+              if (rqw > maxW) maxW = rqw;
+            }
+            var bw = maxW + 8;
+            var bh = rows.length * lineH + 4;
 
             // 槽位方向（未定制默认 0 = 正右，与旧布局一致）
             var sdir = (tkKey && _lblDir[tkKey] !== undefined) ? _lblDir[tkKey] : 0;
             var slot = labelSlot(sp.x, sp.y, sdir, bw, bh, 16);
             var isMoving = !!(tkKey && _lblMovingKey && _lblMovingKey === tkKey);
 
-            // ── 标牌引线：航迹圆边缘 → 标牌锚点（选中/拖动亮白，关注青，普通浅灰） ──
+            // ── 标牌引线：航迹圆边缘 → 标牌锚点（选中/拖动亮白，关注绿，相关蓝，普通浅灰） ──
             var ldx = slot.ax - sp.x, ldy = slot.ay - sp.y;
             var llen = Math.sqrt(ldx * ldx + ldy * ldy);
             if (llen > 0.1) {
@@ -2656,7 +2680,7 @@ function esc(s) {
               ctx.strokeStyle = isMoving ? 'rgba(255,255,255,0.95)'
                 : sel ? 'rgba(255,255,255,0.9)'
                 : isHit ? 'rgba(251,191,36,0.9)'
-                : isWatched ? 'rgba(52,211,153,0.8)' : 'rgba(148,163,184,0.65)';
+                : isWatched ? 'rgba(52,211,153,0.8)' : (associated ? 'rgba(96,165,250,0.75)' : 'rgba(148,163,184,0.65)');
               ctx.lineWidth = 1.2;
               ctx.setLineDash([]);
               ctx.beginPath();
@@ -2666,20 +2690,26 @@ function esc(s) {
               ctx.setLineDash([]);
             }
 
-            // 行1 航班号（单击弹详情窗）
+            // ── 逐行绘制（点击任意行弹详情窗） ──
             ctx.textAlign = 'left';
             ctx.textBaseline = 'bottom';
-            ctx.font = 'bold 11px Consolas, monospace';
-            ctx.fillStyle = lblColor;
-            ctx.fillText(label, slot.bx + 4, slot.by + 11);
-            _labelRects.push({trk: trk, x0: slot.bx + 1, y0: slot.by - 2, x1: slot.bx + lw + 7, y1: slot.by + 12});
+            var altRowIdx = -1;   // 高度行下标（含可点击速度文字）
+            for (var ri = 0; ri < rows.length; ri++) {
+              var rr = rows[ri];
+              ctx.font = rr.bold ? 'bold 11px Consolas, monospace' : '10px Consolas, monospace';
+              ctx.fillStyle = rr.col;
+              var ry = slot.by + ri * lineH + 11;
+              ctx.fillText(rr.t, slot.bx + 4, ry);
+              if (rr.t === row2) altRowIdx = ri;
+              _labelRects.push({trk: trk, x0: slot.bx + 1, y0: slot.by + ri * lineH - 2, x1: slot.bx + maxW + 9, y1: slot.by + ri * lineH + 12});
+            }
 
-            // 行2 高度+速度（单击速度文字切换该航班预计线显隐）
-            ctx.font = '10px Consolas, monospace';
-            ctx.fillStyle = altLblColor;
-            ctx.fillText(row2, slot.bx + 4, slot.by + 23);
-            var spdX = slot.bx + 4 + ctx.measureText(altStr + trendChar + '  ').width;
-            _speedRects.push({trk: trk, x0: spdX - 2, y0: slot.by + 13, x1: spdX + ctx.measureText(spdStr).width + 2, y1: slot.by + 27});
+            // ── 高度行内速度文字（单击切换该航班预计线显隐） ──
+            if (altRowIdx >= 0) {
+              ctx.font = '10px Consolas, monospace';
+              var spdX = slot.bx + 4 + ctx.measureText(altStr + trendChar + ' ' + cflStr + '  ').width;
+              _speedRects.push({trk: trk, x0: spdX - 2, y0: slot.by + altRowIdx * lineH + 2, x1: spdX + ctx.measureText(spdStr).width + 2, y1: slot.by + altRowIdx * lineH + 13});
+            }
           }
         }
       }
@@ -4145,17 +4175,61 @@ function esc(s) {
     return !!key && _selectedTracks[key] === true;
   }
 
-  // 是否“关注”航班：同时满足所选机场 AND 扇区（与 drawMap 判定一致）
+  // 本地机场（进港判定：目的地为以下机场之一 → 显示跑道行）
+  var _HOME_APTS = {'ZGSZ':1,'ZGSD':1,'VMMC':1,'ZGHZ':1,'ZGNT':1,'ZGUH':1};
+  function isArrivalDest(code) {
+    return !!(code && _HOME_APTS[String(code).toUpperCase()]);
+  }
+
+  // 是否“关注”航班（绿）：相关计划（有起降地）且在关注扇区内
   function calcWatched(trk) {
-    if (_WATCHED_SECTORS.size > 0) {
-      if (_WATCHED_AIRPORTS.size > 0) {
-        var matchedAirport = _WATCHED_AIRPORTS.has(trk.adep) || _WATCHED_AIRPORTS.has(trk.adest);
-        if (matchedAirport && trk.sector_code && _WATCHED_SECTORS.has(trk.sector_code)) return true;
-      } else {
-        if (trk.sector_code && _WATCHED_SECTORS.has(trk.sector_code)) return true;
-      }
+    if (!trk) return false;
+    if (!(trk.adep && trk.adest)) return false;
+    if (!_WATCHED_SECTORS || _WATCHED_SECTORS.size === 0) return false;
+    return !!(trk.sector_code && _WATCHED_SECTORS.has(trk.sector_code));
+  }
+
+  // 机型信息缓存：/api/flight_info 按 呼号+起降地 查一次，逐架串行拉取防突发
+  var _planTypeCache = {};   // key(cs|adep|adest) → 机型字符串('' 未知/失败)
+  var _planTypeQueue = [];
+  var _planTypeTimer = null;
+
+  function _planTypeKey(trk) {
+    var cs = (trk.callsign || '').trim();
+    var ap = (trk.adep || '').trim();
+    var ad = (trk.adest || '').trim();
+    return (cs && ap && ad) ? (cs + '|' + ap + '|' + ad) : '';
+  }
+
+  // 取机型显示值；未查到返回 '--'（异步补查后重绘）
+  function planAircraftType(trk) {
+    var k = _planTypeKey(trk);
+    if (!k) return '--';
+    if (_planTypeCache[k] === undefined) {
+      _planTypeCache[k] = '';   // 在途/占位
+      _planTypeQueue.push(k);
+      if (!_planTypeTimer) _planTypeTimer = setTimeout(_pumpPlanTypes, 150);
     }
-    return false;
+    return _planTypeCache[k] || '--';
+  }
+
+  function _pumpPlanTypes() {
+    _planTypeTimer = null;
+    var k = _planTypeQueue.shift();
+    if (!k) return;
+    var parts = k.split('|');
+    fetch('/api/flight_info?callsign=' + encodeURIComponent(parts[0])
+      + '&adep=' + encodeURIComponent(parts[1]) + '&adest=' + encodeURIComponent(parts[2]))
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        _planTypeCache[k] = (d && d.aircraft_type) ? d.aircraft_type : '';
+        if (typeof window.drawMap === 'function') window.drawMap();   // 机型到位后重绘
+        if (_planTypeQueue.length) _planTypeTimer = setTimeout(_pumpPlanTypes, 120);
+      })
+      .catch(function() {
+        _planTypeCache[k] = '';
+        if (_planTypeQueue.length) _planTypeTimer = setTimeout(_pumpPlanTypes, 120);
+      });
   }
 
   // 标牌槽位布局：从 0°(正右) 起以 45° 均分 360° 共 8 方向；返回块左上角(bx,by)与引线锚点(ax,ay)
@@ -5624,7 +5698,7 @@ function esc(s) {
           callsign: best.cs, ssr: best.ss, latitude: best.lt, longitude: best.ln,
           heading: best.hd, flight_level: best.fl, speed: best.sp,
           adep: best.ap, adest: best.ad, runway: best.rw, flight_procedure: best.fp,
-          trail: [], level_trend: trend, sector_code: sectorCode,
+          cfl: best.cf || 0, level_trend: trend, sector_code: sectorCode, trail: [],
         });
       }
     }

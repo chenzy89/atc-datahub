@@ -93,6 +93,7 @@ class FDRRecord:
     qnh_applied: bool = False         # I135 QNH 修正标志
     prev_flight_level: float = 0.0
     speed: float = 0.0
+    cfl: float = 0.0               # CFL 许可高度（米），来自 CAT062 计划块
     trail: list[tuple[float, float]] = field(default_factory=list)  # 历史尾迹 [(lat,lon),...]
     last_update: float = 0.0  # time.monotonic()
     _last_trail_time: float = 0.0  # 上次添加尾迹时间
@@ -473,6 +474,11 @@ class FDRStore:
 
             rec.speed = parsed.get("speed", 0.0)
 
+            # CFL 许可高度（米）：雷达有值才覆盖（保留最后已知值）
+            cfl_v = parsed.get("cfl", 0.0)
+            if cfl_v:
+                rec.cfl = float(cfl_v)
+
             # 尾迹（仅显示用，保留最近5个）
             if lat or lon:
                 last_pt = rec.trail[-1] if rec.trail else None
@@ -749,6 +755,7 @@ class FDRStore:
                     "adest": rec.adest,
                     "runway": rec.runway,
                     "flight_procedure": rec.flight_procedure,
+                    "cfl": rec.cfl,
                     "in_terminal": rec.in_terminal,
                     "sector_code": sector_code,
                 })
