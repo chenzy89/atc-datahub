@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.56</title>
+<title>ATC综合数据中心 v2.2.57</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.56</span>
+  <span class="badge">v2.2.57</span>
 </div>
 
 <div class="tabs">
@@ -2633,26 +2633,32 @@ function esc(s) {
             var trendChar = '>';
             if (trk.level_trend === 'c') trendChar = '↑';
             else if (trk.level_trend === 'd') trendChar = '↓';
+            // 速度：3位数，单位 10km/h
             var spdVal = 0;
-            if (trk.speed) spdVal = Math.round(parseFloat(trk.speed));
-            var spdStr = ('0000' + Math.abs(spdVal)).slice(-4);
-            // CFL 许可高度：米→十米4位；无 CFL 显示 0000
+            if (trk.speed) spdVal = Math.round(parseFloat(trk.speed) / 10);
+            var spdStr = ('000' + Math.abs(spdVal)).slice(-3);
+            // CFL 许可高度：米→十米4位；无 CFL 显示 0000（箭头后无空格）
             var cflVal = parseFloat(trk.cfl);
             var cfl10 = (isFinite(cflVal) && cflVal > 0) ? Math.round(cflVal / 10) : 0;
             var cflStr = ('0000' + Math.abs(cfl10)).slice(-4);
             // 高度行 = 高度 + 升降箭头 + CFL + 速度
-            var row2 = altStr + trendChar + ' ' + cflStr + '  ' + spdStr;
+            var row2 = altStr + trendChar + cflStr + '  ' + spdStr;
+
+            // 计划机型/尾流等级（异步拉取缓存；未查到机型显示 --，尾流留空）
+            var pm = associated ? planMeta(trk) : null;
+            var typeStr = (pm && pm.t) ? pm.t : '--';
+            var wakeTxt = (pm && pm.w) ? '   ' + pm.w : '';
 
             // ── 行内容（进港跑道行在航班号上方；目的地+机型在最低行） ──
             var rows = [];
             if (associated && isArrivalDest(trk.adest)) {
               var rwStr = (trk.runway || '').trim();
-              if (rwStr.length >= 2 && rwStr.length <= 3) rows.push({t: rwStr, bold: false, meta: true, col: metaCol});
+              if (rwStr.length >= 2 && rwStr.length <= 3) rows.push({t: ' ' + rwStr, bold: false, meta: true, col: metaCol});
             }
-            rows.push({t: label, bold: true, meta: false, col: primaryCol});
+            rows.push({t: label + wakeTxt, bold: true, meta: false, col: primaryCol});
             rows.push({t: row2, bold: false, meta: true, col: metaCol});
             if (associated) {
-              rows.push({t: (trk.adest || '--') + '   ' + planAircraftType(trk), bold: false, meta: true, col: metaCol});
+              rows.push({t: (trk.adest || '--') + '   ' + typeStr, bold: false, meta: true, col: metaCol});
             }
 
             // 量宽定块宽高（行高 12px）
@@ -2707,7 +2713,7 @@ function esc(s) {
             // ── 高度行内速度文字（单击切换该航班预计线显隐） ──
             if (altRowIdx >= 0) {
               ctx.font = '10px Consolas, monospace';
-              var spdX = slot.bx + 4 + ctx.measureText(altStr + trendChar + ' ' + cflStr + '  ').width;
+              var spdX = slot.bx + 4 + ctx.measureText(altStr + trendChar + cflStr + '  ').width;
               _speedRects.push({trk: trk, x0: spdX - 2, y0: slot.by + altRowIdx * lineH + 2, x1: spdX + ctx.measureText(spdStr).width + 2, y1: slot.by + altRowIdx * lineH + 13});
             }
           }
@@ -4189,8 +4195,8 @@ function esc(s) {
     return !!(trk.sector_code && _WATCHED_SECTORS.has(trk.sector_code));
   }
 
-  // 机型信息缓存：/api/flight_info 按 呼号+起降地 查一次，逐架串行拉取防突发
-  var _planTypeCache = {};   // key(cs|adep|adest) → 机型字符串('' 未知/失败)
+  // 机型/尾流等级信息缓存：/api/flight_info 按 呼号+起降地 查一次，逐架串行拉取防突发
+  var _planTypeCache = {};   // key(cs|adep|adest) → {t:机型, w:尾流等级}（''=在途/未知）
   var _planTypeQueue = [];
   var _planTypeTimer = null;
 
@@ -4201,16 +4207,17 @@ function esc(s) {
     return (cs && ap && ad) ? (cs + '|' + ap + '|' + ad) : '';
   }
 
-  // 取机型显示值；未查到返回 '--'（异步补查后重绘）
-  function planAircraftType(trk) {
+  // 取机型/尾流等级；未查到返回 null（异步补查后重绘）
+  function planMeta(trk) {
     var k = _planTypeKey(trk);
-    if (!k) return '--';
+    if (!k) return null;
     if (_planTypeCache[k] === undefined) {
-      _planTypeCache[k] = '';   // 在途/占位
+      _planTypeCache[k] = {t: '', w: ''};   // 在途/占位
       _planTypeQueue.push(k);
       if (!_planTypeTimer) _planTypeTimer = setTimeout(_pumpPlanTypes, 150);
     }
-    return _planTypeCache[k] || '--';
+    var v = _planTypeCache[k];
+    return (v && v.t) ? v : null;
   }
 
   function _pumpPlanTypes() {
@@ -4222,13 +4229,16 @@ function esc(s) {
       + '&adep=' + encodeURIComponent(parts[1]) + '&adest=' + encodeURIComponent(parts[2]))
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(d) {
-        var ty = (d && d.aircraft_type) ? String(d.aircraft_type).split('/')[0].trim() : '';
-        _planTypeCache[k] = ty;
-        if (typeof window.drawMap === 'function') window.drawMap();   // 机型到位后重绘
+        var raw = (d && d.aircraft_type) ? String(d.aircraft_type) : '';
+        var slash = raw.indexOf('/');
+        var t = (slash >= 0 ? raw.slice(0, slash) : raw).trim();
+        var w = (slash >= 0 ? raw.slice(slash + 1).trim().toUpperCase() : '');
+        _planTypeCache[k] = {t: t, w: (w.length <= 2 ? w : '')};
+        if (typeof window.drawMap === 'function') window.drawMap();   // 机型/尾流到位后重绘
         if (_planTypeQueue.length) _planTypeTimer = setTimeout(_pumpPlanTypes, 120);
       })
       .catch(function() {
-        _planTypeCache[k] = '';
+        _planTypeCache[k] = {t: '', w: ''};
         if (_planTypeQueue.length) _planTypeTimer = setTimeout(_pumpPlanTypes, 120);
       });
   }
