@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.55</title>
+<title>ATC综合数据中心 v2.2.56</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.55</span>
+  <span class="badge">v2.2.56</span>
 </div>
 
 <div class="tabs">
@@ -4222,7 +4222,8 @@ function esc(s) {
       + '&adep=' + encodeURIComponent(parts[1]) + '&adest=' + encodeURIComponent(parts[2]))
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(d) {
-        _planTypeCache[k] = (d && d.aircraft_type) ? d.aircraft_type : '';
+        var ty = (d && d.aircraft_type) ? String(d.aircraft_type).split('/')[0].trim() : '';
+        _planTypeCache[k] = ty;
         if (typeof window.drawMap === 'function') window.drawMap();   // 机型到位后重绘
         if (_planTypeQueue.length) _planTypeTimer = setTimeout(_pumpPlanTypes, 120);
       })
