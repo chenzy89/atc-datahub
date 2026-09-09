@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.52</title>
+<title>ATC综合数据中心 v2.2.53</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.52</span>
+  <span class="badge">v2.2.53</span>
 </div>
 
 <div class="tabs">
@@ -4073,14 +4073,9 @@ function esc(s) {
         ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
         ctx.stroke();
       } else {
-        // 标点：实心小圆 + 坐标文字（灰白色）
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+        // 标点：3×3 方形点（灰白）+ 坐标文字
         ctx.fillStyle = '#e2e8f0';
-        ctx.fill();
-        ctx.strokeStyle = '#94a3b8';
-        ctx.lineWidth = 1;
-        ctx.stroke();
+        ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
         txt = _fmtDMS(m.lat, true) + '  ' + _fmtDMS(m.lon, false);
         ctx.font = '11px Consolas, monospace';
         var tw = ctx.measureText(txt).width;
