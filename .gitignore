@@ -21,3 +21,8 @@ data/*.lock
 data/db.sqlite
 data/voice/
 gaul/
+
+# 云图回波图片（外部程序生成的数据，仅跟踪 geo.json）
+cloud_map/*/
+cloud_map/*.PNG
+cloud_map/*.png

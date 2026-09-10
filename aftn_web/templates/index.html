@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.59</title>
+<title>ATC综合数据中心 v2.2.60</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.59</span>
+  <span class="badge">v2.2.60</span>
 </div>
 
 <div class="tabs">
@@ -844,6 +844,7 @@ canvas#radarMap {
     <div class="map-top-toolbar">
       <button class="map-tool-btn" onclick="openMapLayers()">🗺 地图</button>
       <button class="map-tool-btn" id="radarToggleBtn" onclick="toggleRadar()">雷达</button>
+      <button class="map-tool-btn" id="cloudToggleBtn" onclick="toggleCloudMap()">云图</button>
       <button class="map-tool-btn" onclick="openWatchDialog()">筛选</button>
       <button class="map-tool-btn" onclick="openWatchSectorDialog()">扇区</button>
     </div>
@@ -2418,6 +2419,146 @@ function esc(s) {
     ctx.setLineDash([]);
   }
 
+  // ── 气象雷达回波叠加 ──────────────────────────────────────────
+  // 回波图由外部程序生成，存放于 cloud_map/<MMDD>/<HHmm>.PNG（目录名与文件名均为北京时）。
+  // 实时模式：每 60 秒查询一次，最近 20 分钟内存在回波图则投影最新一张；
+  // 回放模式：随回放时间同步查询对应时刻的回波图（由 updateReplayFrame 驱动）。
+  var _cloudMap = {
+    enabled: true,       // 默认开启（按钮可切换）
+    img: null,           // 当前回波 Image 对象（透明 PNG）
+    geo: null,           // 地理配准 {lon_px,lon_py,lon_c,lat_px,lat_py,lat_c}
+    crop: null,          // 主图有效区域 {x,y,w,h}，用于裁掉底部标题/色标条
+    file: null,          // 当前文件标识（MMDD/HHmm.PNG）
+    ts: null,            // 当前文件时刻（UTC epoch 秒）
+    time: '',            // 回波时刻（北京时，显示用）
+    loading: false,
+    failed: false,
+    replay: false,       // 是否处于回放模式
+    wantTs: null,        // 回放目标时刻（量化到分钟，UTC epoch 秒）
+    _reqKey: null        // 进行中请求的标识，用于完成后补发最新请求
+  };
+
+  function drawCloudOverlay(ctx, displayW, displayH, dpr) {
+    var g = _cloudMap.geo;
+    var img = _cloudMap.img;
+    if (!g || !img) return;
+    // 仿射: lon = lon_px*px + lon_py*py + lon_c ; lat = lat_px*px + lat_py*py + lat_c
+    // 屏幕映射: sx = cx + (lon-cLon)/degPerPx*cos(cLat) ; sy = cy - (lat-cLat)/degPerPx
+    var k = 1 / geo.degreePerPixel;
+    var cosc = Math.cos(geo.center.lat * Math.PI / 180);
+    // image 像素单位方向向量 → 屏幕增量
+    var dux = g.lon_px * k * cosc;
+    var duy = -g.lat_px * k;
+    var dvx = g.lon_py * k * cosc;
+    var dvy = -g.lat_py * k;
+    var ox = geo.screenCx + (g.lon_c - geo.center.lon) * k * cosc;
+    var oy = geo.screenCy - (g.lat_c - geo.center.lat) * k;
+    var c = _cloudMap.crop || { x: 0, y: 0, w: img.width, h: img.height };
+    ctx.save();
+    ctx.setTransform(dpr * dux, dpr * duy, dpr * dvx, dpr * dvy, dpr * ox, dpr * oy);
+    ctx.imageSmoothingEnabled = false;   // 保留回波像素块状风格
+    // 源矩形裁剪：只绘制主图区，剔除底部标题/色标条
+    ctx.drawImage(img, c.x, c.y, c.w, c.h, c.x, c.y, c.w, c.h);
+    ctx.restore();
+    // 回波时间标签（左下角）
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.font = '11px Consolas, monospace';
+    ctx.fillStyle = 'rgba(230,240,255,0.85)';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    var label = '\u2601 雷达回波 ' + _cloudMap.time + ' 北京时';
+    if (_cloudMap.replay) label += ' [回放]';
+    ctx.fillText(label, 10, displayH - 10);
+    ctx.restore();
+  }
+
+  function _cloudRequestUrl() {
+    if (_cloudMap.replay && _cloudMap.wantTs != null) {
+      return '/api/cloud_mosaic/at?ts=' + _cloudMap.wantTs;
+    }
+    return '/api/cloud_mosaic/latest';
+  }
+
+  function loadCloudOverlay() {
+    if (_cloudMap.loading) return;   // 请求完成后会检查是否需补发
+    var url = _cloudRequestUrl();
+    _cloudMap.loading = true;
+    _cloudMap._reqKey = url;
+    fetch(url)
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        _cloudMap.loading = false;
+        var stale = _cloudMap._reqKey !== _cloudRequestUrl();   // 期间目标已变化
+        if (!d || !d.available) {
+          _cloudMap.failed = true;
+          if (_cloudMap.img) { _cloudMap.img = null; _cloudMap.file = null; _cloudMap.ts = null; _cloudMap.time = ''; }
+          if (stale) { loadCloudOverlay(); } else { drawMap(); }
+          return;
+        }
+        _cloudMap.failed = false;
+        _cloudMap.geo = d.geo;
+        _cloudMap.crop = d.crop || null;
+        // 文件未变化则只刷新时间标签
+        if (_cloudMap.file === d.file && _cloudMap.img) {
+          var changed = _cloudMap.time !== d.time;
+          _cloudMap.time = d.time;
+          _cloudMap.ts = d.ts;
+          if (stale) { loadCloudOverlay(); } else if (changed) { drawMap(); }
+          return;
+        }
+        _cloudMap.file = d.file;
+        _cloudMap.time = d.time;
+        _cloudMap.ts = d.ts;
+        var im = new Image();
+        im.onload = function() {
+          _cloudMap.img = im;
+          if (stale) { loadCloudOverlay(); } else { drawMap(); }
+        };
+        im.onerror = function() { console.warn('回波图加载失败: ' + d.file); };
+        im.src = d.image_url;   // image_url 已带 ts 参数，内容固定可长缓存
+      })
+      .catch(function(err) {
+        _cloudMap.loading = false;
+        _cloudMap.failed = true;
+        console.warn('回波元数据获取失败:', err);
+      });
+  }
+
+  // 回放：回放时间变化 → 查询对应时刻回波（量化到分钟，避免高频请求）
+  window.cloudSyncReplay = function(tsIso) {
+    if (!tsIso) return;
+    var q = Math.floor(new Date(tsIso).getTime() / 60000) * 60;
+    if (_cloudMap.replay && _cloudMap.wantTs === q) return;
+    _cloudMap.replay = true;
+    _cloudMap.wantTs = q;
+    loadCloudOverlay();
+  };
+
+  // 回到实时模式
+  window.cloudBackToLive = function() {
+    if (!_cloudMap.replay) return;
+    _cloudMap.replay = false;
+    _cloudMap.wantTs = null;
+    loadCloudOverlay();
+  };
+
+  // 初始加载 + 每 60 秒轮询（回放期间由回放时间驱动，不轮询）
+  loadCloudOverlay();
+  setInterval(function() { if (!_cloudMap.replay) loadCloudOverlay(); }, 60 * 1000);
+
+  // ── 云图显示开关 ──
+  function toggleCloudMap() {
+    _cloudMap.enabled = !_cloudMap.enabled;
+    var btn = document.getElementById('cloudToggleBtn');
+    if (btn) {
+      btn.style.opacity = _cloudMap.enabled ? '1' : '0.35';
+      btn.style.color = _cloudMap.enabled ? '#e2e8f0' : '#475569';
+    }
+    drawMap();
+  }
+  window.toggleCloudMap = toggleCloudMap;
+
   // ── 主绘制 ──
   function _getEnabledElements() {
     var all = [];
@@ -2522,6 +2663,11 @@ function esc(s) {
     var mapElements = _getEnabledElements();
     for (var i = 0; i < mapElements.length; i++) {
       drawElement(ctx, mapElements[i]);
+    }
+
+    // ── 气象雷达云图叠加（≥25dBZ 回波，置于地图线划之上、航迹之下） ──
+    if (_cloudMap.enabled && _cloudMap.img && _cloudMap.geo) {
+      drawCloudOverlay(ctx, displayW, displayH, dpr);
     }
 
     // ── 航迹标牌 ──
@@ -5696,6 +5842,8 @@ function esc(s) {
 
   function updateReplayFrame(ts) {
     try {
+    // 回波图随回放时间同步（内部按分钟量化，仅在跨分钟时发请求）
+    if (typeof window.cloudSyncReplay === 'function') window.cloudSyncReplay(ts);
     var tracks = [];
     for (var cs in replayTracks) {
       var pts = replayTracks[cs];
@@ -5779,6 +5927,8 @@ function esc(s) {
     historyPoints = []; replayTracks = {};
     replayStartTime = null; replayCurrentTime = null; replayEndTime = null;
     window._replayActive = false;
+    // 回到实时 → 回波图切回实时最新
+    if (typeof window.cloudBackToLive === 'function') window.cloudBackToLive();
     updateUI();
     // 回到实时 → 恢复关注扇区的实时语音监听
     if (typeof window.syncSectorVoiceLive === 'function') window.syncSectorVoiceLive();

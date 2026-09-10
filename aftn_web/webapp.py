@@ -1155,6 +1155,64 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         """兼容旧版"""
         return api_cloud_cover()
 
+    # ── 气象雷达拼图叠加（中央气象台雷达云图）──────────────────
+
+    def _cloud_mosaic_dir() -> Path:
+        from .cloud_mosaic import resolve_cloud_dir
+        return resolve_cloud_dir(_config_file, getattr(config, "cloud_map_dir", None))
+
+    def _cloud_lookback() -> int:
+        """回找窗口（分钟），可用 config.cloud_map.lookback_min 覆盖"""
+        try:
+            return max(1, int(getattr(config, "cloud_map_lookback_min", 20)))
+        except (TypeError, ValueError):
+            return 20
+
+    @app.route("/api/cloud_mosaic/latest")
+    def api_cloud_mosaic_latest():
+        """实时模式：返回当前可用回波元数据（含地理配准与裁剪参数）
+
+        仅当最近 lookback 分钟（默认 20）内存在回波文件时 available=true，
+        否则前端不叠加显示（避免投影过期回波）。
+        """
+        from .cloud_mosaic import latest_meta
+        return jsonify(latest_meta(_cloud_mosaic_dir(), _cloud_lookback()))
+
+    @app.route("/api/cloud_mosaic/at")
+    def api_cloud_mosaic_at():
+        """回放模式：返回指定 UTC 时刻可用的回波元数据（ts 为 UTC epoch 秒）"""
+        from .cloud_mosaic import meta_for_time
+        try:
+            ts = float(request.args.get("ts", ""))
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid ts"}), 400
+        return jsonify(meta_for_time(_cloud_mosaic_dir(), ts, _cloud_lookback()))
+
+    @app.route("/api/cloud_mosaic/image")
+    def api_cloud_mosaic_image():
+        """返回回波透明层 PNG
+
+        ?ts=<epoch> 精确定位该时刻的文件（回放/历史，可长缓存）；
+        不带 ts 时取当前可用的最新回波（实时，不缓存）。
+        """
+        from .cloud_mosaic import exact_file, find_echo_file, bt_now
+        cloud_dir = _cloud_mosaic_dir()
+
+        ts_arg = request.args.get("ts", "")
+        if ts_arg:
+            try:
+                src = exact_file(cloud_dir, float(ts_arg))
+            except (TypeError, ValueError):
+                return jsonify({"error": "invalid ts"}), 400
+            if src is None:
+                return jsonify({"error": "no echo image at ts"}), 404
+            return send_file(str(src), mimetype="image/png")
+
+        src, _bt = find_echo_file(cloud_dir, bt_now(), _cloud_lookback())
+        if src is None:
+            return jsonify({"error": "no recent cloud png"}), 404
+        return send_file(str(src), mimetype="image/png")
+
     @app.route("/api/voice/stream")
     def api_voice_stream():
         """SSE 端点：流式推送选中通道的 PCM 音频数据给浏览器"""
@@ -1317,6 +1375,12 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
     # ── 禁用浏览器缓存 API 响应 ──────────────────────────
     @app.after_request
     def _no_cache(response):
+        # 例外：带 ts 的历史回波图内容固定不变，允许长缓存
+        if request.path == "/api/cloud_mosaic/image" and request.args.get("ts"):
+            response.headers["Cache-Control"] = "public, max-age=86400"
+            response.headers.pop("Pragma", None)
+            response.headers.pop("Expires", None)
+            return response
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"

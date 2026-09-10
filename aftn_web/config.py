@@ -83,6 +83,8 @@ class AppConfig:
     voice_data: VoiceDataConfig = field(default_factory=VoiceDataConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     web: WebConfig = field(default_factory=WebConfig)
+    cloud_map_dir: str | None = None        # 气象雷达回波目录（缺省用配置文件同级 cloud_map）
+    cloud_map_lookback_min: int = 20        # 回波回找窗口（分钟），超出则视为无可用回波
     config_file: Path | None = None
 
     @property
@@ -158,5 +160,7 @@ def _build_config(raw: dict[str, Any], config_file: Path) -> AppConfig:
             debug=bool(web.get("debug", False)),
             map_background_color=str(web.get("map_background_color", "#0a1628")),
         ),
+        cloud_map_dir=(_cm.get("dir") if isinstance((_cm := raw.get("cloud_map")), dict) else None) or None,
+        cloud_map_lookback_min=int(_cm.get("lookback_min", 20)) if isinstance(_cm, dict) else 20,
         config_file=config_file,
     )
