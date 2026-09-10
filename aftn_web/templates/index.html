@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.57</title>
+<title>ATC综合数据中心 v2.2.58</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.57</span>
+  <span class="badge">v2.2.58</span>
 </div>
 
 <div class="tabs">
@@ -914,10 +914,17 @@ canvas#radarMap {
   </div>
   <!-- ── 关注扇区弹窗 ── -->
   <div class="map-layers-overlay" id="watchSectorOverlay">
-    <div class="map-layers-dialog" style="min-width:360px;">
+    <div class="map-layers-dialog" style="min-width:380px;">
       <h3>关注扇区</h3>
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">勾选后扇区内的相关航班标牌为绿色（默认相关航班为蓝色）；回放时播放勾选扇区的通话语音（可多选）</div>
-      <div id="watchSectorList" style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px 12px;"></div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">勾选后扇区内的相关航班标牌为绿色（默认相关航班为蓝色）；回放时播放勾选扇区的通话语音（可多选）</div>
+      <div id="watchSectorList" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px 10px;margin-bottom:10px;"></div>
+      <div style="padding-top:8px;border-top:1px solid #1e3a5f;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text-primary);">
+          <input type="checkbox" id="watchSectorVoiceEnable" onchange="onWatchSectorVoiceEnable(this.checked)">
+          <span>🔊 允许实时语音播放</span>
+          <span style="font-size:11px;color:#64748b;">勾选扇区+开启后实时播放该扇区通话（通话负荷页卡片同步选中，支持多扇区同时播放）</span>
+        </label>
+      </div>
       <div class="map-layers-close">
         <button onclick="closeWatchSectorDialog()">关闭</button>
       </div>
@@ -4988,7 +4995,15 @@ function esc(s) {
     var overlay = document.getElementById('watchSectorOverlay');
     if (!overlay) return;
     renderWatchSectorList();
+    var cb = document.getElementById('watchSectorVoiceEnable');
+    if (cb) cb.checked = !!_voicePlayEnabled;
     setTimeout(function() { overlay.classList.add('show'); }, 10);
+  }
+
+  // 关注扇区弹窗：实时语音总开关
+  function onWatchSectorVoiceEnable(on) {
+    _voicePlayEnabled = !!on;
+    if (typeof window.syncSectorVoiceLive === 'function') window.syncSectorVoiceLive();
   }
 
   function closeWatchSectorDialog() {
@@ -5011,10 +5026,11 @@ function esc(s) {
     var html = '';
     sectors.forEach(function(s) {
       var checked = _WATCHED_SECTORS.has(s.code);
-      html += '<div class="map-layer-item">' +
+      // 标签去掉 ZGJDTMxx 前缀，只显示后面的扇区名（如 TM01 HN）；悬停显示完整代码
+      html += '<div class="map-layer-item" title="' + s.code + '">' +
         '<input type="checkbox" id="ws_' + s.code + '" ' + (checked ? 'checked' : '') +
         ' onchange="toggleWatchSector(\'' + s.code + '\')">' +
-        '<label for="ws_' + s.code + '">' + s.code + ' ' + s.name + '</label></div>';
+        '<label for="ws_' + s.code + '">' + s.name + '</label></div>';
     });
     container.innerHTML = html;
   }
@@ -5028,6 +5044,8 @@ function esc(s) {
     drawMap();
     // 回放中勾选扇区变化 → 同步语音播放
     if (typeof window._syncReplayVoice === 'function') window._syncReplayVoice();
+    // 实时模式：勾选变化 → 同步实时语音监听
+    if (typeof window.syncSectorVoiceLive === 'function') window.syncSectorVoiceLive();
   }
 
   // 关注扇区弹窗点击遮罩关闭
@@ -5578,6 +5596,8 @@ function esc(s) {
     window._replayActive = true;
     state = STATE.PAUSED;
     updateUI();
+    // 进入回放 → 停止实时语音监听（回放语音由勾选扇区驱动）
+    if (typeof window.syncSectorVoiceLive === 'function') window.syncSectorVoiceLive();
 
     window._radarTracks = [];
     if (typeof window.drawMap === 'function') window.drawMap();
@@ -5760,6 +5780,8 @@ function esc(s) {
     replayStartTime = null; replayCurrentTime = null; replayEndTime = null;
     window._replayActive = false;
     updateUI();
+    // 回到实时 → 恢复关注扇区的实时语音监听
+    if (typeof window.syncSectorVoiceLive === 'function') window.syncSectorVoiceLive();
     el.progress.value = 0;
     el.progress.style.setProperty('--fill', '0%');
     if (el.progressPct) el.progressPct.textContent = '0%';
@@ -5905,7 +5927,8 @@ function esc(s) {
 var voicePollTimer = null;
 var voiceChartTimer = null;
 var _voiceChartCount = 0;
-var _voiceLocalPlaying = null;  // 本地浏览器正在监听的通道（不共享到服务器）
+var _voicePlayEnabled = false;   // 地图“关注扇区”弹窗：允许实时语音播放总开关
+var _voiceLiveChannels = {};     // sector_code → 正在实时监听的通道号（支持多扇区同时播放）
 var _asrLastSeen = {};  // channel_id → ms timestamp of last ASR text update
 var _asrLastText = {};  // channel_id → last ASR text string
 var _chSectorNames = {};  // 动态填充: 通道号 → '别名 (代号)'（来自 /api/voice/status = CSV）
@@ -5963,6 +5986,8 @@ function voicePollStatus() {
       document.getElementById('voiceRecvStatus').textContent = '● 接收中';
       document.getElementById('voiceRecvStatus').style.color = 'var(--accent-green)';
       voiceRenderChannels(data.channels, data.playing);
+      // 关注扇区实时语音：轮询后同步（自动跟随内话通道切换）
+      if (typeof window.syncSectorVoiceLive === 'function') window.syncSectorVoiceLive();
     })
     .catch(function() {
       var el = document.getElementById('voiceRecvStatus');
@@ -6005,8 +6030,8 @@ function voiceRenderChannels(channels, playing) {
       dotClass = 'carrier';
       dotTitle = '仅有载波';
     }
-    // 使用本地状态避免跨浏览器同步
-    var isPlaying = (_voiceLocalPlaying === c.channel_id);
+    // 使用本地状态避免跨浏览器同步；卡片蓝框 = 该扇区正在实时监听（sector_code 维度，支持多选）
+    var isPlaying = !!_voiceLiveChannels[c.sector_code];
     var selClass = isPlaying ? 'selected' : '';
     var bytesStr = c.bytes_received > 1024
       ? (c.bytes_received / 1024).toFixed(1) + ' KB'
@@ -6159,10 +6184,8 @@ function voiceSyncChartSelect(channels, chartIdx) {
 
 
 
-/* ── SSE 浏览器端音频播放 ── */
+/* ── SSE 浏览器端音频播放（每通道一路 SSE，支持多通道同时播放） ── */
 var _voiceAudioCtx = null;
-var _voiceEventSource = null;
-var _voiceAudioChannel = -1;
 
 function _ensureAudioCtx() {
   if (!_voiceAudioCtx) {
@@ -6173,64 +6196,110 @@ function _ensureAudioCtx() {
   }
 }
 
-function voiceStopSSE() {
-  if (_voiceEventSource) {
-    _voiceEventSource.close();
-    _voiceEventSource = null;
-  }
-  _voiceAudioChannel = -1;
-}
-
-function voiceStartSSE(channelId) {
-  _ensureAudioCtx();
-  voiceStopSSE();
-  _voiceAudioChannel = channelId;
-
-  // 连接 SSE
-  _voiceEventSource = new EventSource('/api/voice/stream?channel=' + channelId);
-  _voiceEventSource.onmessage = function(ev) {
-    var b64 = ev.data;
-    if (!b64 || b64.length < 20) return;
-    try {
-      var binaryStr = atob(b64);
-      var len = binaryStr.length;
-      var bytes = new Uint8Array(len);
-      for (var i = 0; i < len; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
-      }
-      // 解码 WAV 或原始 PCM16
-      _voiceAudioCtx.decodeAudioData(bytes.buffer, function(buf) {
+// SSE 消息 → 播放（每消息一段 WAV/PCM16）
+function _voiceOnMessage(ev) {
+  var b64 = ev.data;
+  if (!b64 || b64.length < 20) return;
+  try {
+    var binaryStr = atob(b64);
+    var len = binaryStr.length;
+    var bytes = new Uint8Array(len);
+    for (var i = 0; i < len; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    // 解码 WAV 或原始 PCM16
+    _voiceAudioCtx.decodeAudioData(bytes.buffer, function(buf) {
+      var src = _voiceAudioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(_voiceAudioCtx.destination);
+      src.start(0);
+    }, function() {
+      // decodeAudioData 失败，尝试作为原始 PCM16 播放
+      // 从 WAV 数据中提取 PCM 部分 (跳过 44 字节 WAV 头)
+      var pcmStart = 44;
+      if (len > pcmStart + 4) {
+        var sampleCount = (len - pcmStart) / 2;
+        var float32 = new Float32Array(sampleCount);
+        var view = new DataView(bytes.buffer, pcmStart);
+        for (var i = 0; i < sampleCount; i++) {
+          float32[i] = view.getInt16(i * 2, true) / 32768;
+        }
+        var audioBuf = _voiceAudioCtx.createBuffer(1, sampleCount, 8000);
+        audioBuf.getChannelData(0).set(float32);
         var src = _voiceAudioCtx.createBufferSource();
-        src.buffer = buf;
+        src.buffer = audioBuf;
         src.connect(_voiceAudioCtx.destination);
         src.start(0);
-      }, function() {
-        // decodeAudioData 失败，尝试作为原始 PCM16 播放
-        // 从 WAV 数据中提取 PCM 部分 (跳过 44 字节 WAV 头)
-        var pcmStart = 44;
-        if (len > pcmStart + 4) {
-          var sampleCount = (len - pcmStart) / 2;
-          var float32 = new Float32Array(sampleCount);
-          var view = new DataView(bytes.buffer, pcmStart);
-          for (var i = 0; i < sampleCount; i++) {
-            float32[i] = view.getInt16(i * 2, true) / 32768;
-          }
-          var audioBuf = _voiceAudioCtx.createBuffer(1, sampleCount, 8000);
-          audioBuf.getChannelData(0).set(float32);
-          var src = _voiceAudioCtx.createBufferSource();
-          src.buffer = audioBuf;
-          src.connect(_voiceAudioCtx.destination);
-          src.start(0);
-        }
-      });
-    } catch(e) {
-      // 静默忽略解码错误
-    }
-  };
-  _voiceEventSource.onerror = function() {
-    // 连接断开时自动重连
-  };
+      }
+    });
+  } catch(e) {
+    // 静默忽略解码错误
+  }
 }
+
+// 开启某通道的 SSE 监听（幂等：已在监听则忽略）
+function _startLiveChannel(channelId) {
+  if (!channelId || channelId <= 0) return;
+  _ensureAudioCtx();
+  if (_voiceEventSources[channelId]) return;
+  var es = new EventSource('/api/voice/stream?channel=' + channelId);
+  es.onmessage = _voiceOnMessage;
+  es.onerror = function() {
+    // 连接断开时浏览器 EventSource 自动重连
+  };
+  _voiceEventSources[channelId] = es;
+}
+
+// 关闭某通道的 SSE 监听
+function _stopLiveChannel(channelId) {
+  if (!channelId) return;
+  var es = _voiceEventSources[channelId];
+  if (es) {
+    es.close();
+    delete _voiceEventSources[channelId];
+  }
+}
+
+// 关闭全部实时监听（回放开始等场景）
+function voiceStopAllSSE() {
+  Object.keys(_voiceEventSources).forEach(function(ch) {
+    _stopLiveChannel(parseInt(ch, 10));
+  });
+}
+
+// ── 地图“关注扇区”实时语音同步 ──
+// 期望播放 = (扇区在关注勾选 且 允许语音开关开 且 非回放模式) 的扇区；
+// 自动跟随各扇区轮询出的当前内话通道（EC→PLC→RS 切换时自动换流）。
+window.syncSectorVoiceLive = function() {
+  var want = {};  // sector_code → channel_id
+  if (_voicePlayEnabled && !window._replayActive
+      && _WATCHED_SECTORS && _WATCHED_SECTORS.size) {
+    var chs = window._lastChannels || [];
+    _WATCHED_SECTORS.forEach(function(code) {
+      for (var i = 0; i < chs.length; i++) {
+        if (chs[i].sector_code === code) {
+          want[code] = chs[i].channel_id;
+          break;
+        }
+      }
+    });
+  }
+  // 停止：不再期望的 / 轮询通道已切换的
+  var cur = _voiceLiveChannels;
+  Object.keys(cur).forEach(function(code) {
+    if (!(code in want) || want[code] !== cur[code]) {
+      _stopLiveChannel(cur[code]);
+      delete cur[code];
+    }
+  });
+  // 启动：新期望的
+  Object.keys(want).forEach(function(code) {
+    if (cur[code] !== want[code]) {
+      _startLiveChannel(want[code]);
+      cur[code] = want[code];
+    }
+  });
+};
 
 function voiceSelectFromCard(channelId) {
   var dateInput = document.getElementById('voiceChartDate_0');
@@ -6238,11 +6307,13 @@ function voiceSelectFromCard(channelId) {
     var d = new Date();
     dateInput.value = d.getUTCFullYear() + '-' + _zp(d.getUTCMonth()+1) + '-' + _zp(d.getUTCDate());
   }
-  // 图表选中的是扇区的默认通道号（飞坤EC，固定），播放用的是当前内话通道
+  // 反查卡片对应扇区；图表选中的是扇区的默认通道号（飞坤EC，固定），播放用的是当前内话通道
   var defCh = channelId;
+  var sectorCode = null;
   var chs = window._lastChannels || [];
   for (var i = 0; i < chs.length; i++) {
     if (String(chs[i].channel_id) === String(channelId)) {
+      sectorCode = chs[i].sector_code;
       defCh = (chs[i].default_channel !== undefined && chs[i].default_channel !== null)
         ? chs[i].default_channel : channelId;
       break;
@@ -6250,23 +6321,47 @@ function voiceSelectFromCard(channelId) {
   }
   var sel = document.getElementById('voiceChartChannel_0');
   if (sel) sel.value = defCh;
-
-  // 如果已经是当前通道，停止播放（toggle）
-  if (_voiceAudioChannel === channelId) {
-    _voiceLocalPlaying = null;
-    voiceStopSSE();
+  if (!sectorCode) {
     voiceLoadChart(0);
-    voiceRenderChannels(window._lastChannels);  // 立即刷新高亮
     return;
   }
 
-  // 本地记录播放状态（不共享到服务器，每个浏览器独立）
-  _voiceLocalPlaying = channelId;
-
-  // 启动浏览器端 SSE 音频流
-  voiceStartSSE(channelId);
+  // 该扇区正在实时监听 → 点卡片 = 停止（同步取消关注勾选）
+  if (_voiceLiveChannels[sectorCode]) {
+    if (_WATCHED_SECTORS.has(sectorCode)) {
+      _WATCHED_SECTORS.delete(sectorCode);
+      drawMap();
+    }
+    if (typeof window._syncReplayVoice === 'function') window._syncReplayVoice();
+    _stopLiveChannel(_voiceLiveChannels[sectorCode]);
+    delete _voiceLiveChannels[sectorCode];
+  } else {
+    if (window._replayActive) {
+      // 回放模式：点卡片 = 切换关注勾选（驱动回放语音），不启实时播放
+      if (_WATCHED_SECTORS.has(sectorCode)) {
+        _WATCHED_SECTORS.delete(sectorCode);
+      } else {
+        _WATCHED_SECTORS.add(sectorCode);
+      }
+      drawMap();
+      if (typeof window._syncReplayVoice === 'function') window._syncReplayVoice();
+    } else {
+      // 实时模式：确保勾选 + 语音开关打开 → 播放该扇区语音
+      if (!_WATCHED_SECTORS.has(sectorCode)) {
+        _WATCHED_SECTORS.add(sectorCode);
+        drawMap();
+        if (typeof window._syncReplayVoice === 'function') window._syncReplayVoice();
+      }
+      if (!_voicePlayEnabled) {
+        _voicePlayEnabled = true;
+        var vcb = document.getElementById('watchSectorVoiceEnable');
+        if (vcb) vcb.checked = true;
+      }
+      if (typeof window.syncSectorVoiceLive === 'function') window.syncSectorVoiceLive();
+    }
+  }
   voiceLoadChart(0);
-  voiceRenderChannels(window._lastChannels);  // 立即刷新高亮
+  if (window._lastChannels) voiceRenderChannels(window._lastChannels);  // 立即刷新蓝框高亮
 }
 
 // ═══════════════════════════════════════════════════════
