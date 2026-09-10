@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.2.58</title>
+<title>ATC综合数据中心 v2.2.59</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.2.58</span>
+  <span class="badge">v2.2.59</span>
 </div>
 
 <div class="tabs">
@@ -5929,6 +5929,7 @@ var voiceChartTimer = null;
 var _voiceChartCount = 0;
 var _voicePlayEnabled = false;   // 地图“关注扇区”弹窗：允许实时语音播放总开关
 var _voiceLiveChannels = {};     // sector_code → 正在实时监听的通道号（支持多扇区同时播放）
+var _voiceEventSources = {};     // channel_id → EventSource（每通道一路 SSE）
 var _asrLastSeen = {};  // channel_id → ms timestamp of last ASR text update
 var _asrLastText = {};  // channel_id → last ASR text string
 var _chSectorNames = {};  // 动态填充: 通道号 → '别名 (代号)'（来自 /api/voice/status = CSV）
@@ -6330,7 +6331,7 @@ function voiceSelectFromCard(channelId) {
   if (_voiceLiveChannels[sectorCode]) {
     if (_WATCHED_SECTORS.has(sectorCode)) {
       _WATCHED_SECTORS.delete(sectorCode);
-      drawMap();
+      if (typeof window.drawMap === 'function') window.drawMap();
     }
     if (typeof window._syncReplayVoice === 'function') window._syncReplayVoice();
     _stopLiveChannel(_voiceLiveChannels[sectorCode]);
@@ -6343,13 +6344,13 @@ function voiceSelectFromCard(channelId) {
       } else {
         _WATCHED_SECTORS.add(sectorCode);
       }
-      drawMap();
+      if (typeof window.drawMap === 'function') window.drawMap();
       if (typeof window._syncReplayVoice === 'function') window._syncReplayVoice();
     } else {
       // 实时模式：确保勾选 + 语音开关打开 → 播放该扇区语音
       if (!_WATCHED_SECTORS.has(sectorCode)) {
         _WATCHED_SECTORS.add(sectorCode);
-        drawMap();
+        if (typeof window.drawMap === 'function') window.drawMap();
         if (typeof window._syncReplayVoice === 'function') window._syncReplayVoice();
       }
       if (!_voicePlayEnabled) {
