@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.3.1</title>
+<title>ATC综合数据中心 v2.3.2</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.3.1</span>
+  <span class="badge">v2.3.2</span>
 </div>
 
 <div class="tabs">
@@ -5208,6 +5208,7 @@ function esc(s) {
 
   window.openWatchSectorDialog = openWatchSectorDialog;
   window.closeWatchSectorDialog = closeWatchSectorDialog;
+  window.onWatchSectorVoiceEnable = onWatchSectorVoiceEnable;
   window.toggleWatchSector = toggleWatchSector;
   window.renderWatchSectorList = renderWatchSectorList;
   // ── 雷达显示开关 ──
@@ -6231,8 +6232,10 @@ function voiceDrawWaveforms(channels) {
         found = true;
         var canvas = canvases[vi];
         var wrap = canvas.parentElement;
-        // 设置 canvas 实际尺寸
-        var w = wrap.offsetWidth || 200;
+        // 面板隐藏时 offsetWidth=0：此时不绘制（切到该页后再重绘），
+        // 否则兜底宽度会画出一条比卡片还宽的波形
+        var w = wrap.offsetWidth;
+        if (!w) continue;
         var h = 28;
         canvas.width = w * 2;  // 2x 清晰度
         canvas.height = h * 2;
@@ -6704,7 +6707,9 @@ function voiceDrawChart(durationData, flightData, dateStr, channelId, terminalCo
   if (!canvas || !durationData) return;
 
   var ctx = canvas.getContext('2d');
-  var W = canvas.parentElement.clientWidth || 800;
+  // 面板隐藏时宽度为 0：跳过绘制，等切到“通话负荷”页后再按实际宽度重绘
+  var W = canvas.parentElement.clientWidth;
+  if (!W) return;
   var H = 360;  // 增加高度给云量条留空间
   canvas.width = W * (window.devicePixelRatio || 1);
   canvas.height = H * (window.devicePixelRatio || 1);
@@ -7397,6 +7402,21 @@ function cloudMonthDraw() {
 
 // 启动轮询
 voiceInit();
+
+// 切到“通话负荷”页时按实际宽度重绘波形与图表
+// （voiceInit 在页面加载时执行，此时该面板 display:none，canvas 量到的宽度为 0）
+(function() {
+  var _prevVoiceSwitch = window.switchTab;
+  window.switchTab = function(n) {
+    _prevVoiceSwitch(n);
+    if (n === 'voice') {
+      setTimeout(function() {
+        if (window._lastChannels) voiceRenderChannels(window._lastChannels);
+        for (var i = 0; i < _voiceChartCount; i++) { voiceLoadChart(i); }
+      }, 60);
+    }
+  };
+})();
 
 // ═══════════════════════════════════════════════════════
 // ASR 实时结果 / 历史查询
