@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.3.2</title>
+<title>ATC综合数据中心 v2.3.3</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.3.2</span>
+  <span class="badge">v2.3.3</span>
 </div>
 
 <div class="tabs">
@@ -2827,14 +2827,15 @@ function esc(s) {
 
             // 槽位方向（未定制默认 0 = 正右，与旧布局一致）
             var sdir = (tkKey && _lblDir[tkKey] !== undefined) ? _lblDir[tkKey] : 0;
-            var slot = labelSlot(sp.x, sp.y, sdir, bw, bh, 16);
+            // 引线长短两档：鼠标到航迹圆距离 >100px → 长引线（短引线的 2 倍），否则短引线
+            var rad = sel ? 8 : 6;   // 圆半径5(选中外圈8)，引线从圆边外 1px 起
+            var slot = labelSlot(sp.x, sp.y, sdir, bw, bh, _leaderGapFor(sp, rad));
             var isMoving = !!(tkKey && _lblMovingKey && _lblMovingKey === tkKey);
 
             // ── 标牌引线：航迹圆边缘 → 标牌锚点（选中/拖动亮白，关注绿，相关蓝，普通浅灰） ──
             var ldx = slot.ax - sp.x, ldy = slot.ay - sp.y;
             var llen = Math.sqrt(ldx * ldx + ldy * ldy);
             if (llen > 0.1) {
-              var rad = sel ? 8 : 6;   // 圆半径5(选中外圈8)，引线从圆边外 1px 起
               var ux = ldx / llen, uy = ldy / llen;
               ctx.strokeStyle = isMoving ? 'rgba(255,255,255,0.95)'
                 : sel ? 'rgba(255,255,255,0.9)'
@@ -4159,6 +4160,49 @@ function esc(s) {
   var _rulers = [];            // 已固定的测距线 [{id, a, b}]
   var _rulerSeq = 1;
   var _mousePX = 0, _mousePY = 0;   // 鼠标在画布上的最新坐标（逻辑像素）
+
+  // ── 标牌引线长短档位 ──
+  // 鼠标到航迹圆的距离 >100px → 长引线（长度 = 短引线的 2 倍）；否则短引线
+  var LEADER_SHORT_GAP = 16;    // 短引线：圆心 → 标牌锚点的间距（保持原布局不变）
+  var LEADER_LONG_DIST = 100;   // 触发长引线的鼠标距离阈值（px）
+  var _leaderMouseActive = false;   // 鼠标是否曾进入画布（未进入时用短引线）
+  var _leaderSig = '';              // 上一帧“引线长短”签名，变化时才重绘
+  var _leaderRaf = null;
+
+  // 某航迹标牌应使用的间距：长引线时 gap = 2*短gap - rad（使引线长度恰为短引线的 2 倍）
+  function _leaderGapFor(sp, rad) {
+    if (!_leaderMouseActive) return LEADER_SHORT_GAP;
+    var dx = sp.x - _mousePX, dy = sp.y - _mousePY;
+    var d = Math.sqrt(dx * dx + dy * dy) - rad;
+    return (d > LEADER_LONG_DIST) ? (2 * LEADER_SHORT_GAP - rad) : LEADER_SHORT_GAP;
+  }
+
+  // 当前鼠标位置下各航迹“引线长短”签名：变化时触发重绘实现实时切换
+  function _leaderSignature() {
+    if (!_leaderMouseActive || !geo) return 'S';
+    var list = window._radarTracks || [];
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      var la = parseFloat(t.latitude), lo = parseFloat(t.longitude);
+      if (!isFinite(la) || !isFinite(lo)) continue;
+      var k = (t.callsign || t.ssr || '').trim();
+      if (!k) continue;
+      var sp = geo.realToPixel({lat: la, lon: lo});
+      var dx = sp.x - _mousePX, dy = sp.y - _mousePY;
+      var d = Math.sqrt(dx * dx + dy * dy) - 6;
+      out.push(k + (d > LEADER_LONG_DIST ? 'L' : 'S'));
+    }
+    return out.join(',');
+  }
+
+  function _scheduleLeaderRedraw() {
+    var sig = _leaderSignature();
+    if (sig === _leaderSig) return;
+    _leaderSig = sig;
+    if (_leaderRaf) return;
+    _leaderRaf = requestAnimationFrame(function() { _leaderRaf = null; drawMap(); });
+  }
   var _rulerRaf = null;        // 测距跟随重绘的 requestAnimationFrame 标志
   var _DEFAULT_CURSOR = 'crosshair';   // 默认十字型光标
 
@@ -4774,6 +4818,9 @@ function esc(s) {
       _mousePX = (e.clientX - rect.left) * sx;
       _mousePY = (e.clientY - rect.top) * sy;
       updateCursorCoord();   // 动态显示光标处坐标（时间标签旁）
+      // 标牌引线长短随鼠标距离实时切换（>100px → 长引线）
+      _leaderMouseActive = true;
+      _scheduleLeaderRedraw();
 
       // 标牌移动中：方向跟鼠标（45° 吸附 8 档），航迹消失则自动结束
       if (_lblMovingKey) {
@@ -4855,6 +4902,9 @@ function esc(s) {
     // 鼠标离开画布：清空光标坐标读数
     canvas.addEventListener('mouseleave', function() {
       if (_coordEl) _coordEl.textContent = '';
+      // 鼠标离开画布：引线恢复为短档
+      _leaderMouseActive = false;
+      _scheduleLeaderRedraw();
     });
 
     // F3 定位坐标 / F4 光标标点 / F5 清除标记与测距线（仅雷达地图页拦截，不影响其它页）
