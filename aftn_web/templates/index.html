@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.3.4</title>
+<title>ATC综合数据中心 v2.3.5</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.3.4</span>
+  <span class="badge">v2.3.5</span>
 </div>
 
 <div class="tabs">
@@ -4161,17 +4161,18 @@ function esc(s) {
   var _rulerSeq = 1;
   var _mousePX = 0, _mousePY = 0;   // 鼠标在画布上的最新坐标（逻辑像素）
 
-  // ── 标牌引线长短档位（仅针对“正在移动”的那一个标牌）──
-  // 右键点住某航迹开始移动其标牌时：鼠标到该航迹圆的距离 >100px → 长引线（短引线的 2 倍），
-  // 其余情况（包括未在移动的标牌）一律用短引线。
+  // ── 标牌引线长短档位（按单个标牌记忆，移动标牌时设定，移动结束后保持）──
+  // 右键点住某航迹开始移动其标牌时：鼠标到该航迹圆的距离 >100px → 长引线，≤100px → 短引线；
+  // 该档位记在该标牌上（_lblLong[key]），结束移动后保持不变；不在表中则默认短引线。
   var LEADER_SHORT_GAP = 16;    // 短引线：圆心 → 标牌锚点的间距（保持原布局不变）
   var LEADER_LONG_DIST = 100;   // 移动标牌时触发长引线的鼠标距离阈值（px）
-  var _lblMoveLong = false;     // 正在移动的标牌当前是否使用长引线
+  var LEADER_LONG_RATIO = 1.5;  // 长引线长度 = 短引线长度的 1.5 倍
+  var _lblLong = {};            // 航迹key → true 表示该标牌使用长引线
 
-  // 仅“正在移动的标牌”可能用长引线；长引线时 gap = 2*短gap - rad（使引线长度恰为短引线的 2 倍）
+  // 长引线 gap 使“引线长度 = 短引线 × 1.5”：gap = rad + 1.5*(短gap - rad)
   function _leaderGapFor(tkKey, sp, rad) {
-    if (_lblMoveLong && tkKey && _lblMovingKey && tkKey === _lblMovingKey) {
-      return 2 * LEADER_SHORT_GAP - rad;
+    if (tkKey && _lblLong[tkKey]) {
+      return rad + LEADER_LONG_RATIO * (LEADER_SHORT_GAP - rad);
     }
     return LEADER_SHORT_GAP;
   }
@@ -4452,9 +4453,9 @@ function esc(s) {
     if (!isFinite(la) || !isFinite(lo)) return;
     var sp = geo.realToPixel({lat: la, lon: lo});
     _lblDir[key] = labelDirFromMouse(sp, _mousePX, _mousePY);
-    // 初始进入移动：按鼠标到该航迹圆距离决定引线长短
+    // 初始进入移动：按鼠标到该航迹圆距离决定引线长短（记到该标牌上，移动结束后保持）
     var dx = sp.x - _mousePX, dy = sp.y - _mousePY;
-    _lblMoveLong = (Math.sqrt(dx * dx + dy * dy) - 6) > LEADER_LONG_DIST;
+    _lblLong[key] = (Math.sqrt(dx * dx + dy * dy) - 6) > LEADER_LONG_DIST;
   }
 
   // 命中航迹“任意可点部位”（中心圆/航班号文字/速度文字）—— 右键标牌移动用；返回 trk 或 null
@@ -4810,9 +4811,9 @@ function esc(s) {
         // 移动中的标牌：鼠标到该航迹圆距离 >100px → 切长引线，否则短引线
         var mdx = msp.x - _mousePX, mdy = msp.y - _mousePY;
         var wantLong = (Math.sqrt(mdx * mdx + mdy * mdy) - 6) > LEADER_LONG_DIST;
-        if (_lblDir[_lblMovingKey] !== ndir || _lblMoveLong !== wantLong) {
+        if (_lblDir[_lblMovingKey] !== ndir || _lblLong[_lblMovingKey] !== wantLong) {
           _lblDir[_lblMovingKey] = ndir;
-          _lblMoveLong = wantLong;
+          _lblLong[_lblMovingKey] = wantLong;
           drawMap();
         }
         return;
