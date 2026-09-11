@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.3.5</title>
+<title>ATC综合数据中心 v2.3.6</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.3.5</span>
+  <span class="badge">v2.3.6</span>
 </div>
 
 <div class="tabs">
@@ -4162,14 +4162,14 @@ function esc(s) {
   var _mousePX = 0, _mousePY = 0;   // 鼠标在画布上的最新坐标（逻辑像素）
 
   // ── 标牌引线长短档位（按单个标牌记忆，移动标牌时设定，移动结束后保持）──
-  // 右键点住某航迹开始移动其标牌时：鼠标到该航迹圆的距离 >100px → 长引线，≤100px → 短引线；
+  // 右键点住某航迹开始移动其标牌时：鼠标到该航迹圆的距离 >150px → 长引线，≤150px → 短引线；
   // 该档位记在该标牌上（_lblLong[key]），结束移动后保持不变；不在表中则默认短引线。
   var LEADER_SHORT_GAP = 16;    // 短引线：圆心 → 标牌锚点的间距（保持原布局不变）
-  var LEADER_LONG_DIST = 100;   // 移动标牌时触发长引线的鼠标距离阈值（px）
-  var LEADER_LONG_RATIO = 1.5;  // 长引线长度 = 短引线长度的 1.5 倍
+  var LEADER_LONG_DIST = 150;   // 移动标牌时触发长引线的鼠标距离阈值（px）
+  var LEADER_LONG_RATIO = 2.5;  // 长引线长度 = 短引线长度的 2.5 倍
   var _lblLong = {};            // 航迹key → true 表示该标牌使用长引线
 
-  // 长引线 gap 使“引线长度 = 短引线 × 1.5”：gap = rad + 1.5*(短gap - rad)
+  // 长引线 gap 使“引线长度 = 短引线 × 2.5”：gap = rad + 2.5*(短gap - rad)
   function _leaderGapFor(tkKey, sp, rad) {
     if (tkKey && _lblLong[tkKey]) {
       return rad + LEADER_LONG_RATIO * (LEADER_SHORT_GAP - rad);
