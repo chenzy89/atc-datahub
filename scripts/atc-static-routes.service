@@ -1,0 +1,15 @@
+[Unit]
+Description=ATC 数据网静态路由（雷达/语音源回程路由，修复 eno1 关闭后组播被 rp_filter 丢弃）
+Documentation=file:///home/share/atc_datahub/scripts/add_static_routes.sh
+After=network-online.target NetworkManager-wait-online.service
+Wants=network-online.target
+Before=atc-datahub.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 脚本内部已自带“等待数据网卡就绪（最多 60s）”逻辑
+ExecStart=/bin/bash /home/share/atc_datahub/scripts/add_static_routes.sh
+
+[Install]
+WantedBy=multi-user.target

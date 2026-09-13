@@ -1,0 +1,15 @@
+[Unit]
+Description=ATC multicast route for enx0c3d5e61539d
+After=network-online.target NetworkManager-wait-online.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 原单位直接 `ip route replace 224.0.0.0/4 dev enx0c3d5e61539d`，
+# 因数据网卡(USB网卡)启动慢，会报 "Error: Device for nexthop is not up." 而失败。
+# 这里加“等网卡 UP（最多 60s）”再配置。
+ExecStart=/bin/bash -c 'for i in $(seq 1 60); do ip -br link show dev enx0c3d5e61539d 2>/dev/null | grep -qw UP && break; sleep 1; done; /sbin/ip route replace 224.0.0.0/4 dev enx0c3d5e61539d'
+
+[Install]
+WantedBy=multi-user.target
