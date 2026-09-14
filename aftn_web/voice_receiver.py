@@ -876,12 +876,15 @@ class VoiceReceiver:
         # 推入 PCM 流缓冲（用于浏览器 SSE 流式播放）
         if pcm_data and self._play_lock.acquire(blocking=False):
             try:
-                if channel not in self._pcm_buffers:
-                    self._pcm_buffers[channel] = deque(maxlen=200)
+                # 注意：SSE 消费端 wait_pcm_data() 也可能先建好 _pcm_buffers/_pcm_events
+                # 而没有建 _pcm_seq，所以这里按 key 各自兜底，避免 KeyError。
+                buf = self._pcm_buffers.get(channel)
+                if buf is None:
+                    buf = deque(maxlen=200)
+                    self._pcm_buffers[channel] = buf
+                if channel not in self._pcm_events:
                     self._pcm_events[channel] = threading.Event()
-                    self._pcm_seq[channel] = 0
-                buf = self._pcm_buffers[channel]
-                seq = self._pcm_seq[channel]
+                seq = self._pcm_seq.get(channel, 0)
                 self._pcm_seq[channel] = seq + 1
                 buf.append((seq, pcm_data))
                 self._pcm_events[channel].set()
