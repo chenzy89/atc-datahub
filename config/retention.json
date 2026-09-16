@@ -1,0 +1,25 @@
+{
+  "_说明": "ATC综合数据中心 数据保留策略与维护排程配置。修改本文件后无需重启程序，清理线程每小时重读一次，当日到点即按新值执行（已过当日清理时点的改动顺延到次日）。所有小时均为北京时间(Asia/Shanghai)。",
+  "_字段说明": {
+    "cleanup_enabled": "是否启用每日过期数据清理，true/false",
+    "aftn_messages_days": "AFTN 报文(aftn_messages 表)保留天数",
+    "radar_history_days": "雷达航迹历史文件(data/radar_history/radar_YYYYMMDD.jsonl.gz)保留天数",
+    "flight_tracks_days": "航迹回放表(flight_tracks)保留天数",
+    "asr_text_days": "语音识别文本(asr_text 表)保留天数",
+    "clean_hour_bj": "每日清理执行时间(北京时整点，0-23)",
+    "vacuum_enabled": "是否启用每日 VACUUM 收缩数据库，true/false",
+    "vacuum_hour_bj": "VACUUM 执行时间(北京时整点，0-23)，建议晚于 clean_hour_bj",
+    "vacuum_min_free_mb": "VACUUM 前检查：空闲页不足此值(MB)则跳过，避免无意义的整库重写"
+  },
+
+  "cleanup_enabled": true,
+  "aftn_messages_days": 90,
+  "radar_history_days": 90,
+  "flight_tracks_days": 180,
+  "asr_text_days": 180,
+  "clean_hour_bj": 2,
+
+  "vacuum_enabled": true,
+  "vacuum_hour_bj": 4,
+  "vacuum_min_free_mb": 4
+}

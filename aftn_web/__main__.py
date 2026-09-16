@@ -29,6 +29,48 @@ from .mcp_server import start_mcp_server
 
 logger = logging.getLogger("aftn_web")
 
+# ── 数据保留策略 / 维护排程配置（外部配置文件，便于动态维护）────────────
+# 文件：config/retention.json；每次清理前重读，修改后次日生效，无需重启。
+RETENTION_CFG_PATH = Path(__file__).resolve().parent.parent / "config" / "retention.json"
+RETENTION_DEFAULTS = {
+    "cleanup_enabled": True,
+    "aftn_messages_days": 90,      # AFTN 报文保留天数
+    "radar_history_days": 90,      # 雷达航迹历史文件 .jsonl.gz 保留天数
+    "flight_tracks_days": 180,     # 航迹回放表 flight_tracks 保留天数
+    "asr_text_days": 180,          # 语音识别文本 asr_text 保留天数
+    "clean_hour_bj": 2,            # 每日清理时间（北京时整点）
+    "vacuum_enabled": True,
+    "vacuum_hour_bj": 4,           # VACUUM 收缩时间（北京时整点）
+    "vacuum_min_free_mb": 4,       # 空闲页少于此值时不 VACUUM（避免无意义整库重写）
+}
+
+
+def _load_retention_config() -> dict:
+    """读取 config/retention.json（每次调用重读，支持动态调整）。
+    文件缺失/损坏/字段非法时回退到内置默认值，不影响程序运行。"""
+    cfg = dict(RETENTION_DEFAULTS)
+    try:
+        if RETENTION_CFG_PATH.is_file():
+            with open(RETENTION_CFG_PATH, "r", encoding="utf-8") as fh:
+                user_cfg = json.load(fh)
+            if isinstance(user_cfg, dict):
+                for k, v in user_cfg.items():
+                    if k.startswith("_"):
+                        continue  # 注释字段（如 _说明）
+                    if k not in cfg:
+                        logger.warning("保留策略: 忽略未知配置项 %s=%r", k, v)
+                        continue
+                    if isinstance(cfg[k], bool):
+                        cfg[k] = bool(v)
+                    elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                        cfg[k] = int(v)
+                    else:
+                        logger.warning("保留策略: 配置项 %s 值非法(%r)，保留默认 %r", k, v, cfg[k])
+    except Exception as exc:
+        logger.exception("保留策略: 读取 %s 失败，使用默认值: %s", RETENTION_CFG_PATH, exc)
+    return cfg
+
+
 
 def setup_logging(log_dir: str | Path | None = None) -> None:
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
@@ -293,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         fdr_store = FDRStore(track_config=track_cfg)
         radar_history_store = RadarHistoryStore(
             Path(config.db_path).parent / "radar_history",
-            retention_days=90,
+            retention_days=int(_load_retention_config().get("radar_history_days", 90)),
         )
         hourly_tracker = HourlyStatsTracker()
 
@@ -435,21 +477,12 @@ def main(argv: list[str] | None = None) -> int:
     Thread(target=initial_scan, daemon=True, name="cloud-init-scan").start()
 
     # ── 每日清理线程：凌晨自动清理过期数据 ──
-    # 保留策略（勇哥 2026-09-16 确认）：
-    #   AFTN 报文 / 雷达航迹历史(文件) = 90 天
-    #   flight_tracks 表 / asr_text 表 = 180 天
-    # 排程（北京时间）：02:00 清理过期数据，04:00 执行 VACUUM 收缩数据库
-    AFTN_RETENTION_DAYS = 90
-    RADAR_RETENTION_DAYS = 90
-    FTRACK_RETENTION_DAYS = 180
-    ASR_RETENTION_DAYS = 180
-    CLEAN_HOUR_UTC = 18        # 18:00 UTC = 02:00 北京
-    VACUUM_HOUR_UTC = 20       # 20:00 UTC = 04:00 北京
-    VACUUM_MIN_FREE_MB = 4     # 空闲页少于此值时不 VACUUM（避免无意义整库重写）
+    # 保留策略与排程全部由 config/retention.json 控制（见模块顶部 RETENTION_DEFAULTS），
+    # 每小时重读一次配置，改完次日（或本次到点后）生效，无需重启。
     _last_clean_date = [""]
     _last_vacuum_date = [""]
 
-    def _vacuum_database() -> None:
+    def _vacuum_database(cfg: dict) -> None:
         """VACUUM 收缩 SQLite 文件，真正释放已删除数据占用的空间。"""
         import sqlite3
         conn = None
@@ -458,8 +491,9 @@ def main(argv: list[str] | None = None) -> int:
             free_pages = conn.execute("PRAGMA freelist_count").fetchone()[0]
             page_size = conn.execute("PRAGMA page_size").fetchone()[0]
             free_mb = free_pages * page_size / 1048576.0
-            if free_mb < VACUUM_MIN_FREE_MB:
-                logger.info("数据库收缩: 空闲页仅 %.1f MB，跳过 VACUUM", free_mb)
+            min_mb = cfg.get("vacuum_min_free_mb", RETENTION_DEFAULTS["vacuum_min_free_mb"])
+            if free_mb < min_mb:
+                logger.info("数据库收缩: 空闲页仅 %.1f MB (<%d MB)，跳过 VACUUM", free_mb, min_mb)
                 return
             logger.info("数据库收缩: VACUUM 开始（空闲页 %.1f MB）...", free_mb)
             t0 = time.monotonic()
@@ -483,32 +517,43 @@ def main(argv: list[str] | None = None) -> int:
             if stop_requested[0]:
                 break
             try:
+                cfg = _load_retention_config()
                 now = datetime.utcnow()
                 today = now.strftime("%Y-%m-%d")
+                # 北京时间 → UTC（-8 小时）
+                clean_hour_utc = (int(cfg["clean_hour_bj"]) - 8) % 24
+                vacuum_hour_utc = (int(cfg["vacuum_hour_bj"]) - 8) % 24
 
-                # ── 北京时 02:00（UTC 18:00）之后：清理过期数据，每天一次 ──
-                if _last_clean_date[0] != today and now.hour >= CLEAN_HOUR_UTC:
+                # 雷达历史存储模块自身的小时级清理，也跟随配置动态调整
+                if radar_history_store is not None:
+                    radar_history_store.retention_days = int(cfg["radar_history_days"])
+
+                # ── 到点后清理过期数据，每天一次 ──
+                if (cfg["cleanup_enabled"] and _last_clean_date[0] != today
+                        and now.hour >= clean_hour_utc):
                     _last_clean_date[0] = today
-                    _run_daily_cleanup(now)
+                    _run_daily_cleanup(now, cfg)
 
-                # ── 北京时 04:00（UTC 20:00）之后：VACUUM 收缩，每天一次 ──
-                if _last_vacuum_date[0] != today and now.hour >= VACUUM_HOUR_UTC:
+                # ── 到点后 VACUUM 收缩，每天一次 ──
+                if (cfg["vacuum_enabled"] and _last_vacuum_date[0] != today
+                        and now.hour >= vacuum_hour_utc):
                     _last_vacuum_date[0] = today
-                    _vacuum_database()
+                    _vacuum_database(cfg)
             except Exception:
                 logger.exception("每日清理异常")
 
-    def _run_daily_cleanup(now):
-        """执行一次过期数据清理（AFTN 报文 / ASR 文本 / 航迹表 / 雷达历史文件）。"""
+    def _run_daily_cleanup(now, cfg):
+        """执行一次过期数据清理（AFTN 报文 / ASR 文本 / 航迹表 / 雷达历史文件）。
+        保留天数来自 cfg（config/retention.json）。"""
         if stop_requested[0]:
             return
         try:
                 import datetime as dt_mod
-                cutoff = now - dt_mod.timedelta(days=AFTN_RETENTION_DAYS)
+                cutoff = now - dt_mod.timedelta(days=int(cfg["aftn_messages_days"]))
                 cutoff_str = cutoff.strftime("%Y-%m-%d")
                 logger.info(
                     "每日清理: 删除 %s 之前的 AFTN 报文(保留%dd)和航迹历史",
-                    cutoff_str, AFTN_RETENTION_DAYS,
+                    cutoff_str, int(cfg["aftn_messages_days"]),
                 )
 
                 # 清理 AFTN 报文
@@ -524,10 +569,11 @@ def main(argv: list[str] | None = None) -> int:
                 except Exception as exc:
                     logger.exception("每日清理: AFTN 报文删除异常: %s", exc)
 
-                # 清理 ASR 语音识别文本（保留 180 天）
+                # 清理 ASR 语音识别文本（保留天数见配置）
                 try:
                     conn = db._get_conn()
-                    cutoff_asr = (now - dt_mod.timedelta(days=ASR_RETENTION_DAYS)).strftime("%Y-%m-%d")
+                    asr_days = int(cfg["asr_text_days"])
+                    cutoff_asr = (now - dt_mod.timedelta(days=asr_days)).strftime("%Y-%m-%d")
                     result = conn.execute(
                         "DELETE FROM asr_text WHERE received_at < ?",
                         (cutoff_asr,),
@@ -535,14 +581,15 @@ def main(argv: list[str] | None = None) -> int:
                     deleted = result.rowcount
                     conn.commit()
                     logger.info("每日清理: 删除 %d 条 ASR 识别文本(保留%dd, <%s)",
-                                deleted, ASR_RETENTION_DAYS, cutoff_asr)
+                                deleted, asr_days, cutoff_asr)
                 except Exception as exc:
                     logger.exception("每日清理: ASR 文本删除异常: %s", exc)
 
-                # 清理航迹历史表 flight_tracks（保留 180 天）
+                # 清理航迹历史表 flight_tracks（保留天数见配置）
                 try:
                     conn = db._get_conn()
-                    cutoff_ft = (now - dt_mod.timedelta(days=FTRACK_RETENTION_DAYS)).strftime("%Y-%m-%d")
+                    ft_days = int(cfg["flight_tracks_days"])
+                    cutoff_ft = (now - dt_mod.timedelta(days=ft_days)).strftime("%Y-%m-%d")
                     result = conn.execute(
                         "DELETE FROM flight_tracks WHERE dof < ?",
                         (cutoff_ft,),
@@ -550,7 +597,7 @@ def main(argv: list[str] | None = None) -> int:
                     deleted = result.rowcount
                     conn.commit()
                     logger.info("每日清理: 删除 %d 条航迹记录(保留%dd, <%s)",
-                                deleted, FTRACK_RETENTION_DAYS, cutoff_ft)
+                                deleted, ft_days, cutoff_ft)
                 except Exception as exc:
                     logger.exception("每日清理: 航迹记录删除异常: %s", exc)
 
@@ -569,7 +616,7 @@ def main(argv: list[str] | None = None) -> int:
                                 date_part = fname.replace("radar_", "")
                                 try:
                                     fdate = datetime.strptime(date_part, "%Y%m%d")
-                                    if (now - fdate).days > RADAR_RETENTION_DAYS:
+                                    if (now - fdate).days > int(cfg["radar_history_days"]):
                                         f.unlink(missing_ok=True)
                                         removed += 1
                                 except ValueError:
