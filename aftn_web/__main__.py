@@ -435,10 +435,47 @@ def main(argv: list[str] | None = None) -> int:
     Thread(target=initial_scan, daemon=True, name="cloud-init-scan").start()
 
     # ── 每日清理线程：凌晨自动清理过期数据 ──
-    # 保留策略：AFTN 报文与雷达航迹历史均保留 90 天（勇哥 2026-09-16 确认）
+    # 保留策略（勇哥 2026-09-16 确认）：
+    #   AFTN 报文 / 雷达航迹历史(文件) = 90 天
+    #   flight_tracks 表 / asr_text 表 = 180 天
+    # 排程（北京时间）：02:00 清理过期数据，04:00 执行 VACUUM 收缩数据库
     AFTN_RETENTION_DAYS = 90
     RADAR_RETENTION_DAYS = 90
+    FTRACK_RETENTION_DAYS = 180
+    ASR_RETENTION_DAYS = 180
+    CLEAN_HOUR_UTC = 18        # 18:00 UTC = 02:00 北京
+    VACUUM_HOUR_UTC = 20       # 20:00 UTC = 04:00 北京
+    VACUUM_MIN_FREE_MB = 4     # 空闲页少于此值时不 VACUUM（避免无意义整库重写）
     _last_clean_date = [""]
+    _last_vacuum_date = [""]
+
+    def _vacuum_database() -> None:
+        """VACUUM 收缩 SQLite 文件，真正释放已删除数据占用的空间。"""
+        import sqlite3
+        conn = None
+        try:
+            conn = sqlite3.connect(str(db.db_path), timeout=120, isolation_level=None)
+            free_pages = conn.execute("PRAGMA freelist_count").fetchone()[0]
+            page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+            free_mb = free_pages * page_size / 1048576.0
+            if free_mb < VACUUM_MIN_FREE_MB:
+                logger.info("数据库收缩: 空闲页仅 %.1f MB，跳过 VACUUM", free_mb)
+                return
+            logger.info("数据库收缩: VACUUM 开始（空闲页 %.1f MB）...", free_mb)
+            t0 = time.monotonic()
+            conn.execute("VACUUM")
+            logger.info(
+                "数据库收缩: VACUUM 完成，耗时 %.1fs，文件 %.2f GB",
+                time.monotonic() - t0, db.db_path.stat().st_size / 1e9,
+            )
+        except Exception as exc:
+            logger.exception("数据库收缩: VACUUM 异常: %s", exc)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def daily_cleanup():
         while not stop_requested[0]:
@@ -448,14 +485,24 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 now = datetime.utcnow()
                 today = now.strftime("%Y-%m-%d")
-                if _last_clean_date[0] == today:
-                    continue
-                # 仅在北京时凌晨 02:00 之后执行（UTC 18:00 前一天）
-                # 确保只执行一次
-                if now.hour != 18:  # UTC 18:00 = 北京时 02:00
-                    continue
-                _last_clean_date[0] = today
 
+                # ── 北京时 02:00（UTC 18:00）之后：清理过期数据，每天一次 ──
+                if _last_clean_date[0] != today and now.hour >= CLEAN_HOUR_UTC:
+                    _last_clean_date[0] = today
+                    _run_daily_cleanup(now)
+
+                # ── 北京时 04:00（UTC 20:00）之后：VACUUM 收缩，每天一次 ──
+                if _last_vacuum_date[0] != today and now.hour >= VACUUM_HOUR_UTC:
+                    _last_vacuum_date[0] = today
+                    _vacuum_database()
+            except Exception:
+                logger.exception("每日清理异常")
+
+    def _run_daily_cleanup(now):
+        """执行一次过期数据清理（AFTN 报文 / ASR 文本 / 航迹表 / 雷达历史文件）。"""
+        if stop_requested[0]:
+            return
+        try:
                 import datetime as dt_mod
                 cutoff = now - dt_mod.timedelta(days=AFTN_RETENTION_DAYS)
                 cutoff_str = cutoff.strftime("%Y-%m-%d")
@@ -476,6 +523,36 @@ def main(argv: list[str] | None = None) -> int:
                     logger.info("每日清理: 删除 %d 条 AFTN 报文", deleted)
                 except Exception as exc:
                     logger.exception("每日清理: AFTN 报文删除异常: %s", exc)
+
+                # 清理 ASR 语音识别文本（保留 180 天）
+                try:
+                    conn = db._get_conn()
+                    cutoff_asr = (now - dt_mod.timedelta(days=ASR_RETENTION_DAYS)).strftime("%Y-%m-%d")
+                    result = conn.execute(
+                        "DELETE FROM asr_text WHERE received_at < ?",
+                        (cutoff_asr,),
+                    )
+                    deleted = result.rowcount
+                    conn.commit()
+                    logger.info("每日清理: 删除 %d 条 ASR 识别文本(保留%dd, <%s)",
+                                deleted, ASR_RETENTION_DAYS, cutoff_asr)
+                except Exception as exc:
+                    logger.exception("每日清理: ASR 文本删除异常: %s", exc)
+
+                # 清理航迹历史表 flight_tracks（保留 180 天）
+                try:
+                    conn = db._get_conn()
+                    cutoff_ft = (now - dt_mod.timedelta(days=FTRACK_RETENTION_DAYS)).strftime("%Y-%m-%d")
+                    result = conn.execute(
+                        "DELETE FROM flight_tracks WHERE dof < ?",
+                        (cutoff_ft,),
+                    )
+                    deleted = result.rowcount
+                    conn.commit()
+                    logger.info("每日清理: 删除 %d 条航迹记录(保留%dd, <%s)",
+                                deleted, FTRACK_RETENTION_DAYS, cutoff_ft)
+                except Exception as exc:
+                    logger.exception("每日清理: 航迹记录删除异常: %s", exc)
 
                 # 清理 radar_history 文件
                 try:
@@ -500,8 +577,8 @@ def main(argv: list[str] | None = None) -> int:
                         logger.info("每日清理: 删除 %d 个 radar_history 文件", removed)
                 except Exception as exc:
                     logger.exception("每日清理: radar_history 文件删除异常: %s", exc)
-            except Exception:
-                logger.exception("每日清理异常")
+        except Exception:
+            logger.exception("每日清理异常")
 
     Thread(target=daily_cleanup, daemon=True, name="daily-cleanup").start()
     logger.info("Daily cleanup thread started")
