@@ -251,6 +251,44 @@ GET /api/aftn_messages?message_type=FPL&limit=50
 | eta / ata | TEXT | 预计/实际落地时间 |
 | raw_message_text | TEXT | 原始报文全文 |
 
+## 数据保留策略与维护排程
+
+由**外部配置文件 `config/retention.json`** 控制（不固化在代码里，改完无需重启：清理线程每小时重读一次，当日到点即生效）。
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `cleanup_enabled` | true | 是否启用每日过期数据清理 |
+| `aftn_messages_days` | 90 | AFTN 报文（aftn_messages）保留天数 |
+| `radar_history_days` | 90 | 雷达航迹历史文件（data/radar_history/*.jsonl.gz）保留天数 |
+| `flight_tracks_days` | 180 | 航迹回放表（flight_tracks）保留天数 |
+| `asr_text_days` | 180 | 语音识别文本（asr_text）保留天数 |
+| `clean_hour_bj` | 2 | 每日清理执行时间（北京时整点） |
+| `vacuum_enabled` | true | 是否启用每日 VACUUM 收缩数据库 |
+| `vacuum_hour_bj` | 4 | VACUUM 执行时间（北京时整点） |
+| `vacuum_min_free_mb` | 4 | 空闲页不足此值(MB)时跳过 VACUUM，避免无意义整库重写 |
+
+示例（`config/retention.json`）：
+
+```json
+{
+  "cleanup_enabled": true,
+  "aftn_messages_days": 90,
+  "radar_history_days": 90,
+  "flight_tracks_days": 180,
+  "asr_text_days": 180,
+  "clean_hour_bj": 2,
+  "vacuum_enabled": true,
+  "vacuum_hour_bj": 4,
+  "vacuum_min_free_mb": 4
+}
+```
+
+说明：
+
+- 清理按各表的日期字段删除超过保留期的数据（`aftn_messages.received_at` / `asr_text.received_at` / `flight_tracks.dof` / 雷达历史文件名日期）。
+- SQLite 删除记录**不会自动收缩文件**，因此每天在 `vacuum_hour_bj` 执行一次 `VACUUM` 真正释放空间。
+- 单个文件缺失、JSON 损坏或字段值非法时会自动回退到内置默认值并记录告警，不影响程序运行。
+
 ## 开机自启（systemd）
 
 创建服务文件 `/etc/systemd/system/atc-aftn-web.service`：
