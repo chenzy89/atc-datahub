@@ -435,6 +435,9 @@ def main(argv: list[str] | None = None) -> int:
     Thread(target=initial_scan, daemon=True, name="cloud-init-scan").start()
 
     # ── 每日清理线程：凌晨自动清理过期数据 ──
+    # 保留策略：AFTN 报文与雷达航迹历史均保留 90 天（勇哥 2026-09-16 确认）
+    AFTN_RETENTION_DAYS = 90
+    RADAR_RETENTION_DAYS = 90
     _last_clean_date = [""]
 
     def daily_cleanup():
@@ -454,9 +457,12 @@ def main(argv: list[str] | None = None) -> int:
                 _last_clean_date[0] = today
 
                 import datetime as dt_mod
-                cutoff = now - dt_mod.timedelta(days=180)
+                cutoff = now - dt_mod.timedelta(days=AFTN_RETENTION_DAYS)
                 cutoff_str = cutoff.strftime("%Y-%m-%d")
-                logger.info("每日清理: 删除 %s 之前的 AFTN 报文和航迹历史", cutoff_str)
+                logger.info(
+                    "每日清理: 删除 %s 之前的 AFTN 报文(保留%dd)和航迹历史",
+                    cutoff_str, AFTN_RETENTION_DAYS,
+                )
 
                 # 清理 AFTN 报文
                 try:
@@ -486,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
                                 date_part = fname.replace("radar_", "")
                                 try:
                                     fdate = datetime.strptime(date_part, "%Y%m%d")
-                                    if (now - fdate).days > 180:
+                                    if (now - fdate).days > RADAR_RETENTION_DAYS:
                                         f.unlink(missing_ok=True)
                                         removed += 1
                                 except ValueError:
