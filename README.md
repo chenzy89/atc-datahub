@@ -289,6 +289,12 @@ GET /api/aftn_messages?message_type=FPL&limit=50
 - SQLite 删除记录**不会自动收缩文件**，因此每天在 `vacuum_hour_bj` 执行一次 `VACUUM` 真正释放空间。
 - 单个文件缺失、JSON 损坏或字段值非法时会自动回退到内置默认值并记录告警，不影响程序运行。
 
+## 雷达航迹历史（回放数据）
+
+- 存储位置：`data/radar_history/radar_YYYYMMDD.jsonl.gz`，每天一个文件，多成员 gzip JSONL（缓冲 5 秒 / 200 条刷盘，尾部不完整成员自动跳过，crash-safe）。
+- 每条记录即一帧原始航迹点（字段缩写见 `aftn_web/radar_history.py`）：`ts` 时间 / `cs` 呼号 / `ss` 二次代码 / `lt`/`ln` 经纬度 / `fl` 高度 / `hd` 航向 / `sp` 速度 / `ap`/`ad` 起降地 / `rw` 跑道 / `fp` 飞行程序 / `cf` CFL 许可高度(米) / `si` 扇区索引。
+- **CFL 前向保持**：CAT062 计划块的 CFL 并非每帧都带，若按帧原样存储，回放时绝大多数帧会显示 `0000`。因此写入时按呼号做「有值才覆盖、否则沿用最后已知值」（与实时 `fdr_store` 行为一致）；同一呼号超过 30 分钟无更新则丢弃保持值（防呼号复用串值），跨日自动清空。真·雷达未提供 CFL 的架次仍为 `0`。
+
 ## 开机自启（systemd）
 
 创建服务文件 `/etc/systemd/system/atc-aftn-web.service`：

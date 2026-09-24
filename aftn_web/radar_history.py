@@ -7,6 +7,10 @@
 
 写入策略：缓冲 5 秒或 200 条后，组装完整的独立 gzip member 写入文件。
 读取时跳过损坏的最后一个 member，保证 crash-safe。
+
+CFL 处理：CAT062 的计划块 CFL 并非每帧都带，原样存储会让回放里绝大多数帧显示 0000。
+因此写入时按呼号做「前向保持」（有值才覆盖，否则沿用最后已知值），与 fdr_store 的实时
+行为一致；同一呼号超过 _CFL_LATCH_TTL_SECONDS 无更新则丢弃保持值（防呼号复用串值）。
 """
 
 from __future__ import annotations
@@ -28,6 +32,9 @@ logger = logging.getLogger("aftn_web.radar_history")
 # 缓冲参数
 _FLUSH_INTERVAL_SECONDS = 5
 _FLUSH_BATCH_SIZE = 200
+
+# CFL 前向保持：同一呼号超过该秒数无更新则丢弃已保持的 CFL
+_CFL_LATCH_TTL_SECONDS = 1800
 
 
 def _write_gzip_member(filepath: Path, data: bytes) -> bool:
@@ -94,6 +101,7 @@ class RadarHistoryStore:
         self._last_flush = time.monotonic()
         self._current_path: Path | None = None
         self._last_cleanup = time.monotonic()
+        self._cfl_latch: dict[str, tuple[float, float]] = {}   # 呼号 → (CFL 米, 最后更新时间)
 
     # ── 公开接口 ──────────────────────────────────────────
 
@@ -116,13 +124,37 @@ class RadarHistoryStore:
             "ad": (parsed.get("adest") or "").strip().upper(),
             "rw": (parsed.get("runway") or "").strip(),
             "fp": (parsed.get("flight_procedure") or "").strip(),
-            "cf": parsed.get("cfl", 0.0),
+            "cf": 0.0,
             "si": parsed.get("sector_index", 0),
         }
 
-        line = json.dumps(point, ensure_ascii=False, separators=(",", ":")) + "\n"
+        cs_key = point["cs"].upper()
+        try:
+            cfl_now = float(parsed.get("cfl", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            cfl_now = 0.0
+
+        line = None
 
         with self._lock:
+            # CFL 前向保持（与 fdr_store 实时行为一致）
+            now_mono = time.monotonic()
+            if cs_key:
+                if cfl_now > 0:
+                    point["cf"] = cfl_now
+                    self._cfl_latch[cs_key] = (cfl_now, now_mono)
+                else:
+                    latched = self._cfl_latch.get(cs_key)
+                    if latched is not None:
+                        if now_mono - latched[1] <= _CFL_LATCH_TTL_SECONDS:
+                            point["cf"] = latched[0]
+                        else:
+                            del self._cfl_latch[cs_key]
+            elif cfl_now > 0:
+                point["cf"] = cfl_now
+
+            line = json.dumps(point, ensure_ascii=False, separators=(",", ":")) + "\n"
+
             if today != self._today:
                 self._rotate(today)
 
@@ -224,6 +256,8 @@ class RadarHistoryStore:
         self._flush_nolock()
         self._current_path = self.data_dir / f"radar_{today}.jsonl.gz"
         self._today = today
+        # 跨日清空 CFL 保持表（避免跨天串值，同时限制内存）
+        self._cfl_latch.clear()
         logger.info("radar history: rotated to %s", self._current_path.name)
 
         # 每小时检查过期清理
