@@ -49,5 +49,12 @@
     "port": 5000,
     "debug": false,
     "map_background_color": "#10223b"
+  },
+  "cloud_map": {
+    "dir": "",
+    "lookback_min": 20
+  },
+  "cloud_cover": {
+    "sample_per_hour": 0
   }
 }

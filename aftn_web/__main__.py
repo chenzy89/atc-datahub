@@ -430,6 +430,14 @@ def main(argv: list[str] | None = None) -> int:
     # ── 气象云量定时处理（每小时） ──
     _last_cloud_date = [""]
 
+    # 云量取样配置：每小时最多取多少张云图参与平均（0=全部；>0 可大幅加快历史补扫）
+    try:
+        from . import wx_cloud as _wx_cloud
+        _wx_cloud.SAMPLE_PER_HOUR = max(0, int(getattr(config, "cloud_cover_sample_per_hour", 0) or 0))
+        logger.info("云量处理：每小时取样 %s", (_wx_cloud.SAMPLE_PER_HOUR or "全部"))
+    except Exception:
+        logger.exception("云量取样配置读取失败，沿用默认（全部）")
+
     def cloud_processor():
         while not stop_requested[0]:
             time.sleep(300)  # 每5分钟检查一次
@@ -441,12 +449,13 @@ def main(argv: list[str] | None = None) -> int:
 
                 # 每天首次运行：回扫今日所有小时，补上因云图迟到漏掉的数据
                 if _last_cloud_date[0] != today:
-                    from .wx_cloud import process_and_store_day
+                    from . import wx_cloud
                     from datetime import timedelta
                     # 北京时目录名
                     bj_dt = now + timedelta(hours=8)
                     mmdd_str = f"{bj_dt.month:02d}{bj_dt.day:02d}"
-                    processed = process_and_store_day(db, mmdd_str)
+                    processed, _ = wx_cloud.process_day_if_needed(
+                        db, mmdd_str, sample_per_hour=wx_cloud.SAMPLE_PER_HOUR)
                     if processed > 0:
                         logger.info("云量日扫描 %s: %d 小时数据", mmdd_str, processed)
                     _last_cloud_date[0] = today

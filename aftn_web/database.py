@@ -2279,6 +2279,18 @@ class Database:
         )
         conn.commit()
 
+    def get_cloud_cover_hours(self, date_from: str, date_to: str) -> set:
+        """返回 [date_from, date_to] 已入库的 (date, hour) 集合
+
+        用于补全时跳过已处理的小时，避免重复下载/裁剪云图。
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT date, hour FROM cloud_cover WHERE date>=? AND date<=?",
+            (date_from, date_to),
+        ).fetchall()
+        return {(r["date"], r["hour"]) for r in rows}
+
     def get_cloud_cover(self, date: str, hour: int) -> dict[str, Any] | None:
         """获取指定日期小时的云量数据"""
         conn = self._get_conn()

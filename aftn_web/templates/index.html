@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.3.12</title>
+<title>ATC综合数据中心 v2.3.13</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.3.12</span>
+  <span class="badge">v2.3.13</span>
 </div>
 
 <div class="tabs">
@@ -7162,7 +7162,7 @@ function closeCloudMonthModal() {
   document.getElementById('modal-cloud-month').style.display = 'none';
 }
 
-// 打开/切换年月：先检查天气图挂载盘，若已挂载则补全缺失云图，再加载月视图
+// 打开/切换年月：先用库里的数据立即渲染，再后台补全（不阻塞界面）
 function cloudMonthBackfillAndLoad() {
   var yrSel = document.getElementById('cloudMonthYear');
   var moSel = document.getElementById('cloudMonthSel');
@@ -7172,34 +7172,47 @@ function cloudMonthBackfillAndLoad() {
 
   var loading = document.getElementById('cloudMonthLoading');
   var status = document.getElementById('cloudMonthStatus');
-  if (status) status.textContent = '⏳ 检查天气图挂载盘...';
   if (loading) loading.style.display = 'flex';
+  if (status) status.textContent = '⏳ 加载中...';
 
-  fetch('/api/cloud-cover/backfill?year=' + year + '&month=' + month)
-    .then(function(r) { return r.json(); })
-    .then(function(res) {
-      if (status && res) {
-        if (res.mounted === false) {
-          status.textContent = '⚠ 天气图挂载盘未挂载，仅显示已入库数据';
-        } else if (res.stored_hours > 0) {
-          status.textContent = '✅ 挂载盘已挂载，自动补全 ' + res.stored_hours + ' 小时云图数据';
-        } else if (res.cached) {
-          status.textContent = '✅ 挂载盘已挂载，该月数据刚刚已补全';
-        } else if (res.mounted === true) {
-          status.textContent = '✅ 挂载盘已挂载，数据已是最新';
-        }
-      }
-      return fetch('/api/cloud-cover/monthly?year=' + year + '&month=' + month);
-    })
+  var url = '/api/cloud-cover/monthly?year=' + year + '&month=' + month;
+
+  // ① 立即用已入库数据显示（毫秒级，不等补扫）
+  fetch(url)
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (loading) loading.style.display = 'none';
       _cloudMonthData = data;
       cloudMonthDraw();
+      // ② 后台补全（跳过已入库的小时，通常 <1s；有新增才重绘）
+      cloudMonthBackfill(year, month, status, url);
     })
     .catch(function() {
       if (loading) loading.style.display = 'none';
       if (status) status.textContent = '⚠ 云图数据加载失败';
+    });
+}
+
+function cloudMonthBackfill(year, month, status, url) {
+  if (status) status.textContent = '⏳ 后台补全云图数据...';
+  return fetch('/api/cloud-cover/backfill?year=' + year + '&month=' + month)
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+      if (!res) return;
+      if (res.mounted === false) {
+        if (status) status.textContent = '⚠ 天气图挂载盘未挂载，仅显示已入库数据';
+        return;
+      }
+      if (res.stored_hours > 0) {
+        if (status) status.textContent = '✅ 已补全 ' + res.stored_hours + ' 小时云图数据';
+        return fetch(url)
+          .then(function(r) { return r.json(); })
+          .then(function(d) { _cloudMonthData = d; cloudMonthDraw(); });
+      }
+      if (status) status.textContent = res.cached ? '✅ 数据已是最新（刚刚补全过）' : '✅ 数据已是最新';
+    })
+    .catch(function() {
+      if (status) status.textContent = '⚠ 云图补全失败（不影响已显示数据）';
     });
 }
 

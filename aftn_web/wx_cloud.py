@@ -56,6 +56,34 @@ _BACKFILL_CACHE: dict[tuple[int, int], float] = {}
 _BACKFILL_CACHE_TTL = 600.0  # 10 分钟
 _backfill_lock = threading.Lock()
 
+# 每小时最多取多少张云图参与平均（0=全部）。用于历史补扫提速，见 config.cloud_cover.sample_per_hour
+SAMPLE_PER_HOUR = 0
+
+
+def _refresh_keys() -> set:
+    """需要保持刷新的 (UTC日期, UTC小时)：当前小时 + 上一小时
+
+    云图每 ~6 分钟一张，整点后仍会陆续补入，这两个小时不跳过。
+    """
+    now = datetime.utcnow()
+    prev = now - timedelta(hours=1)
+    return {
+        (now.strftime("%Y-%m-%d"), now.hour),
+        (prev.strftime("%Y-%m-%d"), prev.hour),
+    }
+
+
+def day_dir_target_hours(mmdd_str: str) -> set | None:
+    """给定北京时 MMDD 目录名，返回该目录覆盖的 24 个 (UTC日期, UTC小时)
+
+    纯名称换算，不访问共享盘，可用于秒级判断某天是否还需要处理。
+    """
+    parsed = _parse_mmdd_year(mmdd_str)
+    if not parsed:
+        return None
+    year, month, day = parsed
+    return {_beijing_to_utc_date_hour(year, month, day, h) for h in range(24)}
+
 
 def _safe_is_dir(p: Path) -> bool:
     """安全判断目录是否存在。
@@ -191,10 +219,14 @@ def _beijing_to_utc_date_hour(year: int, month: int, day: int,
     return utc_date, utc.hour
 
 
-def process_date(mmdd_str: str) -> dict[str, dict[int, dict[str, Any]]] | None:
+def process_date(mmdd_str: str, skip_hours: set | None = None,
+                 sample_per_hour: int = 0) -> dict[str, dict[int, dict[str, Any]]] | None:
     """处理指定 MMDD 目录下所有云图，返回 {UTC日期: {UTC小时: {avg_kb, count}}}
 
     MMDD 目录名和 HHmm 文件名均为北京时，函数自动转换为 UTC。
+
+    skip_hours: 已入库的 (UTC日期, UTC小时) 集合，命中则不下载、不裁剪
+    sample_per_hour: 每小时最多取前 N 张图参与平均（0=全部）
     """
     parsed = _parse_mmdd_year(mmdd_str)
     if not parsed:
@@ -210,6 +242,7 @@ def process_date(mmdd_str: str) -> dict[str, dict[int, dict[str, Any]]] | None:
     # 按 UTC 日期+小时收集所有裁剪后的大小
     # result[UTC日期][UTC小时] = [size_kb, ...]
     result: dict[str, dict[int, list[float]]] = {}
+    skipped = 0
 
     for fname in sorted(os.listdir(str(dir_path))):
         if not fname.upper().endswith(".PNG"):
@@ -222,16 +255,24 @@ def process_date(mmdd_str: str) -> dict[str, dict[int, dict[str, Any]]] | None:
         if bj_hour < 0 or bj_hour > 23:
             continue
 
+        # 北京时 → UTC（先算出来，命中跳过就不用读文件了）
+        utc_date, utc_hour = _beijing_to_utc_date_hour(year, month, day, bj_hour)
+        if skip_hours and (utc_date, utc_hour) in skip_hours:
+            skipped += 1
+            continue
+        if sample_per_hour and len(result.get(utc_date, {}).get(utc_hour, [])) >= sample_per_hour:
+            continue
+
         file_path = dir_path / fname
         size_bytes = crop_top_half_size_bytes(file_path)
         if size_bytes is None or size_bytes <= 0:
             continue
 
-        # 北京时 → UTC
-        utc_date, utc_hour = _beijing_to_utc_date_hour(year, month, day, bj_hour)
-
         size_kb = size_bytes / 1024.0
         result.setdefault(utc_date, {}).setdefault(utc_hour, []).append(size_kb)
+
+    if skipped:
+        logger.debug("目录 %s：跳过已入库云图 %d 张（免下载）", mmdd_str, skipped)
 
     if not result:
         logger.info("目录 %s 中无有效云图", mmdd_str)
@@ -254,14 +295,16 @@ def process_date(mmdd_str: str) -> dict[str, dict[int, dict[str, Any]]] | None:
     return final
 
 
-def process_and_store_day(db, mmdd_str: str) -> int:
+def process_and_store_day(db, mmdd_str: str, skip_hours: set | None = None,
+                          sample_per_hour: int = 0) -> int:
     """处理指定MMDD目录并存入数据库，返回存储的小时数
 
     目录名和文件名均为北京时，内部自动转换为 UTC 后存储。
+    skip_hours: 已入库的 (UTC日期, UTC小时)，命中则不再重算
     """
     from .database import Database  # noqa: F811
 
-    result = process_date(mmdd_str)
+    result = process_date(mmdd_str, skip_hours=skip_hours, sample_per_hour=sample_per_hour)
     if not result:
         return 0
 
@@ -282,25 +325,62 @@ def process_and_store_day(db, mmdd_str: str) -> int:
     return stored
 
 
+def process_day_if_needed(db, mmdd_str: str, existing: set | None = None,
+                          sample_per_hour: int = 0) -> tuple[int, bool]:
+    """按需处理一个北京时 MMDD 目录，返回 (新增/更新小时数, 是否访问了共享盘)
+
+    先做「名称→UTC」换算，若该目录 24 个目标小时都已在库（除当前/上一小时），
+    直接返回，连目录都不列 —— 这是月视图补全从分钟级降到毫秒级的关键。
+    """
+    targets = day_dir_target_hours(mmdd_str)
+    if not targets:
+        return 0, False
+
+    refresh = _refresh_keys()
+    if existing is None:
+        dmin = min(t[0] for t in targets)
+        dmax = max(t[0] for t in targets)
+        existing = db.get_cloud_cover_hours(dmin, dmax)
+
+    # 需要刷新的小时不算「已齐全」
+    if all((t in existing and t not in refresh) for t in targets):
+        return 0, False
+
+    if not _safe_is_dir(WXMAP_DIR / mmdd_str):
+        return 0, False
+
+    skip = {t for t in existing if t not in refresh}
+    stored = process_and_store_day(db, mmdd_str, skip_hours=skip, sample_per_hour=sample_per_hour)
+    if stored > 0:
+        logger.info("已处理 %s: %d 小时云量数据", mmdd_str, stored)
+    return stored, True
+
+
 def scan_all(db) -> int:
-    """扫描所有 MMDD 目录并处理，返回处理的总小时数"""
+    """扫描所有 MMDD 目录并处理，返回处理的总小时数
+
+    已齐全的目录会直接跳过（不访问共享盘），因此启动扫描很快。
+    """
     total = 0
     if not _safe_is_dir(WXMAP_DIR):
         logger.info("WXMap目录不存在或不可用: %s", WXMAP_DIR)
         return 0
 
+    scanned_dirs = 0
+    skipped_dirs = 0
     for entry in sorted(os.listdir(str(WXMAP_DIR))):
         if not re.match(r"^\d{4}$", entry):
             continue
-        if not _safe_is_dir(WXMAP_DIR / entry):
-            continue
 
-        stored = process_and_store_day(db, entry)
-        if stored > 0:
-            total += stored
-            logger.info("已处理 %s: %d 小时云量数据", entry, stored)
+        stored, accessed = process_day_if_needed(db, entry, sample_per_hour=SAMPLE_PER_HOUR)
+        total += stored
+        if accessed:
+            scanned_dirs += 1
+        else:
+            skipped_dirs += 1
 
-    logger.info("云量数据扫描完成，共处理 %d 小时", total)
+    logger.info("云量数据扫描完成：处理 %d 小时（扫描 %d 个目录，跳过 %d 个已齐全目录）",
+                total, scanned_dirs, skipped_dirs)
     return total
 
 
@@ -325,13 +405,10 @@ def process_today_hourly(db) -> int:
         logger.info("北京时目录不存在或不可用: %s", dir_path)
         return 0
 
-    # 检查这个 UTC 小时是否已处理
+    # 当前小时持续刷新：云图每 ~6 分钟一张，整点内还会陆续到达，
+    # 每次重算并用 INSERT OR REPLACE 覆盖（代价仅 ~10 张图）
     utc_date = now_utc.strftime("%Y-%m-%d")
     utc_hour = now_utc.hour
-    existing = db.get_cloud_cover(utc_date, utc_hour)
-    if existing is not None:
-        logger.debug("当前小时 %s/%d 已有云量数据，跳过", utc_date, utc_hour)
-        return 0
 
     # 找对应北京时的图片（如 UTC 06:00 → 北京时 14:00 → 文件名 14xx.PNG）
     prefix = f"{bj_hour:02d}"
@@ -370,17 +447,23 @@ def backfill_month(db, year: int, month: int) -> dict[str, Any]:
     """检查挂载盘并补全指定 UTC 年月的云量数据。
 
     云图目录按北京时命名（MMDD），UTC 月份 YYYY-MM 对应的北京时日期范围是
-    YYYY-MM-01 ～ YYYY-(MM+1)-01，全部处理一遍（INSERT OR REPLACE 幂等）。
+    YYYY-MM-01 ～ YYYY-(MM+1)-01，全部遍历一遍。
+
+    ⚡ 已入库的小时不会重新下载/裁剪：
+      - 目录 24 个小时都已入库 → 连列目录都省掉（零共享盘访问，毫秒级）
+      - 部分缺失 → 只处理缺的小时；当前/上一小时始终刷新
 
     返回:
         mounted: 挂载盘是否已挂载
-        processed_days / stored_hours: 处理目录数 / 新写入小时数
+        processed_days / skipped_days: 实际访问共享盘 / 直接跳过的目录数
+        stored_hours: 新写入（或刷新）的小时数
         cached: 是否命中补全缓存（10分钟内不重复补全）
     """
     if not is_wxmap_mounted():
         return {
             "mounted": False,
             "processed_days": 0,
+            "skipped_days": 0,
             "stored_hours": 0,
             "cached": False,
             "message": "天气图挂载盘未挂载，仅显示已入库数据",
@@ -394,6 +477,7 @@ def backfill_month(db, year: int, month: int) -> dict[str, Any]:
             return {
                 "mounted": True,
                 "processed_days": 0,
+                "skipped_days": 0,
                 "stored_hours": 0,
                 "cached": True,
                 "message": "该月数据刚刚已补全",
@@ -409,24 +493,28 @@ def backfill_month(db, year: int, month: int) -> dict[str, Any]:
         end_bj = next_first + timedelta(hours=8)
 
         processed_days = 0
+        skipped_days = 0
         stored_hours = 0
         d = start_bj
         while d <= end_bj:
             mmdd = f"{d.month:02d}{d.day:02d}"
-            if _safe_is_dir(WXMAP_DIR / mmdd):
-                stored = process_and_store_day(db, mmdd)
-                if stored > 0:
-                    stored_hours += stored
-                    logger.info("云量补全 %s: %d 小时", mmdd, stored)
+            stored, accessed = process_day_if_needed(
+                db, mmdd, sample_per_hour=SAMPLE_PER_HOUR
+            )
+            if accessed:
                 processed_days += 1
+            else:
+                skipped_days += 1
+            stored_hours += stored
             d += timedelta(days=1)
 
-        logger.info("云量补全 %04d-%02d 完成: %d 天目录, %d 小时",
-                    year, month, processed_days, stored_hours)
+        logger.info("云量补全 %04d-%02d 完成：扫描 %d 个目录，跳过 %d 个（已齐全），写入 %d 小时",
+                    year, month, processed_days, skipped_days, stored_hours)
         return {
             "mounted": True,
             "processed_days": processed_days,
+            "skipped_days": skipped_days,
             "stored_hours": stored_hours,
             "cached": False,
-            "message": f"补全完成：{processed_days} 天目录，{stored_hours} 小时数据",
+            "message": f"补全完成：扫描 {processed_days} 天目录，写入 {stored_hours} 小时数据",
         }
