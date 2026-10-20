@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.3.14</title>
+<title>ATC综合数据中心 v2.3.15</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.3.14</span>
+  <span class="badge">v2.3.15</span>
 </div>
 
 <div class="tabs">
@@ -4321,6 +4321,8 @@ function esc(s) {
     if (d) { fpParams.set('adest', d); }
     if (v('qfd_from')) { fpParams.set('dof_from', v('qfd_from')); }
     if (v('qfd_to')) { fpParams.set('dof_to', v('qfd_to')); }
+    // 批量查航迹时的 dof：起止日期相同才按该日期精确匹配，否则取每架最新航迹
+    var trailDof = (v('qfd_from') && v('qfd_from') === v('qfd_to')) ? v('qfd_from') : '';
     if (air) { fpParams.set('airport', air); }
     if (fr) { fpParams.set('route', fr); }
     if (fr2) { fpParams.set('flight_rule', fr2); }
@@ -4364,7 +4366,7 @@ function esc(s) {
         fetch('/api/flight_tracks/batch', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({callsigns: callsigns, dof: d2 || ''})
+          body: JSON.stringify({callsigns: callsigns, dof: trailDof})
         }).then(function(r) { return r.json(); }),
         fetch('/api/maplist').then(function(r) { return r.json(); }).then(function(fileList) {
           if (fileList.length === 0) return {order:[], layers:{}};
