@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import logging
 from datetime import date, datetime, timedelta
@@ -24,6 +25,7 @@ logger = logging.getLogger("aftn_web.webapp")
 from .radar_history import RadarHistoryStore
 from .asr_receiver import AsrReceiver
 from .voice_receiver import VoiceReceiver, SECTOR_CHANNELS, SECTOR_ALL_CHANNELS, SECTOR_MERGE_RULES
+
 
 def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = None, radar_history_store: RadarHistoryStore | None = None, voice_receiver: VoiceReceiver | None = None, asr_receiver: AsrReceiver | None = None) -> Flask:
     _RADAR_MAP_VERSION = "v0.1"
@@ -342,6 +344,35 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
                 "end_time": r["end_time"],
             })
         return jsonify(result)
+
+    @app.route("/api/airport_tracks")
+    def api_airport_tracks():
+        """机场进离场航迹
+
+        识别规则：航迹任一点距机场中心 <= radius_km 且高度 <= ceiling_m，
+        即视为该机场的进离场航班。数据源为 radar_history（flight_tracks
+        只保存深圳终端区航班，不包含广州/惠州）。
+        """
+        code = (_req_str("airport") or "").upper()
+        date_str = (_req_str("date") or "").strip()[:10]
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "日期格式应为 YYYY-MM-DD"}), 400
+
+        from .airport_tracks import get_airport_tracks
+        try:
+            payload = get_airport_tracks(date_str, code)
+        except KeyError:
+            return jsonify({"error": "未知机场: " + (code or "（空）")}), 400
+
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(body) > 1024:
+            body = gzip.compress(body, 5)
+            return Response(body, mimetype="application/json",
+                            headers={"Content-Encoding": "gzip",
+                                     "Content-Length": str(len(body))})
+        return Response(body, mimetype="application/json")
 
     @app.route("/api/config/terminal_airports")
     def api_terminal_airports():

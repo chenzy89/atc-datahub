@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.3.13</title>
+<title>ATC综合数据中心 v2.3.14</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.3.13</span>
+  <span class="badge">v2.3.14</span>
 </div>
 
 <div class="tabs">
@@ -694,6 +694,8 @@ canvas#radarMap {
       <button class="btn btn-secondary" onclick="resetPlans()">重置</button>
       <button class="btn btn-secondary" onclick="exportExcel()">导出</button>
       <button class="btn btn-secondary" onclick="batchFlightTrail()" style="font-size:12px;padding:4px 10px;">批量轨迹</button>
+      <button class="btn btn-secondary" onclick="openAirportTrail('ZGGG')" style="font-size:12px;padding:4px 10px;">广州进离场</button>
+      <button class="btn btn-secondary" onclick="openAirportTrail('ZGHZ')" style="font-size:12px;padding:4px 10px;">惠州进离场</button>
       <span id="fpl-info" class="text-muted" style="margin-left:6px;"></span>
     </div>
   </div>
@@ -1089,7 +1091,7 @@ canvas#radarMap {
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);flex-shrink:0;gap:10px;flex-wrap:wrap;">
       <h2 id="trail-title" style="font-size:15px;font-weight:600;color:var(--accent-green);">历史轨迹</h2>
       <div id="trail-time-filter" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-        <span style="font-size:11px;color:var(--text-muted);">日期</span>
+        <span style="font-size:11px;color:var(--text-muted);">日期 (UTC)</span>
         <input type="date" id="trailDate" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:135px;">
         <span style="font-size:11px;color:var(--text-muted);">UTC</span>
         <input type="time" id="trailFromTime" value="00:00" step="1" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:120px;">
@@ -1106,6 +1108,30 @@ canvas#radarMap {
       <div id="trail-loading" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(10,22,40,0.85);z-index:10;align-items:center;justify-content:center;flex-direction:column;">
         <div style="width:32px;height:32px;border:3px solid #1e3a5f;border-top-color:#58a6ff;border-radius:50%;animation:rl-spin .8s linear infinite;margin-bottom:16px;"></div>
         <div style="color:#94a3b8;font-size:16px;">加载中...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 机场进离场航迹弹窗 ── -->
+<div id="modal-airport-trail" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.8);z-index:1550;align-items:center;justify-content:center;" onclick="if(event.target===this)closeAirportTrail()">
+  <div style="background:#0d1117;border:1px solid var(--border);border-radius:10px;width:94%;max-width:1200px;height:88vh;display:flex;flex-direction:column;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);flex-shrink:0;gap:10px;flex-wrap:wrap;">
+      <h2 id="apt-trail-title" style="font-size:15px;font-weight:600;color:var(--accent-green);">机场进离场航迹</h2>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <span style="font-size:11px;color:var(--text-muted);">日期 (UTC)</span>
+        <input type="date" id="aptTrailDate" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:135px;">
+        <button class="btn btn-primary btn-sm" onclick="drawAirportTrail()">绘制</button>
+        <span id="apt-trail-info" style="font-size:12px;color:var(--text-muted);"></span>
+        <button onclick="closeAirportTrail()" style="background:none;border:none;color:var(--text-muted);font-size:22px;cursor:pointer;line-height:1;margin-left:6px;">&times;</button>
+      </div>
+    </div>
+    <div style="flex:1;position:relative;overflow:hidden;">
+      <canvas id="aptTrailCanvas"></canvas>
+      <div id="apt-trail-loading" style="display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(10,22,40,0.85);z-index:10;align-items:center;justify-content:center;flex-direction:column;">
+        <div style="width:32px;height:32px;border:3px solid #1e3a5f;border-top-color:#58a6ff;border-radius:50%;animation:rl-spin .8s linear infinite;margin-bottom:16px;"></div>
+        <div style="color:#94a3b8;font-size:16px;">加载中...</div>
+        <div style="color:#64748b;font-size:12px;margin-top:8px;">首次查询某个日期需扫描雷达历史，约 10-30 秒；之后会缓存</div>
       </div>
     </div>
   </div>
@@ -3913,6 +3939,354 @@ function esc(s) {
     ctx.textBaseline = 'bottom';
     ctx.fillText(batchData.length + ' 条航迹', 12, h - 12);
   }
+
+  // ══════════════════════════════════════════════════════════
+  // 机场进离场航迹（广州白云 / 惠州平潭）
+  // ══════════════════════════════════════════════════════════
+  var _aptGeo = null;
+  var _aptCode = 'ZGGG';
+  var _aptReqSeq = 0;
+  var _aptState = null;            // { payload, mapElements }
+  var _aptInteractionSetup = false;
+  var _aptDragging = false;
+  var _aptDragStartX = 0, _aptDragStartY = 0;
+  var _aptDragCenterLat = 0, _aptDragCenterLon = 0;
+  var _APT_ALT_BUCKETS = 12;
+
+  function _aptTodayUtc() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function _aptAltColor(type, alt, scale) {
+    var t = Math.max(0, Math.min(1, (alt || 0) / (scale || 3000)));
+    var hue = type === 'ARRIVAL' ? 145 : 210;
+    var light = 36 + 42 * t;   // 低高度深、高高度亮，便于在深色底图上分辨
+    return 'hsl(' + hue + ',90%,' + light.toFixed(1) + '%)';
+  }
+
+  function openAirportTrail(code) {
+    var modal = document.getElementById('modal-airport-trail');
+    if (!modal) return;
+    _aptCode = code || 'ZGGG';
+    modal.style.display = 'flex';
+    _aptSetupInteraction();
+    var dateEl = document.getElementById('aptTrailDate');
+    if (dateEl && !dateEl.value) dateEl.value = _aptTodayUtc();
+    var title = document.getElementById('apt-trail-title');
+    if (title) {
+      title.textContent = (code === 'ZGGG' ? '广州白云机场' : (code === 'ZGHZ' ? '惠州平潭机场' : code)) +
+        ' 进离场航迹';
+    }
+    var info = document.getElementById('apt-trail-info');
+    if (info) info.textContent = '';
+    _aptGeo = null;
+    _aptState = null;
+    drawTrailEmpty(document.getElementById('aptTrailCanvas'), '选择日期后点击「绘制」');
+  }
+
+  function closeAirportTrail() {
+    var modal = document.getElementById('modal-airport-trail');
+    if (modal) modal.style.display = 'none';
+    _aptReqSeq++;  // 使未完成的查询作废
+    _aptGeo = null;
+    _aptState = null;
+  }
+
+  // 加载当前启用的地图图层（与雷达地图的开关保持一致）
+  function _aptLoadMapElements() {
+    return fetch('/api/maplist')
+      .then(function(r) { return r.json(); })
+      .then(function(fileList) {
+        if (!fileList || !fileList.length) return [];
+        var promises = fileList.map(function(entry) {
+          return fetch('/api/map_file/' + encodeURIComponent(entry.name))
+            .then(function(r) { return r.ok ? r.text() : ''; });
+        });
+        return Promise.all(promises).then(function(texts) {
+          var flat = [];
+          for (var i = 0; i < fileList.length; i++) {
+            var name = fileList[i].name;
+            var enabled = mapLayers[name] ? !!mapLayers[name].enabled : !!fileList[i].enabled;
+            if (enabled && texts[i]) {
+              flat = flat.concat(parseMapFile(texts[i]));
+            }
+          }
+          return flat;
+        });
+      })
+      .catch(function() { return []; });
+  }
+
+  function drawAirportTrail() {
+    var modal = document.getElementById('modal-airport-trail');
+    if (!modal || modal.style.display === 'none') return;
+    var titleEl = document.getElementById('apt-trail-title');
+    var code = _aptCode || 'ZGGG';
+    var dateEl = document.getElementById('aptTrailDate');
+    var dateStr = dateEl ? dateEl.value : _aptTodayUtc();
+    if (!dateStr) dateStr = _aptTodayUtc();
+    var loading = document.getElementById('apt-trail-loading');
+    var info = document.getElementById('apt-trail-info');
+    if (loading) loading.style.display = 'flex';
+    if (info) info.textContent = '查询中...（首次约 10-30 秒）';
+    var reqSeq = ++_aptReqSeq;
+
+    Promise.all([
+      fetch('/api/airport_tracks?airport=' + encodeURIComponent(code) + '&date=' + encodeURIComponent(dateStr))
+        .then(function(r) { return r.json(); }),
+      _aptLoadMapElements()
+    ]).then(function(results) {
+      if (reqSeq !== _aptReqSeq) return;  // 已有更新的查询，丢弃旧结果
+      var data = results[0] || {};
+      var mapElements = results[1] || [];
+      if (loading) loading.style.display = 'none';
+      if (data.error) {
+        if (info) info.textContent = '✗ ' + data.error;
+        drawTrailEmpty(document.getElementById('aptTrailCanvas'), '查询失败：' + data.error);
+        return;
+      }
+      _aptState = { payload: data, mapElements: mapElements };
+      _aptGeo = null;
+      var apt = data.airport || {};
+      var st = data.stats || {};
+      if (titleEl) titleEl.textContent = (apt.name || code) + ' 进离场航迹';
+      if (info) {
+        info.textContent = '进场 ' + (st.arrival || 0) + ' 架次 / 离场 ' + (st.departure || 0) + ' 架次';
+      }
+      _renderAirportTrail();
+    }).catch(function(err) {
+      if (reqSeq !== _aptReqSeq) return;
+      if (loading) loading.style.display = 'none';
+      if (info) info.textContent = '✗ ' + err.message;
+      drawTrailEmpty(document.getElementById('aptTrailCanvas'), '查询失败：' + err.message);
+    });
+  }
+
+  function _renderAirportTrail() {
+    var canvas = document.getElementById('aptTrailCanvas');
+    if (!canvas || !_aptState) return;
+    var payload = _aptState.payload;
+    var apt = payload.airport || {};
+    var center = apt.center || {lat: 0, lon: 0};
+    var tracks = payload.tracks || [];
+    var scaleAlt = apt.color_scale_m || 3000;
+
+    var container = canvas.parentElement;
+    var w = container.clientWidth;
+    var h = container.clientHeight;
+    if (w < 100) w = 800;
+    if (h < 100) h = 500;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    ctx.fillStyle = _MAP_BG;
+    ctx.fillRect(0, 0, w, h);
+
+    if (!_aptGeo) {
+      var radiusPx = Math.max(60, Math.min(w, h) / 2 - 56);
+      var scale = (apt.display_radius_km || 60) * 1000 / radiusPx;
+      _aptGeo = new GeoTransform({lat: center.lat, lon: center.lon}, scale, w, h);
+    } else {
+      _aptGeo.updateScreen(w, h);
+    }
+
+    // 地图背景
+    var mapElements = _aptState.mapElements || [];
+    for (var mi = 0; mi < mapElements.length; mi++) {
+      drawElement(ctx, mapElements[mi], _aptGeo);
+    }
+
+    // 机场中心 & 识别空域圆柱
+    var cpx = _aptGeo.realToPixel({lat: center.lat, lon: center.lon});
+    var cylPx = (apt.radius_km || 6) * 1000 / _aptGeo.scale;
+    ctx.beginPath();
+    ctx.arc(cpx.x, cpx.y, Math.max(3, cylPx), 0, 2 * Math.PI);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fill();
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = 'rgba(226,232,240,0.75)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(cpx.x, cpx.y, 2.5, 0, 2 * Math.PI);
+    ctx.fillStyle = '#f8fafc';
+    ctx.fill();
+
+    if (!tracks.length) {
+      ctx.fillStyle = '#64748b';
+      ctx.font = '15px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('当天没有航班进入该机场空域', w / 2, h / 2);
+      ctx.font = '12px sans-serif';
+      ctx.fillText('（识别条件：距中心 ≤ ' + (apt.radius_km || 6) + ' km 且高度 ≤ ' + (apt.ceiling_m || 300) + ' m）', w / 2, h / 2 + 26);
+      _aptDrawLegend(ctx, w, h, apt, payload.stats || {}, 0);
+      return;
+    }
+
+    // 按 类型+高度桶 合并路径，避免上万次 stroke
+    var paths = {};
+    function _pathFor(type, fl) {
+      var t = Math.max(0, Math.min(1, (fl || 0) / scaleAlt));
+      var b = Math.min(_APT_ALT_BUCKETS - 1, Math.floor(t * _APT_ALT_BUCKETS));
+      var key = type + '_' + b;
+      if (!paths[key]) {
+        paths[key] = { path: new Path2D(), type: type, alt: (b + 0.5) / _APT_ALT_BUCKETS * scaleAlt };
+      }
+      return paths[key].path;
+    }
+
+    for (var ti = 0; ti < tracks.length; ti++) {
+      var trk = tracks[ti];
+      var pts = trk.points || [];
+      var lastPx = null;
+      var lastTs = null;
+      for (var pi = 0; pi < pts.length; pi++) {
+        var p = pts[pi];
+        var px = _aptGeo.realToPixel({lat: p.lt, lon: p.ln});
+        var ts = p.ts ? Date.parse(p.ts) : NaN;
+        var gap = (lastTs !== null && !isNaN(ts) && !isNaN(lastTs)) ? (ts - lastTs) : 0;
+        if (lastPx && gap <= 120000) {
+          var path = _pathFor(trk.type, (parseFloat(lastPx.fl) + parseFloat(p.fl || 0)) / 2);
+          path.moveTo(lastPx.x, lastPx.y);
+          path.lineTo(px.x, px.y);
+        }
+        lastPx = {x: px.x, y: px.y, fl: p.fl || 0};
+        lastTs = isNaN(ts) ? null : ts;
+      }
+    }
+
+    ctx.lineWidth = 1.2;
+    ctx.lineCap = 'round';
+    ctx.globalAlpha = 0.9;
+    for (var key in paths) {
+      var item = paths[key];
+      ctx.strokeStyle = _aptAltColor(item.type, item.alt, scaleAlt);
+      ctx.stroke(item.path);
+    }
+    ctx.globalAlpha = 1.0;
+
+    _aptDrawLegend(ctx, w, h, apt, payload.stats || {}, tracks.length);
+  }
+
+  function _aptDrawLegend(ctx, w, h, apt, stats, trackCount) {
+    var x = 14, y = 16;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillText((apt.name || '') + '  ' + (apt.icao || ''), x, y);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '11px sans-serif';
+    ctx.fillText('识别空域：≤ ' + (apt.radius_km || 0) + ' km / ≤ ' + (apt.ceiling_m || 0) + ' m' +
+      '    进场 ' + (stats.arrival || 0) + ' 架次 / 离场 ' + (stats.departure || 0) + ' 架次', x, y + 20);
+
+    var ly = y + 48;
+    // 进场 / 离场 色标
+    var items = [
+      {label: '进场 ARRIVAL', type: 'ARRIVAL'},
+      {label: '离场 DEPARTURE', type: 'DEPARTURE'}
+    ];
+    for (var i = 0; i < items.length; i++) {
+      ctx.fillStyle = _aptAltColor(items[i].type, 1500, apt.color_scale_m || 3000);
+      ctx.fillRect(x, ly, 16, 6);
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '11px sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(items[i].label, x + 24, ly + 3);
+      ly += 20;
+    }
+
+    // 高度深浅渐变条
+    ly += 6;
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '11px sans-serif';
+    ctx.textBaseline = 'top';
+    ctx.fillText('高度（颜色越亮越高）', x, ly);
+    var barX = x, barY = ly + 18, barW = 150, barH = 8;
+    for (var b = 0; b < _APT_ALT_BUCKETS; b++) {
+      var alt = (b + 0.5) / _APT_ALT_BUCKETS * (apt.color_scale_m || 3000);
+      ctx.fillStyle = _aptAltColor('DEPARTURE', alt, apt.color_scale_m || 3000);
+      ctx.fillRect(barX + b * (barW / _APT_ALT_BUCKETS), barY, barW / _APT_ALT_BUCKETS + 1, barH);
+    }
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('0 m', barX, barY + barH + 4);
+    ctx.textAlign = 'right';
+    ctx.fillText((apt.color_scale_m || 3000) + ' m+', barX + barW, barY + barH + 4);
+
+    // 右下角统计
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'bottom';
+    ctx.fillStyle = '#64748b';
+    ctx.font = '11px sans-serif';
+    ctx.fillText((trackCount || 0) + ' 条航迹  |  ' + (payloadDateText() || ''), w - 12, h - 12);
+  }
+
+  function payloadDateText() {
+    try { return _aptState && _aptState.payload ? _aptState.payload.date + ' (UTC)' : ''; }
+    catch (e) { return ''; }
+  }
+
+  function _aptSetupInteraction() {
+    var canvas = document.getElementById('aptTrailCanvas');
+    if (!canvas || _aptInteractionSetup) return;
+    _aptInteractionSetup = true;
+
+    canvas.addEventListener('wheel', function(e) {
+      e.preventDefault();
+      if (!_aptGeo) return;
+      var delta = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+      _aptGeo.setScale(_aptGeo.scale * delta);
+      _renderAirportTrail();
+    }, {passive: false});
+
+    canvas.addEventListener('mousedown', function(e) {
+      if (e.button !== 0) return;
+      _aptDragging = true;
+      _aptDragStartX = e.clientX;
+      _aptDragStartY = e.clientY;
+      if (_aptGeo) {
+        _aptDragCenterLat = _aptGeo.center.lat;
+        _aptDragCenterLon = _aptGeo.center.lon;
+      }
+      canvas.style.cursor = 'grabbing';
+    });
+
+    canvas.addEventListener('mousemove', function(e) {
+      if (!_aptDragging || !_aptGeo) return;
+      var rect = canvas.getBoundingClientRect();
+      var sx = _aptGeo.screenW / rect.width;
+      var sy = _aptGeo.screenH / rect.height;
+      var dx = (e.clientX - _aptDragStartX) * sx;
+      var dy = (e.clientY - _aptDragStartY) * sy;
+      var lonDelta = -dx * _aptGeo.degreePerPixel / Math.cos(_aptGeo.center.lat * Math.PI / 180);
+      var latDelta = dy * _aptGeo.degreePerPixel;
+      _aptGeo.setCenter({lat: _aptDragCenterLat + latDelta, lon: _aptDragCenterLon + lonDelta});
+      _renderAirportTrail();
+    });
+
+    window.addEventListener('mouseup', function() {
+      if (_aptDragging) {
+        _aptDragging = false;
+        canvas.style.cursor = 'grab';
+      }
+    });
+
+    canvas.style.cursor = 'grab';
+  }
+
+  // 暴露给 HTML onclick
+  window.openAirportTrail = openAirportTrail;
+  window.closeAirportTrail = closeAirportTrail;
+  window.drawAirportTrail = drawAirportTrail;
 
   // 暴露给 HTML onclick（函数定义在 IIFE 内，需要挂到 window）
   window.showFlightTrail = showFlightTrail;

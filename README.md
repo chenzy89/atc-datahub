@@ -172,6 +172,19 @@ GET /api/flight_plans
 GET /api/flight_plans/<id>
 ```
 
+### 机场进离场航迹
+
+```
+GET /api/airport_tracks?airport=ZGGG&date=2026-06-17
+```
+
+| 参数 | 说明 |
+|------|------|
+| `airport` | 机场四字码（需存在于 `config/airport_airspace.json`） |
+| `date` | 执行日期（UTC，ISO 格式） |
+
+返回机场空域配置、当天进场/离场架次统计，以及每条航迹裁剪到 `display_radius_km` 范围内的点（`lt`/`ln`/`fl`/`ts`）。
+
 ### 查询原始 AFTN 报文
 
 ```
@@ -294,6 +307,26 @@ GET /api/aftn_messages?message_type=FPL&limit=50
 - 存储位置：`data/radar_history/radar_YYYYMMDD.jsonl.gz`，每天一个文件，多成员 gzip JSONL（缓冲 5 秒 / 200 条刷盘，尾部不完整成员自动跳过，crash-safe）。
 - 每条记录即一帧原始航迹点（字段缩写见 `aftn_web/radar_history.py`）：`ts` 时间 / `cs` 呼号 / `ss` 二次代码 / `lt`/`ln` 经纬度 / `fl` 高度 / `hd` 航向 / `sp` 速度 / `ap`/`ad` 起降地 / `rw` 跑道 / `fp` 飞行程序 / `cf` CFL 许可高度(米) / `si` 扇区索引。
 - **CFL 前向保持**：CAT062 计划块的 CFL 并非每帧都带，若按帧原样存储，回放时绝大多数帧会显示 `0000`。因此写入时按呼号做「有值才覆盖、否则沿用最后已知值」（与实时 `fdr_store` 行为一致）；同一呼号超过 30 分钟无更新则丢弃保持值（防呼号复用串值），跨日自动清空。真·雷达未提供 CFL 的架次仍为 `0`。
+
+## 机场进离场航迹（按空域识别）
+
+飞行计划页新增「广州进离场」「惠州进离场」按钮：选择日期后，把当天所有航迹中**曾进入机场空域圆柱体**的航班画在一张图上，进场/离场用不同色系、同日高度用颜色深浅表示。
+
+- 识别条件：航迹任一点同时满足「距机场中心 ≤ `radius_km`」且「高度 ≤ `ceiling_m`」，即视为该机场进离场航班；进/离场优先按飞行计划的 `adep`/`adest` 判断，计划缺失时按进入空域前后的高度变化推断。
+- 配置文件：**`config/airport_airspace.json`**，改完刷新页面即生效（后端每次请求重读，无需重启）。
+
+| 配置项 | 说明 |
+|---|---|
+| `name` | 机场显示名称 |
+| `center.lat` / `center.lon` | 机场中心点（十进制度） |
+| `radius_km` | 识别空域半径（公里） |
+| `ceiling_m` | 识别空域高度上限（米） |
+| `display_radius_km` | 图上绘制范围半径（公里，默认 60） |
+| `color_scale_m` | 高度配色上限（米，默认 3000，超出按最高色显示） |
+
+默认已配置广州白云（ZGGG，6 km / 300 m）和惠州平潭（ZGHZ，8 km / 500 m）。地图支持滚轮缩放、按住拖动。
+
+数据取自 **`data/radar_history/radar_YYYYMMDD.jsonl.gz`**（`flight_tracks` 只保存深圳终端区航班，不含广州/惠州）。首次查询某个日期需要扫描当天雷达历史，约 10–30 秒；结果缓存到 `data/airport_tracks/YYYY-MM-DD.json.gz`，之后同一日期秒开（当天缓存 30 分钟后自动重建）。可查询范围受雷达历史保留天数（默认 90 天）限制。
 
 ## 气象云量（cloud_cover）
 
