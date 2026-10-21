@@ -1,15 +1,18 @@
 """机场进离场航迹 — 基于雷达历史（radar_history）按空域识别
 
-flight_tracks 表只保存深圳终端区相关航班，广州/惠州机场的航班不在其中；
-因此本模块直接扫描 data/radar_history/radar_YYYYMMDD.jsonl.gz。
+flight_tracks 表只保存深圳终端区相关航班，广州/深圳/珠海/惠州 的完整航迹
+需要直接扫描 data/radar_history/radar_YYYYMMDD.jsonl.gz。
 
-识别规则：航班轨迹任一点同时满足
-    距机场中心 <= radius_km  且  高度 <= ceiling_m
-即视为该机场的进离场航班。进/离场优先用雷达帧里的 ap/ad（起降地）判断，
-没有起降地时按进入空域前后的高度变化/最接近机场的位置推断。
+识别规则（两遍扫描）：
+  第一遍：找“击中点”——航迹点同时满足『距机场中心 <= radius_km』且
+          『高度 <= ceiling_m』，按呼号+时间聚类成航段（间隔 >30 分钟算新航段）。
+  第二遍：把该航段前后 ±30 分钟内的所有点（高度 <= store_max_alt_m）全部收集，
+          即“整条进离场航迹”，不再限制水平范围；多点命中多个机场时，
+          每个点归给最近的机场，避免邻场重复。
+  进/离场判定：优先看航段首尾高度趋势，其次看雷达帧 ap/ad。
 
-扫描一天约 10-20 秒，结果按日期缓存到 data/airport_tracks/YYYY-MM-DD.json.gz，
-同一天再次打开秒开；当天的缓存 5 分钟后自动重建。
+结果按日期缓存到 data/airport_tracks/YYYY-MM-DD.json.gz，同一天再次打开秒开；
+当天缓存 30 分钟后自动重建。
 """
 
 from __future__ import annotations
@@ -59,20 +62,30 @@ _AIRSPACE_DEFAULTS = {
 
 _EARTH_R = 6371000.0
 _TODAY_TTL = 1800          # 当天缓存有效期（秒）
-_CACHE_VERSION = 3        # 识别逻辑变更时递增，旧缓存自动失效
+_CACHE_VERSION = 5        # 识别/存储逻辑变更时递增，旧缓存自动失效
 _MAX_DATE_SPAN = 7         # 一次查询最多跨多少天（每天都要扫一遍历史）
-_SPLIT_GAP_SECONDS = 1800  # 同一呼号两段航迹的时间间隔阈值
+_SPLIT_GAP_SECONDS = 1800  # 同一呼号两次进入空域的间隔阈值（聚类新航段）
+_PAD_SECONDS = 1800        # 航段前后额外收集的时间（秒）
+_POINT_DECIMATE = 3        # 抽稀：每 3 个点留 1 个（约 12 秒一个点）
 _MIN_POINTS_PER_TRACK = 2
+_STORE_MAX_ALT_DEFAULT = 6000
 
 _build_lock = threading.Lock()
-_mem_cache: dict[str, tuple[float, dict]] = {}
+_mem_cache: dict[str, tuple[float, dict, float]] = {}
 
 
 def load_airspace() -> dict[str, dict]:
     """读取机场空域配置（每次重读，改文件后无需重启）。"""
     airports: dict[str, dict] = {}
+    store_cap = float(_STORE_MAX_ALT_DEFAULT)
     try:
         raw = json.loads(AIRSPACE_FILE.read_text(encoding="utf-8"))
+        try:
+            store_cap = float(raw.get("store_max_alt_m", _STORE_MAX_ALT_DEFAULT))
+            if store_cap <= 0:
+                store_cap = float(_STORE_MAX_ALT_DEFAULT)
+        except (TypeError, ValueError):
+            store_cap = float(_STORE_MAX_ALT_DEFAULT)
         for code, cfg in (raw.get("airports") or {}).items():
             if not isinstance(cfg, dict):
                 continue
@@ -86,6 +99,7 @@ def load_airspace() -> dict[str, dict]:
                     "display_radius_km": float(cfg.get("display_radius_km", 60)),
                     "color_scale_m": float(cfg.get("color_scale_m", 6000)),
                     "alt_step_m": float(cfg.get("alt_step_m", 300)),
+                    "store_max_alt_m": store_cap,
                 }
             except (KeyError, TypeError, ValueError):
                 logger.warning("机场空域配置 %s 格式有误，已跳过", code)
@@ -95,7 +109,14 @@ def load_airspace() -> dict[str, dict]:
         logger.exception("读取机场空域配置失败，使用内置配置")
     if not airports:
         airports = {k: json.loads(json.dumps(v)) for k, v in _AIRSPACE_DEFAULTS.items()}
+        for v in airports.values():
+            v["store_max_alt_m"] = store_cap
     return airports
+
+
+def store_max_alt(airports: dict[str, dict]) -> float:
+    return max((cfg.get("store_max_alt_m", _STORE_MAX_ALT_DEFAULT) for cfg in airports.values()),
+               default=float(_STORE_MAX_ALT_DEFAULT))
 
 
 def _history_path(date_str: str) -> Path:
@@ -106,45 +127,90 @@ def _cache_path(date_str: str) -> Path:
     return CACHE_DIR / f"{date_str}.json.gz"
 
 
-def _dist_m(lat: float, lon: float, clat: float, clon: float, cos_clat: float) -> float:
-    dlat = math.radians(lat - clat)
-    dlon = math.radians(lon - clon)
-    a = (math.sin(dlat / 2) ** 2
-         + cos_clat * math.cos(math.radians(lat)) * math.sin(dlon / 2) ** 2)
-    return 2 * _EARTH_R * math.asin(min(1.0, math.sqrt(a)))
+def _ts_seconds(ts: str) -> float:
+    """同一文件内都是同一天，只取时分秒即可，比 strptime 快得多。"""
+    try:
+        sec = int(ts[11:13]) * 3600 + int(ts[14:16]) * 60 + int(ts[17:19])
+        if len(ts) >= 23 and ts[19] == '.':
+            sec += int(ts[20:23]) / 1000.0
+        return sec
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def _keep_main_run(pts: list[list], clat: float, clon: float) -> list[list]:
+    """同一呼号可能被多架飞机/模拟机复用，窗口内的点会串。
+
+    按时间/距离连续性切成若干段，只保留离机场最近的那一段——
+    它就是该机场真正的进离场航迹。
+    """
+    if len(pts) < 2:
+        return pts
+    cos_clat = math.cos(math.radians(clat))
+
+    def dist2(p: list) -> float:
+        dy = (p[0] - clat) * 111000.0
+        dx = (p[1] - clon) * 111000.0 * cos_clat
+        return dx * dx + dy * dy
+
+    runs: list[list[list]] = []
+    cur = [pts[0]]
+    for p in pts[1:]:
+        prev = cur[-1]
+        dt = abs(p[3] - prev[3])
+        dy = (p[0] - prev[0]) * 111000.0
+        dx = (p[1] - prev[1]) * 111000.0 * cos_clat
+        d = math.sqrt(dx * dx + dy * dy)
+        # 超过 5 分钟，或速度明显不合理（>350m/s）则断开
+        if dt > 300 or d > max(5000.0, 350.0 * dt):
+            runs.append(cur)
+            cur = [p]
+        else:
+            cur.append(p)
+    runs.append(cur)
+
+    best_run = None
+    best_d = None
+    for r in runs:
+        dmin = min(dist2(p) for p in r)
+        if best_d is None or dmin < best_d:
+            best_d = dmin
+            best_run = r
+    return best_run or pts
+
+
+def _empty_day(airports: dict[str, dict]) -> dict[str, Any]:
+    return {
+        code: {"tracks": [],
+               "stats": {"arrival": 0, "departure": 0, "total": 0, "scanned_points": 0}}
+        for code in airports
+    }
 
 
 def _scan_day(date_str: str, airports: dict[str, dict]) -> dict[str, Any]:
-    """扫描一天的雷达历史，返回各机场的进离场航迹。"""
+    """扫描一天的雷达历史，返回各机场的进离场航迹（无水平范围限制）。"""
     path = _history_path(date_str)
     if not path.exists():
-        return {
-            code: {"tracks": [],
-                   "stats": {"arrival": 0, "departure": 0, "total": 0, "scanned_points": 0}}
-            for code in airports
-        }
+        return _empty_day(airports)
 
-    # 预计算各机场参数（元组比字典查找快）
+    # ── 第一遍：找击中点（进入空域且低高度） ──────────────────
     plist = []
     for code, cfg in airports.items():
         clat = cfg["center"]["lat"]
         clon = cfg["center"]["lon"]
         cos_clat = math.cos(math.radians(clat))
-        disp_km = cfg["display_radius_km"]
+        r_km = cfg["radius_km"]
         plist.append((
             code, clat, clon, cos_clat,
-            clat - disp_km / 111.0 - 0.02,
-            clat + disp_km / 111.0 + 0.02,
-            clon - disp_km / (111.0 * max(0.2, cos_clat)) - 0.02,
-            clon + disp_km / (111.0 * max(0.2, cos_clat)) + 0.02,
-            (disp_km * 1000.0) ** 2,
+            clat - r_km / 111.0 - 0.02,
+            clat + r_km / 111.0 + 0.02,
+            clon - r_km / (111.0 * max(0.2, cos_clat)) - 0.02,
+            clon + r_km / (111.0 * max(0.2, cos_clat)) + 0.02,
+            (r_km * 1000.0) ** 2,
         ))
 
-    # code -> callsign -> [(ts, lt, ln, fl, ap, ad)]
-    groups: dict[str, dict[str, list[tuple]]] = {code: {} for code in airports}
+    hits: dict[str, dict[str, list[tuple]]] = {code: {} for code in airports}
     total_points = 0
-    # 配色上限以上再留 1000m 余量，更高高度的点不进图（只影响显示，不影响识别）
-    fl_cap = max(cfg["color_scale_m"] for cfg in airports.values()) + 1000.0
 
     with gzip.open(str(path), "rt", encoding="utf-8", errors="ignore") as fh:
         for line in fh:
@@ -162,167 +228,204 @@ def _scan_day(date_str: str, airports: dict[str, dict]) -> dict[str, Any]:
             except (ValueError, TypeError):
                 continue
 
-            for (code, clat, clon, cos_clat, lat_lo, lat_hi, lon_lo, lon_hi, disp_m2) in plist:
+            for (code, clat, clon, cos_clat, lat_lo, lat_hi, lon_lo, lon_hi, r_m2) in plist:
                 if lt < lat_lo or lt > lat_hi or ln < lon_lo or ln > lon_hi:
                     continue
-                # 等距近似平方距离（60km 量级足够精确，比 haversine 快很多）
                 dy = (lt - clat) * 111000.0
                 dx = (ln - clon) * 111000.0 * cos_clat
-                if dx * dx + dy * dy > disp_m2:
+                if dx * dx + dy * dy > r_m2:
                     continue
 
-                # 只对命中范围的点解析其余字段
                 try:
                     i = line.find('"fl":')
                     j = line.find(",", i + 5)
                     fl = float(line[i + 5:j])
-                    if fl > fl_cap:
+                    if fl > airports[code]["ceiling_m"]:
                         continue
                     i = line.find('"cs":"')
                     j = line.find('"', i + 6)
                     cs = line[i + 6:j].strip().upper()
                     if not cs:
                         continue
-                    i = line.find('"ts":"') + 6
-                    j = line.find('"', i)
-                    ts = line[i:j]
-                    # ap/ad 只在低高度点提取（高空点几乎不会带计划信息，省时间）
-                    if fl < 2000.0:
-                        i = line.find('"ap":"')
-                        j = line.find('"', i + 6)
-                        ap = line[i + 6:j].strip().upper()
-                        i = line.find('"ad":"')
-                        j = line.find('"', i + 6)
-                        ad = line[i + 6:j].strip().upper()
-                    else:
-                        ap = ad = ""
+                    i = line.find('"ts":"')
+                    j = line.find('"', i + 6)
+                    ts = line[i + 6:j]
+                    i = line.find('"ap":"')
+                    j = line.find('"', i + 6)
+                    ap = line[i + 6:j].strip().upper()
+                    i = line.find('"ad":"')
+                    j = line.find('"', i + 6)
+                    ad = line[i + 6:j].strip().upper()
                 except (ValueError, TypeError):
                     continue
 
-                groups[code].setdefault(cs, []).append(
-                    (ts, round(lt, 6), round(ln, 6), round(fl, 1), ap, ad)
+                hits[code].setdefault(cs, []).append(
+                    (ts, _ts_seconds(ts), fl, ap, ad)
                 )
                 total_points += 1
-                # 不 break：广州/深圳/珠海/惠州 的绘图圈可能互相重叠，
-                # 重叠区的点要同时进入各自分组，否则靠近某机场的点会被
-                # 先遍历到的邻场“截走”，导致该机场漏识别。
 
+    # ── 聚类成航段 ──────────────────────────────────────────
+    segs: list[dict] = []
+    for code, by_cs in hits.items():
+        for cs, hs in by_cs.items():
+            hs.sort(key=lambda x: x[1])
+            cur: list[tuple] = []
+            last = None
+            clusters: list[list[tuple]] = []
+            for h in hs:
+                if last is not None and h[1] - last > _SPLIT_GAP_SECONDS:
+                    clusters.append(cur)
+                    cur = []
+                cur.append(h)
+                last = h[1]
+            if cur:
+                clusters.append(cur)
+
+            for cl in clusters:
+                segs.append({
+                    "code": code,
+                    "cs": cs,
+                    "lo": max(0.0, cl[0][1] - _PAD_SECONDS),
+                    "hi": cl[-1][1] + _PAD_SECONDS,
+                    "ap": next((h[3] for h in cl if h[3]), ""),
+                    "ad": next((h[4] for h in cl if h[4]), ""),
+                    "points": [],
+                    "n": 0,
+                })
+
+    # ── 第二遍：收集整条进离场航迹（高度 <= store_max_alt_m） ──
+    by_cs_seg: dict[str, list[dict]] = {}
+    for sg in segs:
+        by_cs_seg.setdefault(sg["cs"], []).append(sg)
+
+    store_cap = store_max_alt(airports)
+
+    if by_cs_seg:
+        centers = {code: (cfg["center"]["lat"], cfg["center"]["lon"],
+                          math.cos(math.radians(cfg["center"]["lat"])))
+                   for code, cfg in airports.items()}
+        with gzip.open(str(path), "rt", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                i = line.find('"cs":"')
+                if i < 0:
+                    continue
+                j = line.find('"', i + 6)
+                if j < 0:
+                    continue
+                cs = line[i + 6:j].strip().upper()
+                cands = by_cs_seg.get(cs)
+                if not cands:
+                    continue
+
+                ts = line[7:31] if line.startswith('{"ts":"') else ""
+                if len(ts) < 19:
+                    k = line.find('"ts":"')
+                    if k < 0:
+                        continue
+                    ts = line[k + 6:k + 30]
+                sec = _ts_seconds(ts)
+
+                matched = [sg for sg in cands if sg["lo"] <= sec <= sg["hi"]]
+                if not matched:
+                    continue
+
+                i = line.find('"fl":')
+                j = line.find(",", i + 5)
+                try:
+                    fl = float(line[i + 5:j])
+                except (ValueError, TypeError):
+                    continue
+                if fl > store_cap:
+                    continue
+
+                i = line.find('"lt":')
+                j = line.find(",", i + 5)
+                try:
+                    lt = float(line[i + 5:j])
+                    i2 = line.find('"ln":')
+                    j2 = line.find(",", i2 + 5)
+                    ln = float(line[i2 + 5:j2])
+                except (ValueError, TypeError):
+                    continue
+
+                sg = matched[0]
+                if len(matched) > 1:
+                    best = None
+                    for m in matched:
+                        clat, clon, cos_clat = centers[m["code"]]
+                        dy = (lt - clat) * 111000.0
+                        dx = (ln - clon) * 111000.0 * cos_clat
+                        d2 = dx * dx + dy * dy
+                        if best is None or d2 < best[0]:
+                            best = (d2, m)
+                    sg = best[1]
+
+                sg["n"] += 1
+                # 抽稀；地面点（<150m）全部保留，保证接地/起飞点不丢
+                if sg["n"] % _POINT_DECIMATE != 0 and fl >= 150.0:
+                    continue
+                sg["points"].append([round(lt, 5), round(ln, 5), round(fl, 1), int(sec)])
+
+    # ── 生成航迹 ────────────────────────────────────────────
     result: dict[str, Any] = {}
-    for code, cfg in airports.items():
-        result[code] = _build_airport_tracks(code, cfg, groups.get(code, {}),
-                                             total_points)
-    return result
+    per_code: dict[str, list[dict]] = {code: [] for code in airports}
+    stats: dict[str, dict] = {code: {"arrival": 0, "departure": 0, "total": 0}
+                              for code in airports}
 
+    for sg in segs:
+        cfg = airports[sg["code"]]
+        pts = _keep_main_run(sg["points"], cfg["center"]["lat"], cfg["center"]["lon"])
+        if len(pts) < _MIN_POINTS_PER_TRACK:
+            continue
 
-def _ts_seconds(ts: str) -> float:
-    """同一文件内都是同一天，只取时分秒即可，比 strptime 快得多。"""
-    try:
-        sec = int(ts[11:13]) * 3600 + int(ts[14:16]) * 60 + int(ts[17:19])
-        if len(ts) >= 23 and ts[19] == '.':
-            sec += int(ts[20:23]) / 1000.0
-        return sec
-    except (ValueError, IndexError):
-        return 0.0
-
-
-def _build_airport_tracks(code: str, cfg: dict, by_cs: dict[str, list[tuple]],
-                          total_scanned: int) -> dict[str, Any]:
-    radius_m = cfg["radius_km"] * 1000.0
-    ceiling_m = cfg["ceiling_m"]
-    clat = cfg["center"]["lat"]
-    clon = cfg["center"]["lon"]
-    cos_clat = math.cos(math.radians(clat))
-    radius_m2 = radius_m * radius_m
-    color_cap = cfg["color_scale_m"]
-    tracks: list[dict] = []
-    n_arr = 0
-    n_dep = 0
-
-    for cs, pts in by_cs.items():
-        pts.sort(key=lambda x: x[0])
-        # 按时间间隔切分为独立航段（同一呼号一天可能飞多段）
-        segments: list[list[tuple]] = []
-        cur: list[tuple] = []
-        last_sec = None
-        for pt in pts:
-            sec = _ts_seconds(pt[0])
-            if last_sec is not None and sec - last_sec > _SPLIT_GAP_SECONDS:
-                if len(cur) >= _MIN_POINTS_PER_TRACK:
-                    segments.append(cur)
-                cur = []
-            cur.append(pt)
-            last_sec = sec
-        if len(cur) >= _MIN_POINTS_PER_TRACK:
-            segments.append(cur)
-
-        for seg in segments:
-            qual = []
+        first_fl = pts[0][2]
+        last_fl = pts[-1][2]
+        if last_fl < first_fl - 100:
+            typ = "ARRIVAL"
+        elif last_fl > first_fl + 100:
+            typ = "DEPARTURE"
+        elif sg["ad"] == sg["code"] and sg["ap"] != sg["code"]:
+            typ = "ARRIVAL"
+        elif sg["ap"] == sg["code"] and sg["ad"] != sg["code"]:
+            typ = "DEPARTURE"
+        else:
+            # 趋势不明显：看离机场最近的点在航段前段还是后段
+            clat = airports[sg["code"]]["center"]["lat"]
+            clon = airports[sg["code"]]["center"]["lon"]
+            cos_clat = math.cos(math.radians(clat))
             min_d = None
-            min_idx = 0
-            for idx, pt in enumerate(seg):
-                dy = (pt[1] - clat) * 111000.0
-                dx = (pt[2] - clon) * 111000.0 * cos_clat
+            min_i = 0
+            for idx, p in enumerate(pts):
+                dy = (p[0] - clat) * 111000.0
+                dx = (p[1] - clon) * 111000.0 * cos_clat
                 d2 = dx * dx + dy * dy
                 if min_d is None or d2 < min_d:
                     min_d = d2
-                    min_idx = idx
-                if d2 <= radius_m2 and pt[3] <= ceiling_m:
-                    qual.append((idx, pt[3]))
-            if not qual:
-                continue
+                    min_i = idx
+            typ = "ARRIVAL" if min_i > len(pts) / 2 else "DEPARTURE"
 
-            # 进/离场判定：优先看高度变化（雷达里的 ap/ad 偶尔会串计划，
-            # 例如把落地航班标成从本场起飞）；趋势不明显时再看 ap/ad
-            has_arr = any(pt[5] == code for pt in seg)
-            has_dep = any(pt[4] == code for pt in seg)
-            first_fl = seg[0][3]
-            last_fl = seg[-1][3]
-            if last_fl < first_fl - 100:
-                typ = "ARRIVAL"
-            elif last_fl > first_fl + 100:
-                typ = "DEPARTURE"
-            elif has_arr and not has_dep:
-                typ = "ARRIVAL"
-            elif has_dep and not has_arr:
-                typ = "DEPARTURE"
-            else:
-                typ = "ARRIVAL" if min_idx > len(seg) / 2 else "DEPARTURE"
+        per_code[sg["code"]].append({
+            "callsign": sg["cs"],
+            "type": typ,
+            "adep": sg["ap"],
+            "adest": sg["ad"],
+            "start": pts[0][3],
+            "end": pts[-1][3],
+            "points": pts,
+        })
+        if typ == "ARRIVAL":
+            stats[sg["code"]]["arrival"] += 1
+        else:
+            stats[sg["code"]]["departure"] += 1
+        stats[sg["code"]]["total"] += 1
 
-            if typ == "ARRIVAL":
-                n_arr += 1
-            else:
-                n_dep += 1
+    for code, tracks in per_code.items():
+        tracks.sort(key=lambda t: (t["start"], t["callsign"]))
+        result[code] = {"tracks": tracks, "stats": stats[code]}
 
-            # 抽稀：隔点保留，首尾必留（原始约 4 秒一个点）；
-            # 只画配色上限高度（默认 6000m）以下的点
-            n = len(seg)
-            out_pts = []
-            for idx, pt in enumerate(seg):
-                if pt[3] > color_cap:
-                    continue
-                if idx % 2 != 0 and idx != n - 1:
-                    continue
-                out_pts.append({"lt": pt[1], "ln": pt[2], "fl": pt[3], "ts": pt[0]})
-            if len(out_pts) < _MIN_POINTS_PER_TRACK:
-                continue
-            tracks.append({
-                "callsign": cs,
-                "type": typ,
-                "adep": next((pt[4] for pt in seg if pt[4]), ""),
-                "adest": next((pt[5] for pt in seg if pt[5]), ""),
-                "points": out_pts,
-            })
-
-    tracks.sort(key=lambda t: (t["points"][0].get("ts", ""), t["callsign"]))
-    return {
-        "stats": {
-            "arrival": n_arr,
-            "departure": n_dep,
-            "total": n_arr + n_dep,
-            "scanned_points": total_scanned,
-        },
-        "tracks": tracks,
-    }
+    logger.info("机场航迹扫描: %s 击中点 %d，航迹 %d 条",
+                date_str, total_points, sum(len(x["tracks"]) for x in result.values()))
+    return result
 
 
 def _build_payload(date_str: str, airports: dict[str, dict]) -> dict[str, Any]:
@@ -387,8 +490,9 @@ def _load_payload(date_str: str, airports: dict[str, dict]) -> dict[str, Any]:
         logger.info("机场航迹扫描完成: %s（%.1fs）", date_str, time.time() - t0)
 
         _mem_cache[date_str] = (time.time(), payload, cfg_mtime)
-        if len(_mem_cache) > 8:
-            for k in sorted(_mem_cache, key=lambda k: _mem_cache[k][0])[:5]:
+        # 现在一天的数据较大，内存只保留最近 3 天
+        if len(_mem_cache) > 3:
+            for k in sorted(_mem_cache, key=lambda k: _mem_cache[k][0])[:len(_mem_cache) - 3]:
                 _mem_cache.pop(k, None)
 
         try:
@@ -433,56 +537,38 @@ def parse_types(values: list[str] | None) -> set[str]:
     return out or {"ARRIVAL", "DEPARTURE"}
 
 
-def _in_time_range(ts: str, start: str, end: str) -> bool:
-    """ts 形如 2026-10-20T00:00:01.894Z，start/end 形如 2026-10-20T00:00:00。"""
-    if not ts:
-        return True
-    key = ts[:19]
-    if start and key < start[:19]:
-        return False
-    if end and key > end[:19]:
-        return False
-    return True
-
-
-def _trim_to_nearest(points: list[dict], code: str, airports: dict[str, dict],
-                     codes: list[str]) -> list[dict]:
-    """多机场同时绘制时，每个点只归给最近的那个机场，避免重叠区域重复作画。"""
-    me = airports[code]["center"]
-    cos_me = math.cos(math.radians(me["lat"]))
-    others = [airports[c]["center"] for c in codes if c != code]
-    if not others:
-        return points
-    kept = []
-    for p in points:
-        lat, lon = p["lt"], p["ln"]
-        dy = (lat - me["lat"]) * 111000.0
-        dx = (lon - me["lon"]) * 111000.0 * cos_me
-        d_me = dx * dx + dy * dy
-        nearest = True
-        for o in others:
-            oy = (lat - o["lat"]) * 111000.0
-            ox = (lon - o["lon"]) * 111000.0 * math.cos(math.radians(o["lat"]))
-            if ox * ox + oy * oy < d_me:
-                nearest = False
-                break
-        if nearest:
-            kept.append(p)
-    return kept
+def _day_window(date_str: str, start: str, end: str) -> tuple[float, float] | None:
+    """把查询的 UTC 时间段换算成当天内的秒数窗口；无交集返回 None。"""
+    if date_str < start[:10] or date_str > end[:10]:
+        return None
+    lo = 0.0
+    hi = 86400.0
+    if date_str == start[:10]:
+        lo = _ts_seconds(start)
+    if date_str == end[:10]:
+        hi = _ts_seconds(end)
+    if hi < lo:
+        return None
+    return lo, hi
 
 
 def get_airports_tracks(dates: list[str], codes: list[str], types: set[str],
-                        start: str, end: str) -> dict[str, Any]:
-    """多机场 / 多日期 / 时间段 / 进离场类型 的合并查询结果。"""
+                        start: str, end: str, max_alt: float) -> dict[str, Any]:
+    """多机场 / 多日期 / 时间段 / 进离场类型 / 高度上限 的合并查询结果。"""
     airports = load_airspace()
     codes = [c.upper() for c in codes if c.upper() in airports]
     if not codes:
         raise KeyError(",".join(codes))
 
+    max_alt = max(0.0, float(max_alt))
     tracks: list[dict] = []
     stats = {c: {"arrival": 0, "departure": 0, "total": 0} for c in codes}
 
     for date_str in dates:
+        window = _day_window(date_str, start, end)
+        if window is None:
+            continue
+        lo_sec, hi_sec = window
         payload = _load_payload(date_str, airports)
         for code in codes:
             item = payload["airports"].get(code) or {}
@@ -491,13 +577,9 @@ def get_airports_tracks(dates: list[str], codes: list[str], types: set[str],
                 if typ not in types:
                     continue
                 pts = [p for p in trk.get("points", [])
-                       if _in_time_range(p.get("ts", ""), start, end)]
+                       if lo_sec <= p[3] <= hi_sec and p[2] <= max_alt]
                 if len(pts) < _MIN_POINTS_PER_TRACK:
                     continue
-                if len(codes) > 1:
-                    pts = _trim_to_nearest(pts, code, airports, codes)
-                    if len(pts) < _MIN_POINTS_PER_TRACK:
-                        continue
                 tracks.append({
                     "airport": code,
                     "type": typ,
@@ -509,7 +591,7 @@ def get_airports_tracks(dates: list[str], codes: list[str], types: set[str],
                 stats[code]["arrival" if typ == "ARRIVAL" else "departure"] += 1
                 stats[code]["total"] += 1
 
-    tracks.sort(key=lambda t: (t["points"][0].get("ts", ""), t["callsign"]))
+    tracks.sort(key=lambda t: (t["points"][0][3], t["callsign"]))
     meta = {
         c: {
             "icao": c,
@@ -517,7 +599,6 @@ def get_airports_tracks(dates: list[str], codes: list[str], types: set[str],
             "center": airports[c]["center"],
             "radius_km": airports[c]["radius_km"],
             "ceiling_m": airports[c]["ceiling_m"],
-            "display_radius_km": airports[c]["display_radius_km"],
             "color_scale_m": airports[c]["color_scale_m"],
             "alt_step_m": airports[c]["alt_step_m"],
         }
@@ -530,6 +611,7 @@ def get_airports_tracks(dates: list[str], codes: list[str], types: set[str],
         "date_to": dates[-1] if dates else "",
         "start": start,
         "end": end,
+        "max_alt_m": max_alt,
         "airports": meta,
         "tracks": tracks,
         "stats": {
@@ -538,6 +620,4 @@ def get_airports_tracks(dates: list[str], codes: list[str], types: set[str],
             "departure": total_dep,
             "total": total_arr + total_dep,
         },
-        "max_alt_m": max((airports[c]["color_scale_m"] for c in codes), default=6000),
-        "alt_step_m": 300,
     }

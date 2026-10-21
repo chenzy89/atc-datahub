@@ -1,9 +1,13 @@
 {
-  "_comment": "机场进离场航迹识别配置。航班只要有一个航迹点同时满足『距 center 不超过 radius_km』且『高度不超过 ceiling_m』，即视为该机场的进离场航班。display_radius_km 控制图上绘制的范围，color_scale_m / alt_step_m 控制高度配色（默认 6000m 以下、每 300m 一档共 20 档）。修改本文件后刷新页面即可生效，无需重启。",
+  "_comment": "机场进离场航迹识别配置。航班只要有一个航迹点同时满足『距 center 不超过 radius_km』且『高度不超过 ceiling_m』，即视为该机场的进离场航班。作图时收集该航段前后 ±30 分钟、高度不超过 store_max_alt_m 的全部航迹点（不再限制水平范围）。store_max_alt_m 是允许缓存的最高高度（用户可在此范围内自定义绘图高度上限，默认 4500）。修改本文件后刷新页面即可生效，无需重启。",
+  "store_max_alt_m": 6000,
   "airports": {
     "ZGGG": {
       "name": "广州白云机场",
-      "center": { "lat": 23.390278, "lon": 113.298889 },
+      "center": {
+        "lat": 23.390278,
+        "lon": 113.298889
+      },
       "radius_km": 6,
       "ceiling_m": 300,
       "display_radius_km": 60,
@@ -12,7 +16,10 @@
     },
     "ZGSZ": {
       "name": "深圳宝安机场",
-      "center": { "lat": 22.637778, "lon": 113.798056 },
+      "center": {
+        "lat": 22.637778,
+        "lon": 113.798056
+      },
       "radius_km": 6,
       "ceiling_m": 300,
       "display_radius_km": 60,
@@ -21,7 +28,10 @@
     },
     "ZGSD": {
       "name": "珠海金湾机场",
-      "center": { "lat": 22.006111, "lon": 113.376389 },
+      "center": {
+        "lat": 22.006111,
+        "lon": 113.376389
+      },
       "radius_km": 5,
       "ceiling_m": 300,
       "display_radius_km": 60,
@@ -30,7 +40,10 @@
     },
     "ZGHZ": {
       "name": "惠州平潭机场",
-      "center": { "lat": 23.048611, "lon": 114.597500 },
+      "center": {
+        "lat": 23.048611,
+        "lon": 114.5975
+      },
       "radius_km": 8,
       "ceiling_m": 500,
       "display_radius_km": 60,
@@ -39,4 +52,3 @@
     }
   }
 }
-

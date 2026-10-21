@@ -358,6 +358,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
           types=ARR,DEP                （默认两者都要）
           start=YYYY-MM-DDTHH:MM:SS    （UTC，含）
           end=YYYY-MM-DDTHH:MM:SS      （UTC，含）
+          max_alt=4500                 （高度上限，米，默认 4500）
           date=YYYY-MM-DD              （兼容旧调用，等价于当天 00:00-23:59）
         """
         airports_arg = (_req_str("airports") or _req_str("airport") or "").strip()
@@ -365,8 +366,18 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         if not codes:
             return jsonify({"error": "缺少机场参数 airports"}), 400
 
-        from .airport_tracks import get_airports_tracks, parse_types
+        from .airport_tracks import get_airports_tracks, parse_types, load_airspace, store_max_alt
         types = parse_types((_req_str("types") or "ARR,DEP").split(","))
+
+        try:
+            max_alt = float(_req_str("max_alt") or 4500)
+        except (TypeError, ValueError):
+            return jsonify({"error": "高度上限格式应为数字（米）"}), 400
+        cap = store_max_alt(load_airspace())
+        if max_alt <= 0:
+            max_alt = 4500.0
+        if max_alt > cap:
+            return jsonify({"error": "高度上限最高 %d 米（可在 config/airport_airspace.json 调整 store_max_alt_m）" % cap}), 400
 
         day = (_req_str("date") or "").strip()[:10]
         start = (_req_str("start") or "").strip().replace("Z", "")
@@ -396,7 +407,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             cur += timedelta(days=1)
 
         try:
-            payload = get_airports_tracks(dates, codes, types, start, end)
+            payload = get_airports_tracks(dates, codes, types, start, end, max_alt)
         except KeyError:
             return jsonify({"error": "未知机场: " + airports_arg}), 400
         except FileNotFoundError:

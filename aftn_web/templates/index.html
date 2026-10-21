@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.3.16</title>
+<title>ATC综合数据中心 v2.3.17</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.3.16</span>
+  <span class="badge">v2.3.17</span>
 </div>
 
 <div class="tabs">
@@ -1119,17 +1119,40 @@ canvas#radarMap {
       <h2 style="font-size:16px;font-weight:600;color:var(--accent-green);">机场进离场航迹</h2>
       <button onclick="closeAptPicker()" style="background:none;border:none;color:var(--text-muted);font-size:22px;cursor:pointer;line-height:1;">&times;</button>
     </div>
-    <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">选择机场</div>
-    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:13px;">
-      <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" class="apt-pick-code" value="ZGGG" checked style="accent-color:#3b82f6;"> 广州</label>
-      <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" class="apt-pick-code" value="ZGSZ" checked style="accent-color:#3b82f6;"> 深圳</label>
-      <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" class="apt-pick-code" value="ZGSD" checked style="accent-color:#3b82f6;"> 珠海</label>
-      <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" class="apt-pick-code" value="ZGHZ" checked style="accent-color:#3b82f6;"> 惠州</label>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
+      <span>选择机场</span><span style="font-size:11px;">进场颜色 / 离场颜色</span>
+    </div>
+    <div id="aptPickRows" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;font-size:13px;">
+      <div class="apt-row" data-code="ZGGG" style="display:flex;align-items:center;gap:10px;">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;width:72px;"><input type="checkbox" class="apt-pick-code" value="ZGGG" checked style="accent-color:#3b82f6;"> 广州</label>
+        <input type="color" class="apt-color-arr" value="#eab308" title="广州进场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+        <input type="color" class="apt-color-dep" value="#3b82f6" title="广州离场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+      </div>
+      <div class="apt-row" data-code="ZGSZ" style="display:flex;align-items:center;gap:10px;">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;width:72px;"><input type="checkbox" class="apt-pick-code" value="ZGSZ" checked style="accent-color:#3b82f6;"> 深圳</label>
+        <input type="color" class="apt-color-arr" value="#eab308" title="深圳进场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+        <input type="color" class="apt-color-dep" value="#3b82f6" title="深圳离场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+      </div>
+      <div class="apt-row" data-code="ZGSD" style="display:flex;align-items:center;gap:10px;">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;width:72px;"><input type="checkbox" class="apt-pick-code" value="ZGSD" checked style="accent-color:#3b82f6;"> 珠海</label>
+        <input type="color" class="apt-color-arr" value="#eab308" title="珠海进场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+        <input type="color" class="apt-color-dep" value="#3b82f6" title="珠海离场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+      </div>
+      <div class="apt-row" data-code="ZGHZ" style="display:flex;align-items:center;gap:10px;">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;width:72px;"><input type="checkbox" class="apt-pick-code" value="ZGHZ" checked style="accent-color:#3b82f6;"> 惠州</label>
+        <input type="color" class="apt-color-arr" value="#eab308" title="惠州进场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+        <input type="color" class="apt-color-dep" value="#3b82f6" title="惠州离场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+      </div>
     </div>
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">航迹类型</div>
     <div style="display:flex;gap:18px;margin-bottom:14px;font-size:13px;">
-      <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="aptPickArr" checked style="accent-color:#eab308;"> 进场（黄）</label>
-      <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="aptPickDep" checked style="accent-color:#3b82f6;"> 离场（蓝）</label>
+      <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="aptPickArr" checked style="accent-color:#eab308;"> 进场</label>
+      <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="aptPickDep" checked style="accent-color:#3b82f6;"> 离场</label>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:13px;">
+      <span style="font-size:12px;color:var(--text-muted);">作图高度上限</span>
+      <input type="number" id="aptMaxAlt" value="4500" min="100" max="6000" step="100" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:82px;">
+      <span style="font-size:12px;color:var(--text-muted);">米（默认 4500，最高 6000）</span>
     </div>
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">起止时间（UTC）</div>
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px;">
@@ -1139,7 +1162,7 @@ canvas#radarMap {
       <input type="date" id="aptEndDate" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:135px;">
       <input type="time" id="aptEndTime" value="23:59" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:82px;">
     </div>
-    <div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.6;">绘制 6000 米以下航迹，每 300 米一档共 20 档，颜色越浓高度越高。<br>首次查询某天需扫描雷达历史，约 30 秒/天；之后走缓存。</div>
+    <div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.6;">完整显示所选高度以下的进离场航迹（不限水平范围）。<br>首次查询某天需扫描雷达历史，约 30-50 秒/天；之后走缓存。</div>
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
       <button class="btn btn-secondary btn-sm" onclick="closeAptPicker()">取消</button>
       <button class="btn btn-primary btn-sm" onclick="confirmAptPicker()">确定并作图</button>
@@ -3983,30 +4006,29 @@ function esc(s) {
   var _aptGeo = null;
   var _aptReqSeq = 0;
   var _aptState = null;
-  var _aptSelection = null;        // {codes, types, start, end}
+  var _aptSelection = null;        // {codes, types, start, end, maxAlt, colors}
   var _aptInteractionSetup = false;
   var _aptDragging = false;
   var _aptDragStartX = 0, _aptDragStartY = 0;
   var _aptDragCenterLat = 0, _aptDragCenterLon = 0;
-  var _APT_ALT_STEP = 300;
-  var _APT_ALT_LEVELS = 20;        // 0-6000m，每 300m 一档，共 20 档
-  var _APT_MAX_ALT = 6000;
+  var _APT_DEFAULT_ARR = '#eab308';
+  var _APT_DEFAULT_DEP = '#3b82f6';
+  var _APT_MAX_ALT_LIMIT = 6000;
 
   function _aptTodayUtc() {
     return new Date().toISOString().slice(0, 10);
   }
 
-  function _aptLevel(alt) {
-    var lv = Math.floor((alt || 0) / _APT_ALT_STEP);
-    return Math.max(0, Math.min(_APT_ALT_LEVELS - 1, lv));
+  function _aptLoadColors() {
+    var out = {};
+    try {
+      out = JSON.parse(localStorage.getItem('aptTrailColors') || '{}') || {};
+    } catch (e) { out = {}; }
+    return out;
   }
 
-  // 进场=黄，离场=蓝；浓度（不透明度）随高度增加
-  function _aptColor(type, level) {
-    var t = (level + 0.5) / _APT_ALT_LEVELS;
-    var alpha = 0.18 + 0.82 * t;
-    var hue = type === 'ARRIVAL' ? 52 : 212;
-    return 'hsla(' + hue + ',100%,62%,' + alpha.toFixed(3) + ')';
+  function _aptSaveColors(colors) {
+    try { localStorage.setItem('aptTrailColors', JSON.stringify(colors)); } catch (e) {}
   }
 
   function openAirportTrailPicker() {
@@ -4017,6 +4039,23 @@ function esc(s) {
     var ed = document.getElementById('aptEndDate');
     if (sd && !sd.value) sd.value = today;
     if (ed && !ed.value) ed.value = today;
+
+    // 恢复上次使用的颜色
+    var saved = _aptLoadColors();
+    var rows = document.querySelectorAll('#aptPickRows .apt-row');
+    for (var i = 0; i < rows.length; i++) {
+      var code = rows[i].getAttribute('data-code');
+      var c = saved[code] || {};
+      var a = rows[i].querySelector('.apt-color-arr');
+      var d = rows[i].querySelector('.apt-color-dep');
+      if (a && c.ARR) a.value = c.ARR;
+      if (d && c.DEP) d.value = c.DEP;
+    }
+    var ma = document.getElementById('aptMaxAlt');
+    if (ma) {
+      var savedAlt = parseInt(localStorage.getItem('aptTrailMaxAlt') || '', 10);
+      if (savedAlt > 0) ma.value = savedAlt;
+    }
     modal.style.display = 'flex';
   }
 
@@ -4027,15 +4066,33 @@ function esc(s) {
 
   function confirmAptPicker() {
     var codes = [];
-    var boxes = document.querySelectorAll('.apt-pick-code');
-    for (var i = 0; i < boxes.length; i++) {
-      if (boxes[i].checked) codes.push(boxes[i].value);
+    var colors = {};
+    var rows = document.querySelectorAll('#aptPickRows .apt-row');
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var code = row.getAttribute('data-code');
+      var box = row.querySelector('.apt-pick-code');
+      var arrEl = row.querySelector('.apt-color-arr');
+      var depEl = row.querySelector('.apt-color-dep');
+      colors[code] = {
+        ARR: arrEl ? arrEl.value : _APT_DEFAULT_ARR,
+        DEP: depEl ? depEl.value : _APT_DEFAULT_DEP
+      };
+      if (box && box.checked) codes.push(code);
     }
     var types = [];
     if ((document.getElementById('aptPickArr') || {}).checked) types.push('ARR');
     if ((document.getElementById('aptPickDep') || {}).checked) types.push('DEP');
     if (!codes.length) { alert('请至少选择一个机场'); return; }
     if (!types.length) { alert('请至少选择进场或离场'); return; }
+
+    var maEl = document.getElementById('aptMaxAlt');
+    var maxAlt = parseInt(maEl ? maEl.value : '4500', 10);
+    if (!maxAlt || maxAlt < 100) maxAlt = 4500;
+    if (maxAlt > _APT_MAX_ALT_LIMIT) {
+      alert('高度上限最高 ' + _APT_MAX_ALT_LIMIT + ' 米');
+      return;
+    }
 
     var sd = (document.getElementById('aptStartDate') || {}).value || _aptTodayUtc();
     var st = (document.getElementById('aptStartTime') || {}).value || '00:00';
@@ -4045,7 +4102,12 @@ function esc(s) {
     var end = ed + 'T' + et + ':59';
     if (start > end) { alert('开始时间不能晚于结束时间'); return; }
 
-    _aptSelection = { codes: codes, types: types, start: start, end: end };
+    _aptSelection = {
+      codes: codes, types: types, start: start, end: end,
+      maxAlt: maxAlt, colors: colors
+    };
+    _aptSaveColors(colors);
+    try { localStorage.setItem('aptTrailMaxAlt', String(maxAlt)); } catch (e) {}
     closeAptPicker();
 
     var modal = document.getElementById('modal-airport-trail');
@@ -4132,13 +4194,14 @@ function esc(s) {
     var loading = document.getElementById('apt-trail-loading');
     var info = document.getElementById('apt-trail-info');
     if (loading) loading.style.display = 'flex';
-    if (info) info.textContent = '查询中...（首次扫描约 30 秒/天）';
+    if (info) info.textContent = '查询中...（首次扫描约 30-50 秒/天）';
     var reqSeq = ++_aptReqSeq;
 
     var qs = 'airports=' + encodeURIComponent(sel.codes.join(',')) +
              '&types=' + encodeURIComponent(sel.types.join(',')) +
              '&start=' + encodeURIComponent(sel.start) +
-             '&end=' + encodeURIComponent(sel.end);
+             '&end=' + encodeURIComponent(sel.end) +
+             '&max_alt=' + encodeURIComponent(sel.maxAlt);
 
     Promise.all([
       fetch('/api/airport_tracks?' + qs).then(function(r) { return r.json(); }),
@@ -4159,7 +4222,7 @@ function esc(s) {
       var st = data.stats || {};
       if (info) {
         info.textContent = '进场 ' + (st.arrival || 0) + ' 架次 / 离场 ' + (st.departure || 0) +
-          ' 架次 · ' + (sel.codes.length) + ' 个机场';
+          ' 架次 · ' + (sel.codes.length) + ' 个机场 · ≤' + (sel.maxAlt) + 'm';
       }
       _renderAirportTrail();
     }).catch(function(err) {
@@ -4176,10 +4239,10 @@ function esc(s) {
       var pts = tracks[i].points || [];
       for (var j = 0; j < pts.length; j++) {
         var p = pts[j];
-        if (p.lt < minLat) minLat = p.lt;
-        if (p.lt > maxLat) maxLat = p.lt;
-        if (p.ln < minLon) minLon = p.ln;
-        if (p.ln > maxLon) maxLon = p.ln;
+        if (p[0] < minLat) minLat = p[0];
+        if (p[0] > maxLat) maxLat = p[0];
+        if (p[1] < minLon) minLon = p[1];
+        if (p[1] > maxLon) maxLon = p[1];
       }
     }
     if (minLat > maxLat) {
@@ -4201,13 +4264,19 @@ function esc(s) {
     return new GeoTransform({ lat: clat, lon: clon }, scale, w, h);
   }
 
+  function _aptTrackColor(sel, airport, type) {
+    var c = (sel && sel.colors && sel.colors[airport]) || {};
+    if (type === 'ARRIVAL') return c.ARR || _APT_DEFAULT_ARR;
+    return c.DEP || _APT_DEFAULT_DEP;
+  }
+
   function _renderAirportTrail() {
     var canvas = document.getElementById('aptTrailCanvas');
     if (!canvas || !_aptState) return;
     var payload = _aptState.payload;
     var airportsMeta = payload.airports || {};
     var tracks = payload.tracks || [];
-    var scaleAlt = payload.max_alt_m || _APT_MAX_ALT;
+    var sel = _aptSelection || { colors: {} };
 
     var container = canvas.parentElement;
     var w = container.clientWidth;
@@ -4273,45 +4342,39 @@ function esc(s) {
       return;
     }
 
-    // 按 类型+高度档 合并路径绘制（20 档 × 2 类型）
+    // 按 机场+类型 合并路径，统一颜色
     var paths = {};
-    function _pathFor(type, fl) {
-      var b = _aptLevel(fl);
-      var key = type + '_' + b;
-      if (!paths[key]) {
-        paths[key] = { path: new Path2D(), type: type, level: b };
-      }
-      return paths[key].path;
-    }
-
     for (var ti = 0; ti < tracks.length; ti++) {
       var trk = tracks[ti];
+      var key = trk.airport + '|' + trk.type;
+      var item = paths[key];
+      if (!item) {
+        item = { path: new Path2D(), color: _aptTrackColor(sel, trk.airport, trk.type) };
+        paths[key] = item;
+      }
       var pts = trk.points || [];
       var lastPx = null;
-      var lastTs = null;
+      var lastT = null;
       for (var pi = 0; pi < pts.length; pi++) {
         var p = pts[pi];
-        var px = _aptGeo.realToPixel({ lat: p.lt, lon: p.ln });
-        var ts = p.ts ? Date.parse(p.ts) : NaN;
-        var gap = (lastTs !== null && !isNaN(ts) && !isNaN(lastTs)) ? (ts - lastTs) : 0;
-        if (lastPx && gap <= 120000) {
-          var midFl = (parseFloat(lastPx.fl) + parseFloat(p.fl || 0)) / 2;
-          var path = _pathFor(trk.type, midFl);
-          path.moveTo(lastPx.x, lastPx.y);
-          path.lineTo(px.x, px.y);
+        var px = _aptGeo.realToPixel({ lat: p[0], lon: p[1] });
+        if (lastPx !== null && (p[3] - lastT) <= 120) {
+          item.path.moveTo(lastPx.x, lastPx.y);
+          item.path.lineTo(px.x, px.y);
         }
-        lastPx = { x: px.x, y: px.y, fl: p.fl || 0 };
-        lastTs = isNaN(ts) ? null : ts;
+        lastPx = px;
+        lastT = p[3];
       }
     }
 
-    ctx.lineWidth = 1.25;
+    ctx.lineWidth = 1.4;
     ctx.lineCap = 'round';
-    for (var key2 in paths) {
-      var item = paths[key2];
-      ctx.strokeStyle = _aptColor(item.type, item.level);
-      ctx.stroke(item.path);
+    ctx.globalAlpha = 0.9;
+    for (var k2 in paths) {
+      ctx.strokeStyle = paths[k2].color;
+      ctx.stroke(paths[k2].path);
     }
+    ctx.globalAlpha = 1.0;
 
     _aptDrawLegend(ctx, w, h, payload, tracks.length);
   }
@@ -4320,64 +4383,51 @@ function esc(s) {
     var meta = payload.airports || {};
     var stats = payload.stats || {};
     var byApt = stats.by_airport || {};
+    var sel = _aptSelection || { colors: {} };
     var x = 14, y = 16;
 
-    // 标题
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#e2e8f0';
     ctx.font = 'bold 14px sans-serif';
-    var title = [];
-    for (var code in meta) title.push((meta[code].name || code).replace('机场', ''));
-    ctx.fillText('机场进离场航迹 · ' + title.join(' / '), x, y);
+    var names = [];
+    for (var code in meta) names.push((meta[code].name || code).replace('机场', ''));
+    ctx.fillText('机场进离场航迹 · ' + names.join(' / '), x, y);
 
-    // 时间范围 + 统计
     ctx.fillStyle = '#94a3b8';
     ctx.font = '11px sans-serif';
     var t1 = (payload.start || '').replace('T', ' ');
     var t2 = (payload.end || '').replace('T', ' ');
-    ctx.fillText('时段 (UTC)：' + t1 + '  ～  ' + t2, x, y + 21);
-    var parts = [];
-    for (var c2 in byApt) {
-      parts.push(c2 + ' 进' + (byApt[c2].arrival || 0) + '/离' + (byApt[c2].departure || 0));
-    }
-    ctx.fillText(parts.join('   ') + '    共 ' + (trackCount || 0) + ' 条航迹', x, y + 38);
+    ctx.fillText('时段 (UTC)：' + t1 + '  ～  ' + t2 +
+      '    高度 ≤ ' + (payload.max_alt_m || 4500) + 'm', x, y + 21);
 
-    // 图例：进场黄 / 离场蓝，20 档浓度
-    var ly = y + 62;
-    var barW = 160, barH = 9;
-    var legend = [
-      { label: '进场 ARRIVAL', type: 'ARRIVAL' },
-      { label: '离场 DEPARTURE', type: 'DEPARTURE' }
-    ];
-    for (var i = 0; i < legend.length; i++) {
+    // 每个机场一行：进场色块 / 离场色块 + 架次
+    var ly = y + 42;
+    var chipW = 14, chipH = 6;
+    for (var code2 in meta) {
+      var st = byApt[code2] || {};
+      ctx.fillStyle = _aptTrackColor(sel, code2, 'ARRIVAL');
+      ctx.fillRect(x, ly + 1, chipW, chipH);
       ctx.fillStyle = '#cbd5e1';
       ctx.font = '11px sans-serif';
       ctx.textBaseline = 'middle';
-      ctx.textAlign = 'left';
-      ctx.fillText(legend[i].label, x, ly + barH / 2);
-      var bx = x + 96;
-      for (var b = 0; b < _APT_ALT_LEVELS; b++) {
-        ctx.fillStyle = _aptColor(legend[i].type, b);
-        ctx.fillRect(bx + b * (barW / _APT_ALT_LEVELS), ly, barW / _APT_ALT_LEVELS + 0.6, barH);
-      }
-      // 刻度
-      ctx.fillStyle = '#64748b';
-      ctx.font = '9px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      for (var tick = 0; tick <= 4; tick++) {
-        var alt = tick * 1500;
-        ctx.fillText(alt + 'm', bx + barW * alt / _APT_MAX_ALT, ly + barH + 3);
-      }
-      ly += barH + 26;
+      ctx.fillText('进 ' + (st.arrival || 0), x + chipW + 4, ly + 4);
+
+      ctx.fillStyle = _aptTrackColor(sel, code2, 'DEPARTURE');
+      ctx.fillRect(x + 62, ly + 1, chipW, chipH);
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillText('离 ' + (st.departure || 0), x + 62 + chipW + 4, ly + 4);
+
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.fillText((meta[code2].name || code2).replace('机场', ''), x + 124, ly + 4);
+      ly += 17;
     }
 
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
     ctx.fillStyle = '#64748b';
     ctx.font = '10px sans-serif';
-    ctx.fillText('颜色越浓 = 高度越高（6000m 以下，每 300m 一档，共 20 档）', x, ly - 4);
+    ctx.textBaseline = 'top';
+    ctx.fillText('共 ' + (trackCount || 0) + ' 条航迹', x, ly + 4);
 
     // 右下角提示
     ctx.textAlign = 'right';
