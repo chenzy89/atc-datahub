@@ -35,19 +35,32 @@ _AIRSPACE_DEFAULTS = {
         "name": "广州白云机场",
         "center": {"lat": 23.390278, "lon": 113.298889},
         "radius_km": 6, "ceiling_m": 300,
-        "display_radius_km": 60, "color_scale_m": 3000,
+        "display_radius_km": 60, "color_scale_m": 6000, "alt_step_m": 300,
+    },
+    "ZGSZ": {
+        "name": "深圳宝安机场",
+        "center": {"lat": 22.637778, "lon": 113.798056},
+        "radius_km": 6, "ceiling_m": 300,
+        "display_radius_km": 60, "color_scale_m": 6000, "alt_step_m": 300,
+    },
+    "ZGSD": {
+        "name": "珠海金湾机场",
+        "center": {"lat": 22.006111, "lon": 113.376389},
+        "radius_km": 5, "ceiling_m": 300,
+        "display_radius_km": 60, "color_scale_m": 6000, "alt_step_m": 300,
     },
     "ZGHZ": {
         "name": "惠州平潭机场",
         "center": {"lat": 23.048611, "lon": 114.597500},
         "radius_km": 8, "ceiling_m": 500,
-        "display_radius_km": 60, "color_scale_m": 3000,
+        "display_radius_km": 60, "color_scale_m": 6000, "alt_step_m": 300,
     },
 }
 
 _EARTH_R = 6371000.0
 _TODAY_TTL = 1800          # 当天缓存有效期（秒）
-_CACHE_VERSION = 2        # 识别逻辑变更时递增，旧缓存自动失效
+_CACHE_VERSION = 3        # 识别逻辑变更时递增，旧缓存自动失效
+_MAX_DATE_SPAN = 7         # 一次查询最多跨多少天（每天都要扫一遍历史）
 _SPLIT_GAP_SECONDS = 1800  # 同一呼号两段航迹的时间间隔阈值
 _MIN_POINTS_PER_TRACK = 2
 
@@ -71,7 +84,8 @@ def load_airspace() -> dict[str, dict]:
                     "radius_km": float(cfg.get("radius_km", 6)),
                     "ceiling_m": float(cfg.get("ceiling_m", 300)),
                     "display_radius_km": float(cfg.get("display_radius_km", 60)),
-                    "color_scale_m": float(cfg.get("color_scale_m", 3000)),
+                    "color_scale_m": float(cfg.get("color_scale_m", 6000)),
+                    "alt_step_m": float(cfg.get("alt_step_m", 300)),
                 }
             except (KeyError, TypeError, ValueError):
                 logger.warning("机场空域配置 %s 格式有误，已跳过", code)
@@ -189,7 +203,9 @@ def _scan_day(date_str: str, airports: dict[str, dict]) -> dict[str, Any]:
                     (ts, round(lt, 6), round(ln, 6), round(fl, 1), ap, ad)
                 )
                 total_points += 1
-                break  # 同一时刻只可能属于一个机场（两机场相距约 130km）
+                # 不 break：广州/深圳/珠海/惠州 的绘图圈可能互相重叠，
+                # 重叠区的点要同时进入各自分组，否则靠近某机场的点会被
+                # 先遍历到的邻场“截走”，导致该机场漏识别。
 
     result: dict[str, Any] = {}
     for code, cfg in airports.items():
@@ -278,16 +294,15 @@ def _build_airport_tracks(code: str, cfg: dict, by_cs: dict[str, list[tuple]],
                 n_dep += 1
 
             # 抽稀：隔点保留，首尾必留（原始约 4 秒一个点）；
-            # 只画到配色上限高度（默认 3000m）附近，边界点保留
+            # 只画配色上限高度（默认 6000m）以下的点
             n = len(seg)
             out_pts = []
             for idx, pt in enumerate(seg):
+                if pt[3] > color_cap:
+                    continue
                 if idx % 2 != 0 and idx != n - 1:
                     continue
-                if pt[3] <= color_cap or idx == 0 or idx == n - 1 \
-                        or (idx > 0 and seg[idx - 1][3] <= color_cap) \
-                        or (idx + 1 < n and seg[idx + 1][3] <= color_cap):
-                    out_pts.append({"lt": pt[1], "ln": pt[2], "fl": pt[3], "ts": pt[0]})
+                out_pts.append({"lt": pt[1], "ln": pt[2], "fl": pt[3], "ts": pt[0]})
             if len(out_pts) < _MIN_POINTS_PER_TRACK:
                 continue
             tracks.append({
@@ -326,6 +341,7 @@ def _build_payload(date_str: str, airports: dict[str, dict]) -> dict[str, Any]:
                     "ceiling_m": cfg["ceiling_m"],
                     "display_radius_km": cfg["display_radius_km"],
                     "color_scale_m": cfg["color_scale_m"],
+                    "alt_step_m": cfg["alt_step_m"],
                 },
             }
             for code, cfg in airports.items()
@@ -399,4 +415,129 @@ def get_airport_tracks(date_str: str, code: str) -> dict[str, Any]:
         "date": date_str,
         "stats": item.get("stats", {}),
         "tracks": item.get("tracks", []),
+    }
+
+
+_TYPE_ALIASES = {
+    "ARR": "ARRIVAL", "ARRIVAL": "ARRIVAL", "A": "ARRIVAL",
+    "DEP": "DEPARTURE", "DEPARTURE": "DEPARTURE", "D": "DEPARTURE",
+}
+
+
+def parse_types(values: list[str] | None) -> set[str]:
+    out: set[str] = set()
+    for v in values or []:
+        key = _TYPE_ALIASES.get(str(v).strip().upper())
+        if key:
+            out.add(key)
+    return out or {"ARRIVAL", "DEPARTURE"}
+
+
+def _in_time_range(ts: str, start: str, end: str) -> bool:
+    """ts 形如 2026-10-20T00:00:01.894Z，start/end 形如 2026-10-20T00:00:00。"""
+    if not ts:
+        return True
+    key = ts[:19]
+    if start and key < start[:19]:
+        return False
+    if end and key > end[:19]:
+        return False
+    return True
+
+
+def _trim_to_nearest(points: list[dict], code: str, airports: dict[str, dict],
+                     codes: list[str]) -> list[dict]:
+    """多机场同时绘制时，每个点只归给最近的那个机场，避免重叠区域重复作画。"""
+    me = airports[code]["center"]
+    cos_me = math.cos(math.radians(me["lat"]))
+    others = [airports[c]["center"] for c in codes if c != code]
+    if not others:
+        return points
+    kept = []
+    for p in points:
+        lat, lon = p["lt"], p["ln"]
+        dy = (lat - me["lat"]) * 111000.0
+        dx = (lon - me["lon"]) * 111000.0 * cos_me
+        d_me = dx * dx + dy * dy
+        nearest = True
+        for o in others:
+            oy = (lat - o["lat"]) * 111000.0
+            ox = (lon - o["lon"]) * 111000.0 * math.cos(math.radians(o["lat"]))
+            if ox * ox + oy * oy < d_me:
+                nearest = False
+                break
+        if nearest:
+            kept.append(p)
+    return kept
+
+
+def get_airports_tracks(dates: list[str], codes: list[str], types: set[str],
+                        start: str, end: str) -> dict[str, Any]:
+    """多机场 / 多日期 / 时间段 / 进离场类型 的合并查询结果。"""
+    airports = load_airspace()
+    codes = [c.upper() for c in codes if c.upper() in airports]
+    if not codes:
+        raise KeyError(",".join(codes))
+
+    tracks: list[dict] = []
+    stats = {c: {"arrival": 0, "departure": 0, "total": 0} for c in codes}
+
+    for date_str in dates:
+        payload = _load_payload(date_str, airports)
+        for code in codes:
+            item = payload["airports"].get(code) or {}
+            for trk in item.get("tracks", []):
+                typ = trk.get("type")
+                if typ not in types:
+                    continue
+                pts = [p for p in trk.get("points", [])
+                       if _in_time_range(p.get("ts", ""), start, end)]
+                if len(pts) < _MIN_POINTS_PER_TRACK:
+                    continue
+                if len(codes) > 1:
+                    pts = _trim_to_nearest(pts, code, airports, codes)
+                    if len(pts) < _MIN_POINTS_PER_TRACK:
+                        continue
+                tracks.append({
+                    "airport": code,
+                    "type": typ,
+                    "callsign": trk.get("callsign", ""),
+                    "adep": trk.get("adep", ""),
+                    "adest": trk.get("adest", ""),
+                    "points": pts,
+                })
+                stats[code]["arrival" if typ == "ARRIVAL" else "departure"] += 1
+                stats[code]["total"] += 1
+
+    tracks.sort(key=lambda t: (t["points"][0].get("ts", ""), t["callsign"]))
+    meta = {
+        c: {
+            "icao": c,
+            "name": airports[c]["name"],
+            "center": airports[c]["center"],
+            "radius_km": airports[c]["radius_km"],
+            "ceiling_m": airports[c]["ceiling_m"],
+            "display_radius_km": airports[c]["display_radius_km"],
+            "color_scale_m": airports[c]["color_scale_m"],
+            "alt_step_m": airports[c]["alt_step_m"],
+        }
+        for c in codes
+    }
+    total_arr = sum(s["arrival"] for s in stats.values())
+    total_dep = sum(s["departure"] for s in stats.values())
+    return {
+        "date_from": dates[0] if dates else "",
+        "date_to": dates[-1] if dates else "",
+        "start": start,
+        "end": end,
+        "airports": meta,
+        "tracks": tracks,
+        "stats": {
+            "by_airport": stats,
+            "arrival": total_arr,
+            "departure": total_dep,
+            "total": total_arr + total_dep,
+        },
+        "max_alt_m": max((airports[c]["color_scale_m"] for c in codes), default=6000),
+        "alt_step_m": 300,
     }

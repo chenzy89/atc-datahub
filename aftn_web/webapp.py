@@ -352,19 +352,55 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         识别规则：航迹任一点距机场中心 <= radius_km 且高度 <= ceiling_m，
         即视为该机场的进离场航班。数据源为 radar_history（flight_tracks
         只保存深圳终端区航班，不包含广州/惠州）。
-        """
-        code = (_req_str("airport") or "").upper()
-        date_str = (_req_str("date") or "").strip()[:10]
-        try:
-            datetime.strptime(date_str, "%Y-%m-%d")
-        except ValueError:
-            return jsonify({"error": "日期格式应为 YYYY-MM-DD"}), 400
 
-        from .airport_tracks import get_airport_tracks
+        参数：
+          airports=ZGGG,ZGSZ,ZGSD,ZGHZ （也兼容单个 airport=ZGGG）
+          types=ARR,DEP                （默认两者都要）
+          start=YYYY-MM-DDTHH:MM:SS    （UTC，含）
+          end=YYYY-MM-DDTHH:MM:SS      （UTC，含）
+          date=YYYY-MM-DD              （兼容旧调用，等价于当天 00:00-23:59）
+        """
+        airports_arg = (_req_str("airports") or _req_str("airport") or "").strip()
+        codes = [c.strip().upper() for c in airports_arg.split(",") if c.strip()]
+        if not codes:
+            return jsonify({"error": "缺少机场参数 airports"}), 400
+
+        from .airport_tracks import get_airports_tracks, parse_types
+        types = parse_types((_req_str("types") or "ARR,DEP").split(","))
+
+        day = (_req_str("date") or "").strip()[:10]
+        start = (_req_str("start") or "").strip().replace("Z", "")
+        end = (_req_str("end") or "").strip().replace("Z", "")
+        if not start:
+            start = (day or datetime.utcnow().strftime("%Y-%m-%d")) + "T00:00:00"
+        if not end:
+            end = (day or start[:10]) + "T23:59:59"
         try:
-            payload = get_airport_tracks(date_str, code)
+            start_dt = datetime.strptime(start[:19], "%Y-%m-%dT%H:%M:%S")
+            end_dt = datetime.strptime(end[:19], "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            return jsonify({"error": "时间格式应为 YYYY-MM-DDTHH:MM:SS"}), 400
+        start = start_dt.strftime("%Y-%m-%dT%H:%M:%S")
+        end = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
+        if start_dt > end_dt:
+            return jsonify({"error": "开始时间晚于结束时间"}), 400
+
+        dates = []
+        cur = start_dt.date()
+        last = end_dt.date()
+        span = (last - cur).days + 1
+        if span > 7:
+            return jsonify({"error": "一次最多查询 7 天（当前 %d 天）" % span}), 400
+        while cur <= last:
+            dates.append(cur.strftime("%Y-%m-%d"))
+            cur += timedelta(days=1)
+
+        try:
+            payload = get_airports_tracks(dates, codes, types, start, end)
         except KeyError:
-            return jsonify({"error": "未知机场: " + (code or "（空）")}), 400
+            return jsonify({"error": "未知机场: " + airports_arg}), 400
+        except FileNotFoundError:
+            return jsonify({"error": "该日期没有雷达历史数据"}), 404
 
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(body) > 1024:
