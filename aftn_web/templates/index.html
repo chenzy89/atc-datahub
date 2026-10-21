@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.3.17</title>
+<title>ATC综合数据中心 v2.3.18</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.3.17</span>
+  <span class="badge">v2.3.18</span>
 </div>
 
 <div class="tabs">
@@ -1114,7 +1114,7 @@ canvas#radarMap {
 
 <!-- ── 机场进离场航迹：条件选择弹窗 ── -->
 <div id="modal-apt-picker" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.75);z-index:1570;align-items:center;justify-content:center;" onclick="if(event.target===this)closeAptPicker()">
-  <div style="background:#0d1117;border:1px solid var(--border);border-radius:10px;width:470px;max-width:94%;padding:18px 20px;box-shadow:0 12px 40px rgba(0,0,0,.6);">
+  <div style="background:#0d1117;border:1px solid var(--border);border-radius:10px;width:560px;max-width:96%;padding:18px 20px;box-shadow:0 12px 40px rgba(0,0,0,.6);">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
       <h2 style="font-size:16px;font-weight:600;color:var(--accent-green);">机场进离场航迹</h2>
       <button onclick="closeAptPicker()" style="background:none;border:none;color:var(--text-muted);font-size:22px;cursor:pointer;line-height:1;">&times;</button>
@@ -1122,7 +1122,7 @@ canvas#radarMap {
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
       <span>选择机场</span><span style="font-size:11px;">进场颜色 / 离场颜色</span>
     </div>
-    <div id="aptPickRows" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;font-size:13px;">
+    <div id="aptPickRows" style="display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;margin-bottom:14px;font-size:13px;">
       <div class="apt-row" data-code="ZGGG" style="display:flex;align-items:center;gap:10px;">
         <label style="display:flex;align-items:center;gap:5px;cursor:pointer;width:72px;"><input type="checkbox" class="apt-pick-code" value="ZGGG" checked style="accent-color:#3b82f6;"> 广州</label>
         <input type="color" class="apt-color-arr" value="#eab308" title="广州进场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
@@ -1143,6 +1143,16 @@ canvas#radarMap {
         <input type="color" class="apt-color-arr" value="#eab308" title="惠州进场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
         <input type="color" class="apt-color-dep" value="#3b82f6" title="惠州离场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
       </div>
+      <div class="apt-row" data-code="VHHH" style="display:flex;align-items:center;gap:10px;">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;width:72px;"><input type="checkbox" class="apt-pick-code" value="VHHH" checked style="accent-color:#3b82f6;"> 香港</label>
+        <input type="color" class="apt-color-arr" value="#eab308" title="香港进场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+        <input type="color" class="apt-color-dep" value="#3b82f6" title="香港离场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+      </div>
+      <div class="apt-row" data-code="VMMC" style="display:flex;align-items:center;gap:10px;">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;width:72px;"><input type="checkbox" class="apt-pick-code" value="VMMC" checked style="accent-color:#3b82f6;"> 澳门</label>
+        <input type="color" class="apt-color-arr" value="#eab308" title="澳门进场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+        <input type="color" class="apt-color-dep" value="#3b82f6" title="澳门离场颜色" style="width:38px;height:24px;border:1px solid var(--border);border-radius:4px;background:none;padding:0;cursor:pointer;">
+      </div>
     </div>
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">航迹类型</div>
     <div style="display:flex;gap:18px;margin-bottom:14px;font-size:13px;">
@@ -1156,10 +1166,10 @@ canvas#radarMap {
     </div>
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">起止时间（UTC）</div>
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px;">
-      <input type="date" id="aptStartDate" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:135px;">
+      <input type="date" id="aptStartDate" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:115px;">
       <input type="time" id="aptStartTime" value="00:00" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:82px;">
       <span style="color:var(--text-muted);">至</span>
-      <input type="date" id="aptEndDate" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:135px;">
+      <input type="date" id="aptEndDate" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:115px;">
       <input type="time" id="aptEndTime" value="23:59" style="background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;width:82px;">
     </div>
     <div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.6;">完整显示所选高度以下的进离场航迹（不限水平范围）。<br>首次查询某天需扫描雷达历史，约 30-50 秒/天；之后走缓存。</div>

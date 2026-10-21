@@ -49,6 +49,30 @@
       "display_radius_km": 60,
       "color_scale_m": 6000,
       "alt_step_m": 300
+    },
+    "VHHH": {
+      "name": "香港国际机场",
+      "center": {
+        "lat": 22.313611,
+        "lon": 113.908889
+      },
+      "radius_km": 6,
+      "ceiling_m": 300,
+      "display_radius_km": 60,
+      "color_scale_m": 6000,
+      "alt_step_m": 300
+    },
+    "VMMC": {
+      "name": "澳门国际机场",
+      "center": {
+        "lat": 22.149167,
+        "lon": 113.5925
+      },
+      "radius_km": 6,
+      "ceiling_m": 300,
+      "display_radius_km": 60,
+      "color_scale_m": 6000,
+      "alt_step_m": 300
     }
   }
 }

@@ -58,6 +58,18 @@ _AIRSPACE_DEFAULTS = {
         "radius_km": 8, "ceiling_m": 500,
         "display_radius_km": 60, "color_scale_m": 6000, "alt_step_m": 300,
     },
+    "VHHH": {
+        "name": "香港国际机场",
+        "center": {"lat": 22.313611, "lon": 113.908889},
+        "radius_km": 6, "ceiling_m": 300,
+        "display_radius_km": 60, "color_scale_m": 6000, "alt_step_m": 300,
+    },
+    "VMMC": {
+        "name": "澳门国际机场",
+        "center": {"lat": 22.149167, "lon": 113.592500},
+        "radius_km": 6, "ceiling_m": 300,
+        "display_radius_km": 60, "color_scale_m": 6000, "alt_step_m": 300,
+    },
 }
 
 _EARTH_R = 6371000.0
