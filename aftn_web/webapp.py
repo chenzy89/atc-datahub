@@ -264,12 +264,13 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             track_type=track_type or "",
             limit=100,
         )
-        # 返回时反序列化 points_json
+        # 返回时反序列化 points_json（v2.3.19 起兼容 gzip BLOB 格式）
+        from .database import decode_points_json
         result = []
         for r in records:
             points = []
             try:
-                points = json.loads(r.get("points_json", "[]"))
+                points = json.loads(decode_points_json(r.get("points_json")) or "[]")
             except (json.JSONDecodeError, TypeError):
                 pass
             # plan_date 过滤：航迹起点或终点落在 [plan_date, plan_date+1day] 范围内
@@ -323,13 +324,13 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         if not callsigns:
             return jsonify([])
 
-        from .database import query_flight_tracks_by_callsigns
+        from .database import query_flight_tracks_by_callsigns, decode_points_json
         records = query_flight_tracks_by_callsigns(db, callsigns, dof)
         result = []
         for r in records:
             points = []
             try:
-                points = json.loads(r.get("points_json", "[]"))
+                points = json.loads(decode_points_json(r.get("points_json")) or "[]")
             except (json.JSONDecodeError, TypeError):
                 pass
             result.append({

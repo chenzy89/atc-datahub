@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import logging
 import sqlite3
 import threading
@@ -969,7 +970,8 @@ class Database:
                                 if _computed > 0 and _computed != terminal_flight_time:
                                     # 保留最大值：有时 span 可能略大于实际终端飞行时间
                                     terminal_flight_time = _computed
-                                    logger.info(
+                                    # 热路径：每个在区航班每 4 秒触发一次，降为 debug 防日志膨胀
+                                    logger.debug(
                                         "[TERM] %s 按 entry→exit 计算终端时长: %ds (%s → %s)",
                                         callsign, _computed, _start, _end,
                                     )
@@ -1004,7 +1006,8 @@ class Database:
                 affected = cur.rowcount
                 if affected > 0:
                     loc = f"{adep}->{adest}" if adep and adest else ""
-                    logger.info("[TERM] %s%s (id=%d) 进=%s 出=%s 时长=%ds",
+                    # 热路径：FDR 每 4 秒轮询一次，时长增长即触发，降为 debug
+                    logger.debug("[TERM] %s%s (id=%d) 进=%s 出=%s 时长=%ds",
                                 callsign, f" {loc}" if loc else "",
                                 match["id"], entry_time or '-', exit_time or '-',
                                 terminal_flight_time)
@@ -2479,13 +2482,34 @@ def _day_from_dt_str(dt_str: str | None) -> str | None:
 
 
 # ── 航迹保存 (flight_tracks) ──────────────────────────────────
+# v2.3.19: points_json 以 gzip BLOB 存储（表 8.5G→约1G）；
+# 读取端兼容旧 TEXT 与新 BLOB 两种格式。
+
+def decode_points_json(value) -> str:
+    """解码 points_json 字段：兼容旧 TEXT 与新 gzip BLOB 格式"""
+    if value is None:
+        return ""
+    if isinstance(value, (bytes, bytearray)):
+        data = bytes(value)
+        if data[:2] == b"\x1f\x8b":
+            try:
+                return gzip.decompress(data).decode("utf-8")
+            except Exception:
+                return ""
+        return data.decode("utf-8", "replace")
+    return str(value)
+
 
 def save_flight_track(db_self, callsign: str, track_type: str,
                        adep: str, adest: str, dof: str,
                        points_json: str,
                        start_time: str, end_time: str) -> int:
-    """保存一条航迹记录到数据库"""
+    """保存一条航迹记录到数据库（points_json 压缩为 gzip BLOB）"""
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        payload = gzip.compress(points_json.encode("utf-8"), 6)
+    except Exception:
+        payload = points_json  # 压缩失败时退回明文
     conn = db_self._get_conn()
     conn.execute(
         """INSERT INTO flight_tracks
@@ -2493,7 +2517,7 @@ def save_flight_track(db_self, callsign: str, track_type: str,
             points_json, start_time, end_time, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (callsign.upper(), track_type, adep.upper(), adest.upper(),
-         dof, points_json, start_time, end_time, now),
+         dof, payload, start_time, end_time, now),
     )
     conn.commit()
     return conn.execute("SELECT last_insert_rowid()").fetchone()[0]

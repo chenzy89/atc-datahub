@@ -23,6 +23,7 @@ import os
 import struct
 import threading
 import time
+import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -35,6 +36,44 @@ _FLUSH_BATCH_SIZE = 200
 
 # CFL 前向保持：同一呼号超过该秒数无更新则丢弃已保持的 CFL
 _CFL_LATCH_TTL_SECONDS = 1800
+
+# 呼号索引侧车文件后缀（radar_YYYYMMDD.jsonl.gz.idx.json.gz）
+_IDX_SUFFIX = ".idx.json.gz"
+# 内存中最多缓存的日索引个数（每个约几十 MB）
+_INDEX_CACHE_MAX = 4
+
+
+def _iter_gzip_members_with_offsets(filepath: Path):
+    """迭代 gzip 多成员文件，产出 (成员起始字节偏移, 解压数据)。
+    基于 zlib.decompressobj(wbits=31) 逐成员解压，尾部损坏 member 自动终止。"""
+    try:
+        raw = open(str(filepath), "rb")
+    except Exception:
+        return
+    with raw:
+        while True:
+            start = raw.tell()
+            magic = raw.read(2)
+            if len(magic) < 2 or magic != b"\x1f\x8b":
+                return
+            raw.seek(start)
+            d = zlib.decompressobj(31)
+            buf = bytearray()
+            while True:
+                chunk = raw.read(262144)
+                if not chunk:
+                    yield start, bytes(buf)  # 尾部不完整 member
+                    return
+                try:
+                    buf += d.decompress(chunk)
+                except zlib.error:
+                    return
+                if d.eof:
+                    buf += d.flush()
+                    # 回退未消费的下一 member 字节
+                    raw.seek(-len(d.unused_data), 1)
+                    yield start, bytes(buf)
+                    break
 
 
 def _write_gzip_member(filepath: Path, data: bytes) -> bool:
@@ -102,6 +141,9 @@ class RadarHistoryStore:
         self._current_path: Path | None = None
         self._last_cleanup = time.monotonic()
         self._cfl_latch: dict[str, tuple[float, float]] = {}   # 呼号 → (CFL 米, 最后更新时间)
+        # 呼号索引缓存: {文件路径: {"members": [offset...], "cs": {呼号: [member_idx...]}}}
+        self._index_cache: dict[str, dict] = {}
+        self._index_lock = threading.Lock()
 
     # ── 公开接口 ──────────────────────────────────────────
 
@@ -183,6 +225,10 @@ class RadarHistoryStore:
             date_part = name.split("_", 1)[1].split(".")[0] if "_" in name else ""
             if date_part < from_d or date_part > to_d:
                 continue
+            if callsign and f != self._current_path:
+                # 历史文件（非当日写入中）→ 索引快速查询；失败回退全扫描
+                if self._query_indexed(f, ts_from, ts_to, callsign, results):
+                    continue
             if date_part == from_d:
                 self._scan_file(f, ts_from, ts_to, callsign, results)
             elif date_part == to_d:
@@ -240,6 +286,132 @@ class RadarHistoryStore:
         """强制刷盘"""
         with self._lock:
             self._flush_nolock()
+
+    # ── 呼号索引（v2.3.19）────────────────────────────────
+    # 目的：按呼号查询历史航迹时不再全日解压扫描（~25-30s），
+    # 而是按索引只解压该呼号出现的 member（秒级）。
+    # 索引侧车文件与数据文件同目录，构建一次永久复用；
+    # 只对非当日（已写完）的文件启用，当日文件仍走全扫描。
+
+    def _index_path(self, filepath: Path) -> Path:
+        return filepath.with_name(filepath.name + _IDX_SUFFIX)
+
+    def _load_or_build_index(self, filepath: Path) -> Optional[dict]:
+        """加载（或首次构建）单日呼号索引；失败返回 None（调用方回退全扫描）"""
+        key = str(filepath)
+        with self._index_lock:
+            cached = self._index_cache.get(key)
+        if cached is not None:
+            return cached
+
+        sidecar = self._index_path(filepath)
+        idx: dict | None = None
+        # 1) 侧车文件有效（比数据文件新）→ 直接加载
+        try:
+            if sidecar.is_file() and sidecar.stat().st_mtime >= filepath.stat().st_mtime:
+                with gzip.open(str(sidecar), "rb") as fh:
+                    loaded = json.loads(fh.read().decode("utf-8"))
+                if isinstance(loaded, dict) and "members" in loaded and "cs" in loaded:
+                    idx = loaded
+        except Exception as exc:
+            logger.warning("radar history: 读取索引失败 %s: %s", sidecar.name, exc)
+
+        # 2) 无有效侧车 → 全量扫描构建并落盘
+        if idx is None:
+            t0 = time.monotonic()
+            members: list[int] = []
+            cs_map: dict[str, list[int]] = {}
+            try:
+                mi = 0
+                for start, data in _iter_gzip_members_with_offsets(filepath):
+                    members.append(start)
+                    for line in data.decode("utf-8", "replace").split("\n"):
+                        if not line:
+                            continue
+                        try:
+                            cs = json.loads(line).get("cs") or ""
+                        except Exception:
+                            continue
+                        if cs:
+                            cs_map.setdefault(cs.upper(), []).append(mi)
+                    mi += 1
+                idx = {"members": members, "cs": cs_map}
+            except Exception as exc:
+                logger.warning("radar history: 构建索引失败 %s: %s", filepath.name, exc)
+                return None
+            try:
+                tmp = sidecar.with_name(sidecar.name + ".tmp")
+                with gzip.open(str(tmp), "wb", compresslevel=6) as fh:
+                    fh.write(json.dumps(idx, separators=(",", ":")).encode("utf-8"))
+                tmp.replace(sidecar)
+                logger.info(
+                    "radar history: 构建索引完成 %s（%d members / %d 呼号, %.1fs）",
+                    filepath.name, len(members), len(cs_map), time.monotonic() - t0,
+                )
+            except Exception as exc:
+                logger.warning("radar history: 索引落盘失败 %s: %s", sidecar.name, exc)
+
+        with self._index_lock:
+            if len(self._index_cache) >= _INDEX_CACHE_MAX:
+                self._index_cache.clear()
+            self._index_cache[key] = idx
+        return idx
+
+    def _query_indexed(self, filepath: Path, ts_from: str | None, ts_to: str | None,
+                       callsign: str, results: list[dict[str, Any]]) -> bool:
+        """按索引只解压目标呼号出现的 member。成功返回 True（无论命中多少点）。"""
+        idx = self._load_or_build_index(filepath)
+        if idx is None:
+            return False
+        member_ids = (idx.get("cs") or {}).get(callsign.upper())
+        if not member_ids:
+            return True
+        members = idx.get("members") or []
+        # 同一 member 可能被同一呼号的多条记录引用，必须去重
+        try:
+            with open(str(filepath), "rb") as raw:
+                for mid in sorted(set(member_ids)):
+                    if mid >= len(members):
+                        continue
+                    raw.seek(members[mid])
+                    d = zlib.decompressobj(31)
+                    buf = b""
+                    while True:
+                        chunk = raw.read(262144)
+                        if not chunk:
+                            break
+                        buf += d.decompress(chunk)
+                        if d.eof:
+                            buf += d.flush()
+                            break
+                    self._filter_lines(buf.decode("utf-8", "replace"),
+                                       ts_from, ts_to, callsign, results)
+        except Exception as exc:
+            logger.warning("radar history: 索引查询失败 %s: %s", filepath.name, exc)
+            return False
+        return True
+
+    @staticmethod
+    def _filter_lines(text: str, ts_from: str | None, ts_to: str | None,
+                      callsign: str, results: list[dict[str, Any]]) -> None:
+        """按时间/呼号过滤 JSONL 文本行并追加到 results"""
+        cs_upper = callsign.upper()
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                pt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (pt.get("cs") or "").upper() != cs_upper:
+                continue
+            ts = pt.get("ts", "")
+            if ts_from and ts < ts_from:
+                continue
+            if ts_to and ts > ts_to:
+                continue
+            results.append(pt)
 
     def close(self) -> None:
         """关闭并刷盘"""

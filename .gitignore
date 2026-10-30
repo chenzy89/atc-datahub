@@ -13,6 +13,8 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 logs/*.log
+logs/*.log.gz
+logs/*.gz
 .env
 .DS_Store
 aftn_web/data.db

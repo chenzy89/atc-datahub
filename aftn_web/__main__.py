@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
 import signal
 import sys
@@ -42,6 +43,7 @@ RETENTION_DEFAULTS = {
     "vacuum_enabled": True,
     "vacuum_hour_bj": 4,           # VACUUM 收缩时间（北京时整点）
     "vacuum_min_free_mb": 4,       # 空闲页少于此值时不 VACUUM（避免无意义整库重写）
+    "log_retention_days": 30,      # 日志文件保留天数（按天轮转后自动删除超期文件）
 }
 
 
@@ -73,13 +75,20 @@ def _load_retention_config() -> dict:
 
 
 def setup_logging(log_dir: str | Path | None = None) -> None:
+    """日志：stdout + 文件。文件按天轮转（aftn-web.log → aftn-web.log.YYYY-MM-DD），
+    超过 log_retention_days 的轮转文件自动删除。
+    注意：文件名不再含启动日期，避免进程长期运行把所有日志写进一个文件。"""
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if log_dir:
         log_path = Path(log_dir)
         log_path.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(
-            log_path / f"aftn-web-{datetime.now():%Y%m%d}.log",
+        keep_days = max(1, int(_load_retention_config().get("log_retention_days", 30)))
+        fh = logging.handlers.TimedRotatingFileHandler(
+            log_path / "aftn-web.log",
+            when="midnight",
+            backupCount=keep_days,
             encoding="utf-8",
+            delay=True,
         )
         handlers.append(fh)
     logging.basicConfig(
@@ -633,6 +642,31 @@ def main(argv: list[str] | None = None) -> int:
                         logger.info("每日清理: 删除 %d 个 radar_history 文件", removed)
                 except Exception as exc:
                     logger.exception("每日清理: radar_history 文件删除异常: %s", exc)
+
+                # 清理过期日志文件（旧命名 aftn-web-YYYYMMDD.log 与轮转文件 aftn-web.log.YYYY-MM-DD）
+                try:
+                    if args.log_dir:
+                        log_dir_p = Path(args.log_dir)
+                        log_keep = int(cfg.get("log_retention_days", 30))
+                        cutoff_log_ts = (now - dt_mod.timedelta(days=log_keep)).timestamp()
+                        removed_logs = 0
+                        if log_dir_p.is_dir():
+                            for f in log_dir_p.iterdir():
+                                if not f.name.startswith("aftn-web") or ".log" not in f.name:
+                                    continue
+                                if f.name == "aftn-web.log":
+                                    continue  # 当前活跃日志，跳过
+                                try:
+                                    if f.stat().st_mtime < cutoff_log_ts:
+                                        f.unlink()
+                                        removed_logs += 1
+                                except OSError:
+                                    pass
+                        if removed_logs:
+                            logger.info("每日清理: 删除 %d 个过期日志文件(保留%dd)",
+                                        removed_logs, log_keep)
+                except Exception as exc:
+                    logger.exception("每日清理: 日志文件删除异常: %s", exc)
         except Exception:
             logger.exception("每日清理异常")
 

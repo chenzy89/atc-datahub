@@ -686,9 +686,10 @@ class FDRStore:
                     self._records.pop(k, None)
 
         if radar_updated:
-            logger.info("[FDR] 更新 %d 条跑道/程序", radar_updated)
+            # 热路径：每 4 秒一轮，降为 debug 防日志膨胀
+            logger.debug("[FDR] 更新 %d 条跑道/程序", radar_updated)
         if terminal_updated:
-            logger.info("[FDR] 更新 %d 条终端区数据", terminal_updated)
+            logger.debug("[FDR] 更新 %d 条终端区数据", terminal_updated)
         if sector_flushed > 0:
             logger.debug("[SECTOR] 刷入 %d 条扇区记录", sector_flushed)
         if error_count > 10:
