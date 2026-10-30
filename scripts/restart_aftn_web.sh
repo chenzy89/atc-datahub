@@ -39,6 +39,12 @@ fi
 # 清理残留的 PID 锁文件（防止新进程启动被拒）
 rm -f "$PID_FILE"
 
+# 验证端口已释放（防止旧进程未被杀掉时新进程启动失败却误报成功）
+if ss -tln | grep -q ":$PORT "; then
+    echo "❌ 端口 $PORT 仍被占用（旧进程未停止，可能权限不足或命名空间隔离），中止启动"
+    exit 1
+fi
+
 echo "==> 2/4 启动新进程..."
 cd "$REPO_DIR" || { echo "错误: 无法进入 $REPO_DIR"; exit 1; }
 nohup "$PYTHON" -m aftn_web -c "$REPO_DIR/config.json" --log-dir "$LOG_DIR" > /dev/null 2>&1 &
