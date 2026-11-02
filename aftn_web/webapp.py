@@ -641,6 +641,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         source_message_type = _req_str("source_message_type")
         flight_rule = _req_str("flight_rule")
         handover_pt = _req_str("handover_pt")
+        region = _req_str("region")  # 属地：境内 / 境外
         sort_by = _req_str("sort_by")  # callsign / etd
         sort_order = _req_str("sort_order")  # asc / desc
         limit = request.args.get("limit", 100, type=int)
@@ -660,6 +661,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             source_message_type=source_message_type,
             flight_rule=flight_rule,
             handover_pt=handover_pt,
+            region=region,
             sort_by=sort_by,
             sort_order=sort_order,
             limit=min(limit, max_limit),
@@ -677,6 +679,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             source_message_type=source_message_type,
             flight_rule=flight_rule,
             handover_pt=handover_pt,
+            region=region,
         )
         return jsonify({"total": total, "records": records})
 
@@ -744,6 +747,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         source_message_type = _req_str("source_message_type")
         flight_rule = _req_str("flight_rule")
         handover_pt = _req_str("handover_pt")
+        region = _req_str("region")
 
         records = db.query_flight_plans(
             callsign=callsign,
@@ -757,6 +761,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             source_message_type=source_message_type,
             flight_rule=flight_rule,
             handover_pt=handover_pt,
+            region=region,
             limit=10000,
             offset=0,
         )
@@ -765,7 +770,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         ws = wb.active
         ws.title = "飞行计划"
 
-        headers = ["ID", "航班号", "规则与种类", "移交点", "机型", "DOF",
+        headers = ["ID", "航班号", "属地", "规则与种类", "移交点", "机型", "DOF",
                    "起飞地", "ETD", "ATD", "目的地", "ETA", "ATA",
                    "跑道", "飞行程序", "进终端", "出终端", "终端时长", "航路", "报文", "报文时间"]
         hdr_font = Font(bold=True, color="FFFFFF", size=11)
@@ -788,31 +793,32 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             rec = {k: _clean(v) for k, v in rec.items()}
             ws.cell(row=row_idx, column=1, value=rec.get("id", ""))
             ws.cell(row=row_idx, column=2, value=rec.get("callsign", ""))
-            ws.cell(row=row_idx, column=3, value=rec.get("flight_rule", ""))
-            ws.cell(row=row_idx, column=4, value=rec.get("handover_pt", ""))
-            ws.cell(row=row_idx, column=5, value=rec.get("aircraft_type", ""))
-            ws.cell(row=row_idx, column=6, value=_safe_date(rec.get("dof")))
-            ws.cell(row=row_idx, column=7, value=rec.get("adep", ""))
-            ws.cell(row=row_idx, column=8, value=_safe_dt(rec.get("etd")))
-            ws.cell(row=row_idx, column=9, value=_safe_dt(rec.get("atd")))
-            ws.cell(row=row_idx, column=10, value=rec.get("adest", ""))
-            ws.cell(row=row_idx, column=11, value=_safe_dt(rec.get("eta")))
-            ws.cell(row=row_idx, column=12, value=_safe_dt(rec.get("ata")))
-            ws.cell(row=row_idx, column=13, value=rec.get("runway", ""))
-            ws.cell(row=row_idx, column=14, value=rec.get("flight_procedure", ""))
-            ws.cell(row=row_idx, column=15, value=_safe_dt(rec.get("entry_time")))
-            ws.cell(row=row_idx, column=16, value=_safe_dt(rec.get("exit_time")))
+            ws.cell(row=row_idx, column=3, value=rec.get("region", ""))
+            ws.cell(row=row_idx, column=4, value=rec.get("flight_rule", ""))
+            ws.cell(row=row_idx, column=5, value=rec.get("handover_pt", ""))
+            ws.cell(row=row_idx, column=6, value=rec.get("aircraft_type", ""))
+            ws.cell(row=row_idx, column=7, value=_safe_date(rec.get("dof")))
+            ws.cell(row=row_idx, column=8, value=rec.get("adep", ""))
+            ws.cell(row=row_idx, column=9, value=_safe_dt(rec.get("etd")))
+            ws.cell(row=row_idx, column=10, value=_safe_dt(rec.get("atd")))
+            ws.cell(row=row_idx, column=11, value=rec.get("adest", ""))
+            ws.cell(row=row_idx, column=12, value=_safe_dt(rec.get("eta")))
+            ws.cell(row=row_idx, column=13, value=_safe_dt(rec.get("ata")))
+            ws.cell(row=row_idx, column=14, value=rec.get("runway", ""))
+            ws.cell(row=row_idx, column=15, value=rec.get("flight_procedure", ""))
+            ws.cell(row=row_idx, column=16, value=_safe_dt(rec.get("entry_time")))
+            ws.cell(row=row_idx, column=17, value=_safe_dt(rec.get("exit_time")))
             tft = rec.get("terminal_flight_time")
-            ws.cell(row=row_idx, column=17,
+            ws.cell(row=row_idx, column=18,
                     value=(f"{int(tft)//60}m {int(tft)%60}s" if tft else ""))
-            ws.cell(row=row_idx, column=18, value=rec.get("route", ""))
-            ws.cell(row=row_idx, column=19, value=rec.get("message_types", ""))
-            ws.cell(row=row_idx, column=20, value=_safe_dt(rec.get("last_message_time")))
-            for col in range(1, 21):
+            ws.cell(row=row_idx, column=19, value=rec.get("route", ""))
+            ws.cell(row=row_idx, column=20, value=rec.get("message_types", ""))
+            ws.cell(row=row_idx, column=21, value=_safe_dt(rec.get("last_message_time")))
+            for col in range(1, 22):
                 ws.cell(row=row_idx, column=col).border = thin_border
                 ws.cell(row=row_idx, column=col).alignment = Alignment(vertical="center")
 
-        col_widths = [6, 14, 10, 12, 12, 10, 8, 12, 8, 16, 16, 10, 16, 16, 12, 12, 12, 50, 10, 16]
+        col_widths = [6, 14, 8, 10, 12, 12, 10, 8, 12, 8, 16, 16, 10, 16, 16, 12, 12, 12, 50, 10, 16]
         for i, w in enumerate(col_widths, 1):
             # column letter (A-Z, AA, AB...)
             letter = ""

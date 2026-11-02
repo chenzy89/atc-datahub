@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.4.1</title>
+<title>ATC综合数据中心 v2.4.2</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -559,7 +559,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.4.1</span>
+  <span class="badge">v2.4.2</span>
 </div>
 
 <div class="tabs">
@@ -688,6 +688,13 @@ canvas#radarMap {
           <option value="__OTHER__">其它</option>
         </select>
       </label>
+      <label><span>属地</span>
+        <select id="qregion">
+          <option value="">全部</option>
+          <option value="境内">境内</option>
+          <option value="境外">境外</option>
+        </select>
+      </label>
     </div>
     <div class="search-actions">
       <button class="btn btn-primary" onclick="searchPlans()">🔍 查询</button>
@@ -705,13 +712,13 @@ canvas#radarMap {
     <table>
       <thead><tr>
         <th onclick="sortFpl('callsign')" style="cursor:pointer;user-select:none;">航班号<span id="sort-arrow-callsign" style="margin-left:3px;color:var(--accent);"></span></th>
-        <th>规则</th><th>移交点</th><th>机型</th><th>DOF</th>
+        <th>属地</th><th>规则</th><th>移交点</th><th>机型</th><th>DOF</th>
         <th>起飞地</th><th onclick="sortFpl('etd')" style="cursor:pointer;user-select:none;">ETD<span id="sort-arrow-etd" style="margin-left:3px;color:var(--accent);"></span></th>
         <th>ATD</th>
         <th>目的地</th><th>ETA</th><th>ATA</th><th>跑道</th><th>飞行程序</th><th>进终端</th><th>出终端</th><th>终端时长</th>
         <th>航路</th><th>报文</th>
       </tr></thead>
-      <tbody id="tbl-fpl"><tr><td colspan="15" class="loading">输入条件后按查询</td></tr></tbody>
+      <tbody id="tbl-fpl"><tr><td colspan="16" class="loading">输入条件后按查询</td></tr></tbody>
     </table>
   </div>
 
@@ -1597,7 +1604,7 @@ function searchPlans(r) {
   if (r !== false) { fplOff = 0; }
   var p = new URLSearchParams({limit: PS, offset: fplOff});
   var v = function(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  var c = v('qfc'); var a = v('qfa'); var d = v('qfd'); var air = v('qair'); var fr = v('qfr'); var fr2 = v('qfr2'); var hp = v('qhp');
+  var c = v('qfc'); var a = v('qfa'); var d = v('qfd'); var air = v('qair'); var fr = v('qfr'); var fr2 = v('qfr2'); var hp = v('qhp'); var rg = v('qregion');
   if (c) { p.set('callsign', c); }
   if (a) { p.set('adep', a); }
   if (v('qfd')) { p.set('adest', v('qfd')); }
@@ -1607,10 +1614,11 @@ function searchPlans(r) {
   if (fr) { p.set('route', fr); }
   if (fr2) { p.set('flight_rule', fr2); }
   if (hp) { p.set('handover_pt', hp); }
+  if (rg) { p.set('region', rg); }
   if (fplSortBy) { p.set('sort_by', fplSortBy); }
   if (fplSortOrder) { p.set('sort_order', fplSortOrder); }
 
-  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="15" class="loading">查询中...</td></tr>';
+  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="16" class="loading">查询中...</td></tr>';
   fetch('/api/flight_plans?' + p.toString()).then(function(r) { return r.json(); }).then(function(d) {
     fplTot = d.total;
     renderPlans(d.records);
@@ -1618,14 +1626,14 @@ function searchPlans(r) {
     if (pi) { pi.textContent = '共 ' + d.total + ' 条'; }
     pgFpl();
   }).catch(function(e) {
-    document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="15" class="error-msg">查询失败: ' + e.message + '</td></tr>';
+    document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="16" class="error-msg">查询失败: ' + e.message + '</td></tr>';
   });
 }
 
 function renderPlans(rs) {
   var tb = document.getElementById('tbl-fpl');
   if (!rs || rs.length === 0) {
-    tb.innerHTML = '<tr><td colspan="15" class="text-muted text-center" style="padding:30px">没有匹配的飞行计划</td></tr>';
+    tb.innerHTML = '<tr><td colspan="16" class="text-muted text-center" style="padding:30px">没有匹配的飞行计划</td></tr>';
     return;
   }
   var h = '';
@@ -1649,6 +1657,7 @@ function renderPlans(rs) {
     }
     h += '<tr>' +
       '<td class="callsign"><a href="javascript:void(0)" onclick="showFlightTrail(this)" data-callsign="' + esc(r.callsign||'') + '" data-dof="' + esc((r.dof||'').slice(0,10)) + '" data-adep="' + esc(r.adep||'') + '" data-adest="' + esc(r.adest||'') + '" data-atd="' + esc(r.atd||'') + '" data-ata="' + esc(r.ata||'') + '" data-entry="' + esc(r.entry_time||'') + '" data-exit="' + esc(r.exit_time||'') + '" style="color:var(--accent-green);text-decoration:none;cursor:pointer;" title="查看历史轨迹">' + (r.callsign||'-') + '</a></td>'+
+      '<td>' + (r.region === '境内' ? '<span style="color:#34d399;font-weight:600;">境内</span>' : (r.region === '境外' ? '<span style="color:#fbbf24;font-weight:600;">境外</span>' : '-')) + '</td>' +
       '<td>' + (r.flight_rule||'-') + '</td>' +
       '<td>' + (r.radar_handover_pt ? '<span style="color:#58a6ff;font-weight:600;" title="雷达探测">' + r.handover_pt + '</span>' : (r.handover_pt||'-')) + '</td>' +
       '<td>' + (r.aircraft_type||'-') + '</td>' +
@@ -1694,7 +1703,7 @@ function resetPlans() {
   fplOff = 0; fplTot = 0;
   fplSortBy = ''; fplSortOrder = '';
   updateFplSortArrows();
-  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="15" class="loading">输入条件后按查询</td></tr>';
+  document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="16" class="loading">输入条件后按查询</td></tr>';
   document.getElementById('pg-fpl').style.display = 'none';
   document.getElementById('fpl-info').textContent = '';
 }
@@ -1705,7 +1714,7 @@ function resetPlans() {
 function exportExcel() {
   var params = new URLSearchParams({limit: 10000, offset: 0});
   var v = function(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  var c = v('qfc'); var a = v('qfa'); var s = v('qfs'); var ac = v('qfac'); var fr2 = v('qfr2'); var hp = v('qhp');
+  var c = v('qfc'); var a = v('qfa'); var s = v('qfs'); var ac = v('qfac'); var fr2 = v('qfr2'); var hp = v('qhp'); var rg = v('qregion');
   if (c) { params.set('callsign', c); }
   if (a) { params.set('adep', a); }
   if (v('qfd')) { params.set('adest', v('qfd')); }
@@ -1715,6 +1724,7 @@ function exportExcel() {
   if (ac) { params.set('aircraft_type', ac); }
   if (fr2) { params.set('flight_rule', fr2); }
   if (hp) { params.set('handover_pt', hp); }
+  if (rg) { params.set('region', rg); }
   window.location.href = '/api/flight_plans/export?' + params.toString();
 }
 

@@ -66,6 +66,7 @@ TOOL_DEFINITIONS = [
                 "route": {"type": "string", "description": "航路关键词"},
                 "source_message_type": {"type": "string", "description": "报文类型 FPL/DEP/ARR/CHG/DLA"},
                 "handover_pt": {"type": "string", "description": "移交点"},
+                "region": {"type": "string", "description": "属地：境内 / 境外"},
                 "limit": {"type": "integer", "description": "最大返回条数（默认100，最多500）"},
             },
             "required": [],
@@ -449,6 +450,7 @@ class MCPServer:
         route: str = "",
         source_message_type: str = "",
         handover_pt: str = "",
+        region: str = "",
         limit: int = 100,
     ) -> dict:
         db = self.db
@@ -464,6 +466,7 @@ class MCPServer:
             route=route or None,
             source_message_type=source_message_type or None,
             handover_pt=handover_pt or None,
+            region=region or None,
             limit=limit,
             offset=0,
         )
@@ -476,6 +479,7 @@ class MCPServer:
             route=route or None,
             source_message_type=source_message_type or None,
             handover_pt=handover_pt or None,
+            region=region or None,
         )
         return {"total": total, "records": records}
 

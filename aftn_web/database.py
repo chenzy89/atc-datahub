@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .airline_region import resolve as resolve_region
 from .handover import get_resolver
 
 logger = logging.getLogger("aftn_web.database")
@@ -103,6 +104,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS flight_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 callsign TEXT NOT NULL DEFAULT '',
+                region TEXT NOT NULL DEFAULT '',
                 ssr TEXT NOT NULL DEFAULT '',
                 aircraft_type TEXT NOT NULL DEFAULT '',
                 dof TEXT,
@@ -180,6 +182,17 @@ class Database:
         # 迁移：新增 radar_handover_pt 列（v2.1.65），雷达探测移交点（与航路解析的 handover_pt 分开）
         try:
             conn.execute("ALTER TABLE flight_plans ADD COLUMN radar_handover_pt TEXT NOT NULL DEFAULT ''")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+        # 迁移：新增 region 列（v2.4.2），属地（境内/境外），按呼号三字码匹配航司表
+        try:
+            conn.execute("ALTER TABLE flight_plans ADD COLUMN region TEXT NOT NULL DEFAULT ''")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_fpl_region ON flight_plans(region)")
             conn.commit()
         except sqlite3.OperationalError:
             pass
@@ -462,6 +475,10 @@ class Database:
                 "updated_at": now,
                 "message_types": merged_types,
             }
+            # 属地：呼号可能被修正，按当前呼号三字码重算（幂等，成本仅一次集合查询）
+            _region = resolve_region(plan.callsign)
+            if _region != (existing.get("region") or ""):
+                updates["region"] = _region
             # source_message_type 保留首次创建时的值（通常是 FPL），不因后续 DLA/CHG 覆盖
             if plan.source_message_type == "FPL" or not existing.get("source_message_type"):
                 updates["source_message_type"] = plan.source_message_type
@@ -602,14 +619,14 @@ class Database:
             handover_pt = plan.handover_pt or (get_resolver().resolve(plan.route) if plan.route else "")
             conn.execute(
                 """INSERT INTO flight_plans
-                   (callsign, ssr, aircraft_type, dof, adep, etd, atd,
+                   (callsign, region, ssr, aircraft_type, dof, adep, etd, atd,
                     adest, eta, ata, runway, flight_procedure, route, handover_pt,
                     entry_time, exit_time, terminal_flight_time,
                     source_message_type, last_message_time, raw_message_text,
                     flight_rule, message_types, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    plan.callsign, plan.ssr, plan.aircraft_type,
+                    plan.callsign, resolve_region(plan.callsign), plan.ssr, plan.aircraft_type,
                     _fmt_date(plan.dof), plan.adep,
                     _fmt_dt(plan.etd), _fmt_dt(plan.atd),
                     plan.adest,
@@ -1939,6 +1956,7 @@ class Database:
         source_message_type: str | None = None,
         flight_rule: str | None = None,
         handover_pt: str | None = None,  # 移交点关键词
+        region: str | None = None,  # 属地：境内 / 境外
         sort_by: str | None = None,  # 排序字段：callsign / etd
         sort_order: str | None = None,  # asc / desc
         limit: int = 100,
@@ -1951,6 +1969,7 @@ class Database:
             airport=airport, route=route,
             source_message_type=source_message_type,
             flight_rule=flight_rule, handover_pt=handover_pt,
+            region=region,
         )
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -1986,6 +2005,7 @@ class Database:
         source_message_type: str | None = None,
         flight_rule: str | None = None,
         handover_pt: str | None = None,
+        region: str | None = None,
     ) -> int:
         conn = self._get_conn()
         params, conditions = _build_fpl_conditions(
@@ -1994,6 +2014,7 @@ class Database:
             airport=airport, route=route,
             source_message_type=source_message_type,
             flight_rule=flight_rule, handover_pt=handover_pt,
+            region=region,
         )
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         row = conn.execute(f"SELECT COUNT(*) FROM flight_plans {where}", params).fetchone()
@@ -2156,14 +2177,14 @@ class Database:
         handover_pt = plan.handover_pt or (get_resolver().resolve(plan.route) if plan.route else "")
         conn.execute(
             """INSERT INTO flight_plans
-               (callsign, ssr, aircraft_type, dof, adep, etd, atd,
+               (callsign, region, ssr, aircraft_type, dof, adep, etd, atd,
                 adest, eta, ata, runway, flight_procedure, route, handover_pt,
                 entry_time, exit_time, terminal_flight_time, source_message_type,
                 last_message_time, raw_message_text,
                 flight_rule, message_types, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                plan.callsign, plan.ssr, plan.aircraft_type,
+                plan.callsign, resolve_region(plan.callsign), plan.ssr, plan.aircraft_type,
                 _fmt_date(plan.dof), plan.adep,
                 _fmt_dt(plan.etd), _fmt_dt(plan.atd),
                 plan.adest,
@@ -2194,7 +2215,7 @@ class Database:
         handover_pt = plan.handover_pt or (get_resolver().resolve(plan.route) if plan.route else "")
         conn.execute(
             """UPDATE flight_plans SET
-               callsign=?, ssr=?, aircraft_type=?, dof=?, adep=?,
+               callsign=?, region=?, ssr=?, aircraft_type=?, dof=?, adep=?,
                etd=?, atd=?, adest=?, eta=?, ata=?, route=?, handover_pt=?,
                runway=?, flight_procedure=?,
                entry_time=?, exit_time=?, terminal_flight_time=?,
@@ -2202,7 +2223,7 @@ class Database:
                raw_message_text=?, flight_rule=?, message_types=?, updated_at=?
                WHERE id=?""",
             (
-                plan.callsign, plan.ssr, plan.aircraft_type,
+                plan.callsign, resolve_region(plan.callsign), plan.ssr, plan.aircraft_type,
                 _fmt_date(plan.dof), plan.adep,
                 _fmt_dt(plan.etd), _fmt_dt(plan.atd),
                 plan.adest,
@@ -2373,6 +2394,7 @@ def _build_fpl_conditions(
     source_message_type: str | None = None,
     flight_rule: str | None = None,
     handover_pt: str | None = None,
+    region: str | None = None,
 ) -> tuple[list[Any], list[str]]:
     """构建飞行计划查询条件，返回 (params, conditions)"""
     conditions: list[str] = []
@@ -2415,6 +2437,9 @@ def _build_fpl_conditions(
     elif handover_pt:
         conditions.append("handover_pt LIKE ?")
         params.append(f"%{handover_pt.upper()}%")
+    if region:
+        conditions.append("region = ?")
+        params.append(region.strip())
     return params, conditions
 
 
