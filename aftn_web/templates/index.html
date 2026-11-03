@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.4</title>
+<title>ATC综合数据中心 v3.2.5</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.4</span>
+  <span class="badge">v3.2.5</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -8765,8 +8765,17 @@ var _playhead = 0;               // 当前回放时刻（相对轨迹起点的�
 var _lastFrame = 0;
 var _raf = 0;
 var _libsLoading = false;
+var _boundary = [];              // 珠海终端区边界顶点 [[lat,lon],...]（来自 FDRG.json）
 
 function _$(id) { return document.getElementById(id); }
+// 懒加载终端区边界（/api/config/terminal_airports 由 FDRG.json 提供 vertices）
+function _loadBoundary(cb) {
+  if (_boundary.length) { cb(); return; }
+  fetch('/api/config/terminal_airports')
+    .then(function(r) { return r.json(); })
+    .then(function(d) { _boundary = (d && d.vertices) || []; cb(); })
+    .catch(function() { cb(); });
+}
 function _esc(s) {
   return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -8862,6 +8871,10 @@ function _webglOK() {
 
 function open3DView(cs, pts) {
   _loadLib(function() {
+    _loadBoundary(function() { open3DViewInner(cs, pts); });
+  });
+}
+function open3DViewInner(cs, pts) {
     _pts = pts;
     _playhead = 0;
     _playing = false;
@@ -8891,7 +8904,6 @@ function open3DView(cs, pts) {
       _$('trd3HudCs').textContent = cs + '（兼容模式）';
     }
     startLoop();
-  });
 }
 window.close3DView = function() {
   stopLoop();
@@ -8973,8 +8985,9 @@ function buildScene(cs) {
   scene.fog = new THREE.Fog(0x0a1628, ground * 1.6, ground * 3.6);
 
   var camera = new THREE.PerspectiveCamera(55, W / H, 10, ground * 5);
-  var camDist = Math.max(maxAlt * 1.6, Math.max(spanE, spanN) * 1.35, 3000);
-  camera.position.set(camDist * 0.72, Math.max(maxAlt * 0.9, camDist * 0.55), camDist * 0.85);
+  // 初始视角：正上方俯视，上北下南左西右东（相机略偏南避免 up 向量退化）
+  var camH = Math.max(maxAlt * 2.0, Math.max(spanE, spanN) * 1.55, 3500);
+  camera.position.set(0, camH, 2);
   camera.lookAt(0, maxAlt * 0.35, 0);
 
   var renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -9042,6 +9055,18 @@ function buildScene(cs) {
   }
   marker(xyz[0], 0x4ade80);                          // 起点（绿）
   marker(xyz[xyz.length-1], 0xf87171);               // 终点（红）
+
+  // 终端区边界（FDRG.json，橙色闭合多边形贴地面）
+  if (_boundary && _boundary.length > 2) {
+    var bPts = [];
+    for (i = 0; i < _boundary.length; i++) {
+      bPts.push(new THREE.Vector3(
+        (_boundary[i][1] - lon0) * M_PER_DEG_LON, 2,
+        -(_boundary[i][0] - lat0) * M_PER_DEG_LAT));
+    }
+    scene.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(bPts),
+      new THREE.LineBasicMaterial({ color: 0xff8c42 })));
+  }
 
   // ── 指北针（地面固定，箭头指向北 = -z 方向）──
   (function addCompass() {
@@ -9149,7 +9174,8 @@ function buildSW(cs) {
   var ctx = canvas.getContext('2d');
   var dims = { w: W, h: H };                        // 投影用动态尺寸（供窗口变化时更新）
 
-  var view = { yaw: 0.7, pitch: 0.5, dist: Math.max(maxAlt * 1.6, span * 1.4, 3000) * 1.25, cy: maxAlt * 0.35 };
+  // 初始视角：正上方俯视（pitch≈90°），上北下南左西右东
+  var view = { yaw: 0, pitch: 1.45, dist: Math.max(maxAlt * 2.0, span * 1.55, 3500), cy: maxAlt * 0.35 };
 
   function project(x, y, z) {
     var dy = y - view.cy;
@@ -9197,7 +9223,7 @@ function buildSW(cs) {
     xyz: xyz, idxs: idxs, idxTimes: idxTimes,
     ground: ground, S: S, view: view, cleanup: cleanup,
     lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON,
-    project: project,
+    project: project, boundary: _boundary,
   };
   window.addEventListener('resize', _onResize);
 }
@@ -9248,6 +9274,21 @@ function drawSW() {
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('N', tip.x + (tip.x - back.x) * 0.18, tip.y + (tip.y - back.y) * 0.18);   // N 标在箭头北端
   })();
+
+  // 终端区边界（FDRG.json，橙色闭合多边形贴地面）
+  if (sc.boundary && sc.boundary.length > 2) {
+    ctx.strokeStyle = '#ff8c42'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    var bStarted = false, pb;
+    for (i = 0; i <= sc.boundary.length; i++) {
+      var bv = sc.boundary[i % sc.boundary.length];
+      pb = project((bv[1] - sc.lon0) * sc.mLon, 0, -(bv[0] - sc.lat0) * sc.mLat);
+      if (pb.z <= 45) { bStarted = false; continue; }
+      if (!bStarted) { ctx.moveTo(pb.x, pb.y); bStarted = true; }
+      else ctx.lineTo(pb.x, pb.y);
+    }
+    ctx.stroke();
+  }
 
   // 全轨迹（黄）+ 已飞高亮（青）
   var target = _pts[0].t + _playhead * 1000;
