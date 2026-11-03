@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.1.2</title>
+<title>ATC综合数据中心 v3.1.3</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.1.2</span>
+  <span class="badge">v3.1.3</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -642,12 +642,13 @@ canvas#radarMap {
 <div class="map-layers-overlay" id="aiConfigOverlay">
   <div class="map-layers-dialog" style="min-width:460px;">
     <h3>⚙️ AI 工具配置</h3>
-    <div class="ai-form-row" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
-      <input id="aiCfgEnabled" type="checkbox" style="width:auto;accent-color:#34d399;cursor:pointer;">
+    <div class="ai-form-row" style="display:flex;align-items:flex-start;gap:8px;margin-bottom:4px;">
+      <input id="aiCfgEnabled" type="checkbox" style="width:auto;accent-color:#34d399;cursor:pointer;margin-top:2px;" onchange="_aiEnabledChanged()">
       <label for="aiCfgEnabled" style="margin:0;cursor:pointer;color:#e2e8f0;font-size:13px;">
-        启用 AI 工具（未启用时作图仅使用内置解析，<b>不调用外部 API</b>）
+        启用 AI 工具（<b>10 分钟有效</b>，到期自动关闭；API 信息已持久保存，无需重复填写）
       </label>
     </div>
+    <div class="ai-form-hint" id="aiCfgEnabledHint" style="margin:0 0 12px 26px;"></div>
     <div class="ai-form-row">
       <label>API 地址（OpenAI 兼容）</label>
       <input id="aiCfgBase" type="text" autocomplete="off" spellcheck="false" placeholder="如 https://api.deepseek.com 或 https://api.openai.com/v1">
@@ -2274,8 +2275,10 @@ function _openAiConfigAfterAuth() {
       document.getElementById('aiCfgModel').value = c.model || '';
       document.getElementById('aiCfgNewPwd').value = '';
       document.getElementById('aiCfgEnabled').checked = !!c.ai_enabled;
+      _startAiEnabledCountdown(c.ai_enabled ? (c.ai_remaining || 0) : 0);
       _showAiStatus('aiCfgStatus',
-        c.ai_enabled ? 'AI 工具：已启用' : 'AI 工具：未启用（作图仅使用内置解析）', !!c.ai_enabled);
+        c.ai_enabled ? ('AI 通道：已启用，剩余 ' + _fmtAiRemaining(c.ai_remaining || 0))
+                     : 'AI 通道：未启用（作图仅使用内置解析，不调用外部 API）', !!c.ai_enabled);
       document.getElementById('aiConfigOverlay').classList.add('show');
     })
     .catch(function(e) {
@@ -2284,7 +2287,54 @@ function _openAiConfigAfterAuth() {
     });
 }
 
+// ── AI 启用会话倒计时（v3.1.3：10 分钟有效，到期自动关闭）──
+var _aiEnabledTimer = null;
+
+function _fmtAiRemaining(sec) {
+  sec = Math.max(0, parseInt(sec, 10) || 0);
+  var m = Math.floor(sec / 60), s = sec % 60;
+  return m > 0 ? (m + ' 分 ' + (s < 10 ? '0' : '') + s + ' 秒') : (s + ' 秒');
+}
+
+function _stopAiEnabledCountdown() {
+  if (_aiEnabledTimer) { clearInterval(_aiEnabledTimer); _aiEnabledTimer = null; }
+}
+
+function _startAiEnabledCountdown(remaining) {
+  _stopAiEnabledCountdown();
+  var box = document.getElementById('aiCfgEnabled');
+  var hint = document.getElementById('aiCfgEnabledHint');
+  if (!box || !hint) return;
+  if (!box.checked) { hint.textContent = '未启用：作图仅使用内置解析，不调用外部 API'; return; }
+  var left = Math.max(0, parseInt(remaining, 10) || 600);
+  var render = function() {
+    if (left <= 0) {
+      _stopAiEnabledCountdown();
+      box.checked = false;
+      hint.textContent = '已到期自动关闭 —— 如需继续使用，请重新验证管理员密码后再次勾选';
+      _showAiStatus('aiCfgStatus', '⏱ AI 通道已到期自动关闭', false);
+      return;
+    }
+    hint.textContent = '已启用，剩余 ' + _fmtAiRemaining(left) + '，到期自动关闭';
+    left--;
+  };
+  render();
+  _aiEnabledTimer = setInterval(render, 1000);
+}
+
+function _aiEnabledChanged() {
+  var box = document.getElementById('aiCfgEnabled');
+  var hint = document.getElementById('aiCfgEnabledHint');
+  if (box.checked) {
+    hint.textContent = '勾选后点「保存」生效，有效期 10 分钟';
+  } else {
+    _stopAiEnabledCountdown();
+    hint.textContent = '未启用：作图仅使用内置解析，不调用外部 API（取消勾选并保存可立即关闭）';
+  }
+}
+
 function closeAiConfig() {
+  _stopAiEnabledCountdown();
   var el = document.getElementById('aiConfigOverlay');
   if (el) el.classList.remove('show');
 }
@@ -2325,8 +2375,15 @@ function saveAiConfig() {
       if (_aiAuthExpired(res)) return;
       if (res.data.ok) {
         window._aiToken = null;
-        _showAiStatus('aiCfgStatus', '✅ 已保存', true);
-        setTimeout(closeAiConfig, 700);
+        var box = document.getElementById('aiCfgEnabled');
+        if (box.checked) {
+          _startAiEnabledCountdown(res.data.ai_remaining || 600);
+          _showAiStatus('aiCfgStatus', '✅ 已保存，AI 通道启用（10 分钟后自动关闭）', true);
+        } else {
+          _stopAiEnabledCountdown();
+          _showAiStatus('aiCfgStatus', '✅ 已保存，AI 通道未启用', true);
+        }
+        setTimeout(closeAiConfig, 900);
       } else {
         _showAiStatus('aiCfgStatus', '保存失败: ' + (res.data.error || '未知错误'), false);
       }
@@ -2356,8 +2413,15 @@ function openAiDraw() {
   document.getElementById('aiDrawFile').value = '';
   document.getElementById('aiDrawPrompt').value = '';
   document.getElementById('aiDrawName').value = '';
-  _showAiStatus('aiDrawStatus', '', true);
   document.getElementById('aiDrawOverlay').classList.add('show');
+  // 显示 AI 通道当前状态（启用中剩余时间 / 未启用）
+  fetch('/api/ai_config').then(function(r) { return r.json(); }).then(function(c) {
+    if (c.ai_enabled) {
+      _showAiStatus('aiDrawStatus', 'AI 通道：启用中，剩余 ' + _fmtAiRemaining(c.ai_remaining || 0), true);
+    } else {
+      _showAiStatus('aiDrawStatus', 'AI 通道：未启用或已过期 —— 本次作图将使用内置解析，不调用外部 API', false);
+    }
+  }).catch(function() {});
 }
 
 function closeAiDraw() {

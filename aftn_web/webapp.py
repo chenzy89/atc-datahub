@@ -126,7 +126,8 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
                 "app_id": cfg.get("app_id", ""),
                 "api_key_masked": ai_draw.mask_key(cfg.get("api_key", "")),
                 "configured": ai_draw.is_configured(cfg),
-                "ai_enabled": ai_draw.ai_enabled(cfg),
+                "ai_enabled": ai_draw.ai_session_active(),
+                "ai_remaining": ai_draw.ai_session_remaining(),
                 "using_default_password": not (cfg.get("admin_password") or "").strip(),
             })
         if not _ai_token_valid():
@@ -139,14 +140,18 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         key = str(data.get("api_key") or "").strip()
         if key and "*" not in key:  # 脱敏值（含****）不覆盖真实 key
             cfg["api_key"] = key
-        cfg["ai_enabled"] = "1" if data.get("ai_enabled") else ""
+        # AI 启用 = 10 分钟会话授权（不落盘）：勾选保存即生效，到期自动关闭
+        if data.get("ai_enabled"):
+            ai_draw.grant_ai_session()
+        else:
+            ai_draw.revoke_ai_session()
         new_pwd = str(data.get("admin_password") or "").strip()
         if new_pwd and "*" not in new_pwd:
             if len(new_pwd) < 4:
                 return jsonify({"ok": False, "error": "管理员密码至少 4 位"}), 400
             ai_draw.set_admin_password(cfg, new_pwd)
         ai_draw.save_config(cfg)
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "ai_remaining": ai_draw.ai_session_remaining()})
 
     @app.route("/api/ai_test", methods=["POST"])
     def api_ai_test():
@@ -155,8 +160,10 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             return _ai_auth_error()
         data = request.get_json(silent=True) or {}
         cfg = ai_draw.load_config()
-        if not ai_draw.ai_enabled(cfg):
-            return jsonify({"ok": False, "error": "AI 工具未启用，请先勾选「启用 AI 工具」并保存"})
+        if not ai_draw.ai_session_active():
+            return jsonify({"ok": False,
+                            "error": "AI 通道未启用或已过有效期（10 分钟），"
+                                     "请重新验证管理员密码后勾选「启用 AI 工具」"})
         key = str(data.get("api_key") or "").strip()
         if key and "*" not in key:
             cfg["api_key"] = key
@@ -204,7 +211,8 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             "shape_count": result["shape_count"],
             "engine": result["engine"],
             "note": result["note"],
-            "ai_enabled": ai_draw.ai_enabled(_cfg),
+            "ai_enabled": ai_draw.ai_session_active(),
+            "ai_remaining": ai_draw.ai_session_remaining(),
         })
 
     @app.route("/api/overlays")

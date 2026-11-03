@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import ssl
+import time as _time
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -31,10 +32,34 @@ _DEFAULT_CONFIG = {
     "api_key": "",
     "model": "",
     "app_id": "",
-    "ai_enabled": "",        # "1" = 已启用 AI 工具；空/其他 = 未启用
     "admin_password": "",    # 管理员密码；为空时使用默认密码
+    # 注意：AI 启用状态不落盘 —— v3.1.3 起为 10 分钟内存会话授权
+    # （勾选「启用 AI 工具」保存后生效，到期自动关闭，需重新验证管理员密码）
 }
 DEFAULT_ADMIN_PASSWORD = "atc123"
+
+AI_SESSION_TTL = 600                    # 启用有效期：10 分钟
+_AI_SESSION = {"until": 0.0}            # 进程内存，重启即失效
+
+
+def grant_ai_session(seconds: int = AI_SESSION_TTL) -> int:
+    """启用 AI 通道 seconds 秒，返回到期时间戳"""
+    until = _time.time() + seconds
+    _AI_SESSION["until"] = until
+    return until
+
+
+def revoke_ai_session() -> None:
+    _AI_SESSION["until"] = 0.0
+
+
+def ai_session_remaining() -> int:
+    """剩余有效秒数（向下取整，过期为 0）"""
+    return max(0, int(_AI_SESSION["until"] - _time.time()))
+
+
+def ai_session_active() -> bool:
+    return ai_session_remaining() > 0
 
 MAX_FILE_BYTES = 512 * 1024          # 上传文件上限 512KB
 MAX_SHAPES = 50                      # 单次作图图形数上限
@@ -88,13 +113,9 @@ def is_configured(cfg: dict) -> bool:
     return bool(cfg.get("api_base") and cfg.get("api_key") and cfg.get("model"))
 
 
-def ai_enabled(cfg: dict) -> bool:
-    return str(cfg.get("ai_enabled", "")).strip() == "1"
-
-
 def api_ready(cfg: dict) -> bool:
-    """AI API 可被调用：已启用 且 三项配置齐全"""
-    return ai_enabled(cfg) and is_configured(cfg)
+    """AI API 可被调用：会话授权在有效期内 且 三项配置齐全"""
+    return ai_session_active() and is_configured(cfg)
 
 
 def verify_admin_password(cfg: dict, password: str) -> bool:
@@ -490,8 +511,10 @@ def draw(cfg: dict, file_text: str, prompt: str, name: str) -> dict:
             shapes = fallback_shapes(file_text)
     else:
         engine = "fallback"
-        if not ai_enabled(cfg):
-            note = "AI 工具未启用（点⚙配置勾选「启用AI工具」），已使用内置解析器，未调用外部 API"
+        if not ai_session_active():
+            note = ("AI 通道未启用或已过有效期（勾选启用后 10 分钟自动关闭），"
+                    "已使用内置解析器，未调用外部 API；"
+                    "如需继续使用请点⚙重新验证管理员密码并勾选「启用 AI 工具」")
         else:
             note = "AI 未配置完整（API 地址/Key/模型），已使用内置解析器"
         shapes = fallback_shapes(file_text)
