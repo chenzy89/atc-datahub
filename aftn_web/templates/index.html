@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.0</title>
+<title>ATC综合数据中心 v3.2.1</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.0</span>
+  <span class="badge">v3.2.1</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -8847,16 +8847,48 @@ function _loadLib(cb) {
 }
 
 // ── 全屏 3D 视图 ──
+// ── WebGL 可用性检测 ──
+function _webglOK() {
+  try {
+    var cv = document.createElement('canvas');
+    var gl = cv.getContext('webgl', { failIfMajorPerformanceCaveat: false })
+          || cv.getContext('experimental-webgl');
+    if (!gl) return false;
+    var ext = gl.getExtension('WEBGL_lose_context');
+    if (ext) ext.loseContext();
+    return true;
+  } catch (e) { return false; }
+}
+
 function open3DView(cs, pts) {
   _loadLib(function() {
     _pts = pts;
     _playhead = 0;
     _playing = false;
-    _$('trd3Fullscreen').style.display = 'block';
     _$('trd3HudCs').textContent = cs;
     _$('trd3TimeEnd').textContent = _fmtHMS(_duration());
     _$('trd3Slider').max = Math.floor(_duration());
-    buildScene(cs);
+
+    // 优先 WebGL；不可用或创建失败时自动回退纯 Canvas 2D 软件渲染 3D
+    var ok = false, err = '';
+    if (_webglOK()) {
+      try { buildScene(cs); ok = !!_scene; }
+      catch (e) { err = (e && e.message) || String(e); _scene = null; }
+    }
+    if (!ok) {
+      try { buildSW(cs); ok = !!_scene; }
+      catch (e2) { err = (e2 && e2.message) || String(e2); _scene = null; }
+    }
+    if (!ok) {
+      _showStatus('3D 渲染不可用（' + (err || 'WebGL 创建失败') + '）。'
+        + '请在浏览器设置中开启硬件加速后重试，或改用 Chrome/Edge。', false);
+      _$('trd3Overlay').classList.add('show');
+      return;
+    }
+    if (_scene.mode === 'sw') {
+      _$('trd3HudCs').textContent = cs + '（兼容模式）';
+    }
+    _$('trd3Fullscreen').style.display = 'block';
     startLoop();
   });
 }
@@ -8864,8 +8896,13 @@ window.close3DView = function() {
   stopLoop();
   _playing = false;
   if (_scene) {
-    try { _scene.renderer.dispose(); } catch (e) {}
-    try { _scene.renderer.domElement.remove(); } catch (e) {}
+    if (_scene.mode === 'sw' && _scene.cleanup) _scene.cleanup();
+    if (_scene.mode === 'gl') {
+      try { _scene.renderer.dispose(); } catch (e) {}
+      try { _scene.renderer.domElement.remove(); } catch (e) {}
+    } else {
+      try { _scene.canvas.remove(); } catch (e) {}
+    }
   }
   _scene = null; _pts = null;
   _$('trd3Fullscreen').style.display = 'none';
@@ -9032,19 +9069,205 @@ function buildScene(cs) {
   plane.add(cockpit);
   scene.add(plane);
 
-  _scene = { renderer: renderer, scene: scene, camera: camera, controls: controls,
+  _scene = { mode: 'gl', renderer: renderer, scene: scene, camera: camera, controls: controls,
              plane: plane, flownLine: flownLine, xyz: xyz, arr: arr,
              lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON, S: S };
 
   window.addEventListener('resize', _onResize);
 }
 
+// ══════════ 软件渲染 3D 兜底（纯 Canvas 2D，无需 WebGL）══════════
+function buildSW(cs) {
+  var lon0 = 0, lat0 = 0, i;
+  for (i = 0; i < _pts.length; i++) { lon0 += _pts[i].lon; lat0 += _pts[i].lat; }
+  lon0 /= _pts.length; lat0 /= _pts.length;
+  var M_PER_DEG_LAT = 110540, M_PER_DEG_LON = 111320 * Math.cos(lat0 * Math.PI / 180);
+  function toXYZ(p) {
+    return { x: (p.lon - lon0) * M_PER_DEG_LON, z: -(p.lat - lat0) * M_PER_DEG_LAT, y: p.alt * VERT_EXAG };
+  }
+  var xyz = _pts.map(toXYZ);
+  var maxAlt = 0, spanE = 0, spanN = 0;
+  for (i = 0; i < xyz.length; i++) {
+    if (xyz[i].y > maxAlt) maxAlt = xyz[i].y;
+    if (Math.abs(xyz[i].x) > spanE) spanE = Math.abs(xyz[i].x);
+    if (Math.abs(xyz[i].z) > spanN) spanN = Math.abs(xyz[i].z);
+  }
+  var span = Math.max(spanE, spanN, 1500);
+  var ground = span * 2.1 + 4000;
+  var S = Math.max(ground / 260, 55);
+
+  // 大轨迹抽稀（软件渲染每帧重画，>6000 点等距抽样）
+  var step = Math.max(1, Math.ceil(xyz.length / 6000));
+  var idxs = [], idxTimes = [];
+  for (i = 0; i < xyz.length; i += step) { idxs.push(i); idxTimes.push(_pts[i].t); }
+  if (idxs[idxs.length - 1] !== xyz.length - 1) { idxs.push(xyz.length - 1); idxTimes.push(_pts[_pts.length - 1].t); }
+
+  var box = _$('trd3CanvasBox');
+  box.innerHTML = '';
+  var W = box.clientWidth, H = box.clientHeight;
+  var canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  canvas.style.cssText = 'position:absolute;inset:0;cursor:grab;';
+  box.appendChild(canvas);
+  var ctx = canvas.getContext('2d');
+
+  var view = { yaw: 0.7, pitch: 0.5, dist: Math.max(maxAlt * 1.6, span * 1.4, 3000) * 1.25, cy: maxAlt * 0.35 };
+
+  function project(x, y, z) {
+    var dy = y - view.cy;
+    var cyw = Math.cos(view.yaw), syw = Math.sin(view.yaw);
+    var x1 = x * cyw + z * syw;
+    var z1 = -x * syw + z * cyw;
+    var cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
+    var y2 = dy * cp - z1 * sp;
+    var z2 = dy * sp + z1 * cp;
+    var z3 = z2 + view.dist;
+    if (z3 < 30) z3 = 30;
+    var k = H * 0.9 / z3;
+    return { x: W / 2 + x1 * k, y: H / 2 - y2 * k, k: k, z: z3 };
+  }
+
+  // 交互：拖动旋转 / 滚轮缩放
+  var drag = null;
+  function onDown(e) { drag = { x: e.clientX, y: e.clientY }; canvas.style.cursor = 'grabbing'; e.preventDefault(); }
+  function onMove(e) {
+    if (!drag) return;
+    view.yaw += (e.clientX - drag.x) * 0.005;
+    view.pitch = Math.max(-0.05, Math.min(1.45, view.pitch + (e.clientY - drag.y) * 0.005));
+    drag = { x: e.clientX, y: e.clientY };
+  }
+  function onUp() { drag = null; canvas.style.cursor = 'grab'; }
+  function onWheel(e) {
+    view.dist *= (e.deltaY > 0 ? 1.12 : 0.89);
+    view.dist = Math.max(ground * 0.15, Math.min(ground * 4, view.dist));
+    e.preventDefault();
+  }
+  canvas.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+
+  var cleanup = function() {
+    canvas.removeEventListener('mousedown', onDown);
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+    canvas.removeEventListener('wheel', onWheel);
+  };
+
+  _scene = {
+    mode: 'sw', canvas: canvas, ctx: ctx, W: W, H: H,
+    xyz: xyz, idxs: idxs, idxTimes: idxTimes,
+    ground: ground, S: S, view: view, cleanup: cleanup,
+    lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON,
+    project: project,
+  };
+  window.addEventListener('resize', _onResize);
+}
+
+function drawSW() {
+  var sc = _scene, ctx = sc.ctx, W = sc.W, H = sc.H, view = sc.view;
+  var project = sc.project;
+  var i, pr;
+  ctx.fillStyle = '#0a1628';
+  ctx.fillRect(0, 0, W, H);
+
+  // 地面
+  var gh = sc.ground / 2;
+  var c0 = project(-gh, 0, -gh), c1 = project(gh, 0, -gh), c2 = project(gh, 0, gh), c3 = project(-gh, 0, gh);
+  if (c0.z > 40 && c2.z > 40) {
+    ctx.fillStyle = '#0d1f38';
+    ctx.beginPath();
+    ctx.moveTo(c0.x, c0.y); ctx.lineTo(c1.x, c1.y); ctx.lineTo(c2.x, c2.y); ctx.lineTo(c3.x, c3.y);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#16283f'; ctx.lineWidth = 1;
+    var N = 20;
+    for (i = 0; i <= N; i++) {
+      var t = -gh + sc.ground * i / N;
+      var a = project(t, 0, -gh), b = project(t, 0, gh), c = project(-gh, 0, t), d = project(gh, 0, t);
+      if (a.z > 40 && b.z > 40) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+      if (c.z > 40 && d.z > 40) { ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(d.x, d.y); ctx.stroke(); }
+    }
+  }
+
+  // 全轨迹（黄）+ 已飞高亮（青）
+  var target = _pts[0].t + _playhead * 1000;
+  var flownCount = 0;
+  while (flownCount < sc.idxTimes.length && sc.idxTimes[flownCount] <= target) flownCount++;
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#ffd54a';
+  ctx.beginPath();
+  var started = false;
+  for (i = 0; i < sc.idxs.length; i++) {
+    pr = project(sc.xyz[sc.idxs[i]].x, Math.max(sc.xyz[sc.idxs[i]].y, 0), sc.xyz[sc.idxs[i]].z);
+    if (pr.z <= 45) { started = false; continue; }
+    if (!started) { ctx.moveTo(pr.x, pr.y); started = true; }
+    else ctx.lineTo(pr.x, pr.y);
+  }
+  ctx.stroke();
+  if (flownCount >= 2) {
+    ctx.strokeStyle = '#38e8ff'; ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    started = false;
+    for (i = 0; i < flownCount; i++) {
+      var pi = sc.xyz[sc.idxs[i]];
+      pr = project(pi.x, Math.max(pi.y, 0), pi.z);
+      if (pr.z <= 45) { started = false; continue; }
+      if (!started) { ctx.moveTo(pr.x, pr.y); started = true; }
+      else ctx.lineTo(pr.x, pr.y);
+    }
+    ctx.stroke();
+  }
+
+  // 起终点
+  function dot(idx, color) {
+    var p = sc.xyz[idx];
+    pr = project(p.x, Math.max(p.y, 0), p.z);
+    if (pr.z <= 45) return;
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(pr.x, pr.y, Math.max(3, pr.k * sc.S * 0.5), 0, 6.284); ctx.fill();
+  }
+  dot(0, '#4ade80');
+  dot(sc.xyz.length - 1, '#f87171');
+
+  // 飞机（跟随插值状态）
+  var st = _stateAt(_playhead);
+  var px = (st.lon - sc.lon0) * sc.mLon, pz = -(st.lat - sc.lat0) * sc.mLat, py = Math.max(st.alt * VERT_EXAG, sc.S * 0.5);
+  var hdRad = st.hd * Math.PI / 180;
+  var dirX = Math.sin(hdRad), dirZ = -Math.cos(hdRad);   // 世界坐标：北=-z
+  var pNose = project(px + dirX * sc.S * 2.2, py, pz + dirZ * sc.S * 2.2);
+  var pTail = project(px - dirX * sc.S * 1.4, py, pz - dirZ * sc.S * 1.4);
+  var pPos = project(px, py, pz);
+  if (pPos.z > 45) {
+    var ang = Math.atan2(pNose.y - pTail.y, pNose.x - pTail.x);
+    var s = Math.max(4, pPos.k * sc.S);
+    ctx.save();
+    ctx.translate(pPos.x, pPos.y);
+    ctx.rotate(ang);
+    ctx.fillStyle = '#e8eef7';
+    ctx.beginPath();                                    // 机头朝 +x
+    ctx.ellipse(0, 0, s * 2.2, s * 0.38, 0, 0, 6.284); ctx.fill();
+    ctx.fillRect(-s * 0.5, -s * 1.8, s * 1.0, s * 3.6); // 机翼
+    ctx.fillRect(-s * 2.2, -s * 0.75, s * 0.55, s * 1.5); // 尾翼
+    ctx.fillStyle = '#38bdf8';
+    ctx.beginPath(); ctx.ellipse(s * 1.6, 0, s * 0.5, s * 0.3, 0, 0, 6.284); ctx.fill();
+    ctx.restore();
+  }
+
+  // 飞行信息角标（软件模式无 DOM 3D 对象，全部信息走 HUD）
+  return st;
+}
+
 function _onResize() {
   if (!_scene) return;
   var box = _$('trd3CanvasBox');
-  _scene.camera.aspect = box.clientWidth / box.clientHeight;
-  _scene.camera.updateProjectionMatrix();
-  _scene.renderer.setSize(box.clientWidth, box.clientHeight);
+  if (_scene.mode === 'gl') {
+    _scene.camera.aspect = box.clientWidth / box.clientHeight;
+    _scene.camera.updateProjectionMatrix();
+    _scene.renderer.setSize(box.clientWidth, box.clientHeight);
+  } else {
+    _scene.W = box.clientWidth; _scene.H = box.clientHeight;
+    _scene.canvas.width = _scene.W; _scene.canvas.height = _scene.H;
+  }
 }
 
 // ── 动画循环 ──
@@ -9061,14 +9284,29 @@ function startLoop() {
       _$('trd3Slider').value = Math.floor(_playhead);
     }
     updateState(false);
-    _scene.controls.update();
-    _scene.renderer.render(_scene.scene, _scene.camera);
+    if (_scene.mode === 'gl') {
+      _scene.controls.update();
+      _scene.renderer.render(_scene.scene, _scene.camera);
+    } else {
+      drawSW();
+    }
   })(_lastFrame);
 }
 function stopLoop() { if (_raf) { cancelAnimationFrame(_raf); _raf = 0; } }
 
 function updateState(redrawFlown) {
   var st = _stateAt(_playhead);
+
+  // HUD
+  var ts = new Date(st.ts);
+  _$('trd3HudTime').textContent = _fmtHMS(ts.getUTCHours()*3600 + ts.getUTCMinutes()*60 + ts.getUTCSeconds());
+  _$('trd3HudAlt').textContent = Math.round(st.alt) + ' m';
+  _$('trd3HudHd').textContent = Math.round((st.hd + 360) % 360) + '°';
+  _$('trd3HudSp').textContent = Math.round(st.sp) + ' km/h';
+  _$('trd3TimeCur').textContent = _fmtHMS(_playhead);
+
+  if (_scene.mode !== 'gl') return;   // 软件渲染模式的飞机/已飞线在 drawSW 里画
+
   var xyz = _scene.xyz, arr = _scene.arr, plane = _scene.plane, S = _scene.S;
   // 飞机位置 = 轨迹点插值
   var M_PER_DEG_LAT = _scene.mLat, M_PER_DEG_LON = _scene.mLon;
@@ -9096,14 +9334,6 @@ function updateState(redrawFlown) {
       _scene.flownLine.geometry.setDrawRange(0, n + 1);
     }
   }
-
-  // HUD
-  var ts = new Date(st.ts);
-  _$('trd3HudTime').textContent = _fmtHMS(ts.getUTCHours()*3600 + ts.getUTCMinutes()*60 + ts.getUTCSeconds());
-  _$('trd3HudAlt').textContent = Math.round(st.alt) + ' m';
-  _$('trd3HudHd').textContent = Math.round((st.hd + 360) % 360) + '°';
-  _$('trd3HudSp').textContent = Math.round(st.sp) + ' km/h';
-  _$('trd3TimeCur').textContent = _fmtHMS(_playhead);
 }
 
 // ── 时间轴控件 ──
