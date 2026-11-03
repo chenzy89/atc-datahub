@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.1</title>
+<title>ATC综合数据中心 v3.2.2</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.1</span>
+  <span class="badge">v3.2.2</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -8869,7 +8869,8 @@ function open3DView(cs, pts) {
     _$('trd3TimeEnd').textContent = _fmtHMS(_duration());
     _$('trd3Slider').max = Math.floor(_duration());
 
-    // 优先 WebGL；不可用或创建失败时自动回退纯 Canvas 2D 软件渲染 3D
+    // 先显示全屏容器再创建场景：隐藏状态下 clientWidth/Height 为 0，画布会是 0×0 空白
+    _$('trd3Fullscreen').style.display = 'block';
     var ok = false, err = '';
     if (_webglOK()) {
       try { buildScene(cs); ok = !!_scene; }
@@ -8880,6 +8881,7 @@ function open3DView(cs, pts) {
       catch (e2) { err = (e2 && e2.message) || String(e2); _scene = null; }
     }
     if (!ok) {
+      _$('trd3Fullscreen').style.display = 'none';
       _showStatus('3D 渲染不可用（' + (err || 'WebGL 创建失败') + '）。'
         + '请在浏览器设置中开启硬件加速后重试，或改用 Chrome/Edge。', false);
       _$('trd3Overlay').classList.add('show');
@@ -8888,7 +8890,6 @@ function open3DView(cs, pts) {
     if (_scene.mode === 'sw') {
       _$('trd3HudCs').textContent = cs + '（兼容模式）';
     }
-    _$('trd3Fullscreen').style.display = 'block';
     startLoop();
   });
 }
@@ -8944,6 +8945,7 @@ function buildScene(cs) {
   var box = _$('trd3CanvasBox');
   box.innerHTML = '';
   var W = box.clientWidth, H = box.clientHeight;
+  if (!W || !H) { W = window.innerWidth || 1280; H = window.innerHeight || 720; }   // 兜底
 
   // ── 坐标转换：以轨迹中心为原点的 ENU（米）──
   var lon0 = 0, lat0 = 0;
@@ -9105,11 +9107,13 @@ function buildSW(cs) {
   var box = _$('trd3CanvasBox');
   box.innerHTML = '';
   var W = box.clientWidth, H = box.clientHeight;
+  if (!W || !H) { W = window.innerWidth || 1280; H = window.innerHeight || 720; }   // 兜底
   var canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   canvas.style.cssText = 'position:absolute;inset:0;cursor:grab;';
   box.appendChild(canvas);
   var ctx = canvas.getContext('2d');
+  var dims = { w: W, h: H };                        // 投影用动态尺寸（供窗口变化时更新）
 
   var view = { yaw: 0.7, pitch: 0.5, dist: Math.max(maxAlt * 1.6, span * 1.4, 3000) * 1.25, cy: maxAlt * 0.35 };
 
@@ -9123,8 +9127,8 @@ function buildSW(cs) {
     var z2 = dy * sp + z1 * cp;
     var z3 = z2 + view.dist;
     if (z3 < 30) z3 = 30;
-    var k = H * 0.9 / z3;
-    return { x: W / 2 + x1 * k, y: H / 2 - y2 * k, k: k, z: z3 };
+    var k = dims.h * 0.9 / z3;
+    return { x: dims.w / 2 + x1 * k, y: dims.h / 2 - y2 * k, k: k, z: z3 };
   }
 
   // 交互：拖动旋转 / 滚轮缩放
@@ -9155,7 +9159,7 @@ function buildSW(cs) {
   };
 
   _scene = {
-    mode: 'sw', canvas: canvas, ctx: ctx, W: W, H: H,
+    mode: 'sw', canvas: canvas, ctx: ctx, W: W, H: H, dims: dims,
     xyz: xyz, idxs: idxs, idxTimes: idxTimes,
     ground: ground, S: S, view: view, cleanup: cleanup,
     lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON,
@@ -9265,8 +9269,9 @@ function _onResize() {
     _scene.camera.updateProjectionMatrix();
     _scene.renderer.setSize(box.clientWidth, box.clientHeight);
   } else {
-    _scene.W = box.clientWidth; _scene.H = box.clientHeight;
+    _scene.W = box.clientWidth || window.innerWidth; _scene.H = box.clientHeight || window.innerHeight;
     _scene.canvas.width = _scene.W; _scene.canvas.height = _scene.H;
+    if (_scene.dims) { _scene.dims.w = _scene.W; _scene.dims.h = _scene.H; }
   }
 }
 
