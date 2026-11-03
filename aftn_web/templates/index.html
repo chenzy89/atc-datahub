@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.8</title>
+<title>ATC综合数据中心 v3.2.9</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.8</span>
+  <span class="badge">v3.2.9</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -8766,15 +8766,22 @@ var _lastFrame = 0;
 var _raf = 0;
 var _libsLoading = false;
 var _boundary = [];              // 珠海终端区边界顶点 [[lat,lon],...]（来自 FDRG.json）
+var _coast = [];                 // 珠三角海岸线折线 [[[lat,lon],...],...]（来自 static/coastline_prd.json）
 
 function _$(id) { return document.getElementById(id); }
-// 懒加载终端区边界（/api/config/terminal_airports 由 FDRG.json 提供 vertices）
+// 懒加载终端区边界（/api/config/terminal_airports 由 FDRG.json 提供 vertices）+ 海岸线
 function _loadBoundary(cb) {
   if (_boundary.length) { cb(); return; }
+  var n = 0;
+  function done() { if (++n >= 2) cb(); }
   fetch('/api/config/terminal_airports')
     .then(function(r) { return r.json(); })
-    .then(function(d) { _boundary = (d && d.vertices) || []; cb(); })
-    .catch(function() { cb(); });
+    .then(function(d) { _boundary = (d && d.vertices) || []; done(); })
+    .catch(function() { done(); });
+  fetch('/static/coastline_prd.json')
+    .then(function(r) { return r.json(); })
+    .then(function(d) { _coast = (d && d.coast) || []; done(); })
+    .catch(function() { done(); });
 }
 function _esc(s) {
   return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -9059,16 +9066,59 @@ function buildScene(cs) {
   marker(xyz[0], 0x4ade80);                          // 起点（绿）
   marker(xyz[xyz.length-1], 0xf87171);               // 终点（红）
 
-  // 终端区边界（FDRG.json，橙色闭合多边形贴地面）
+  // 终端区边界（FDRG.json，橙色闭合多边形贴地面）+ 3D 空域体（0~4800m 半透明侧壁 + 顶线 + 标牌）
   if (_boundary && _boundary.length > 2) {
-    var bPts = [];
-    for (i = 0; i < _boundary.length; i++) {
-      bPts.push(new THREE.Vector3(
-        (_boundary[i][1] - lon0) * M_PER_DEG_LON, 2,
-        -(_boundary[i][0] - lat0) * M_PER_DEG_LAT));
+    var bPts = [], topPts = [], nB = _boundary.length;
+    for (i = 0; i < nB; i++) {
+      var bx = (_boundary[i][1] - lon0) * M_PER_DEG_LON, bz = -(_boundary[i][0] - lat0) * M_PER_DEG_LAT;
+      bPts.push(new THREE.Vector3(bx, 2, bz));
+      topPts.push(new THREE.Vector3(bx, 4800 * VERT_EXAG, bz));
     }
     scene.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(bPts),
       new THREE.LineBasicMaterial({ color: 0xff8c42 })));
+    // 4800m 顶面边界线（亮橙）
+    scene.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(topPts),
+      new THREE.LineBasicMaterial({ color: 0xffb347 })));
+    // 半透明侧壁（地面 ~ 4800m）
+    var wv = [];
+    for (i = 0; i < nB; i++) {
+      var j2 = (i + 1) % nB;
+      var ax = (_boundary[i][1] - lon0) * M_PER_DEG_LON, az = -(_boundary[i][0] - lat0) * M_PER_DEG_LAT;
+      var cx2 = (_boundary[j2][1] - lon0) * M_PER_DEG_LON, cz2 = -(_boundary[j2][0] - lat0) * M_PER_DEG_LAT;
+      wv.push(ax, 0, az, cx2, 0, cz2, cx2, 4800 * VERT_EXAG, cz2);
+      wv.push(ax, 0, az, cx2, 4800 * VERT_EXAG, cz2, ax, 4800 * VERT_EXAG, az);
+    }
+    var wallGeo = new THREE.BufferGeometry();
+    wallGeo.setAttribute('position', new THREE.Float32BufferAttribute(wv, 3));
+    scene.add(new THREE.Mesh(wallGeo, new THREE.MeshBasicMaterial({
+      color: 0xff8c42, transparent: true, opacity: 0.10, side: THREE.DoubleSide, depthWrite: false })));
+    // 顶高标牌 "4800m"
+    (function() {
+      var c = document.createElement('canvas'); c.width = 256; c.height = 64;
+      var g = c.getContext('2d');
+      g.font = 'bold 42px sans-serif'; g.fillStyle = '#ffb347';
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('4800m', 128, 34);
+      var spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
+      var ls = Math.max(ground / 26, 300);
+      spr.scale.set(ls * 4, ls, 1);
+      spr.position.set(topPts[0].x, 4800 * VERT_EXAG + ls * 0.9, topPts[0].z);
+      scene.add(spr);
+    })();
+  }
+
+  // 珠三角海岸线（青色折线贴地面，数据源 map/WorldMap.txt Natural Earth 1:10m）
+  if (_coast && _coast.length) {
+    var cm = new THREE.LineBasicMaterial({ color: 0x38bdf8 });
+    for (i = 0; i < _coast.length; i++) {
+      var cpArr = [];
+      for (var k3 = 0; k3 < _coast[i].length; k3++) {
+        cpArr.push(new THREE.Vector3(
+          (_coast[i][k3][1] - lon0) * M_PER_DEG_LON, 1.5,
+          -(_coast[i][k3][0] - lat0) * M_PER_DEG_LAT));
+      }
+      scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(cpArr), cm));
+    }
   }
 
   // ── 指北针（地面固定，箭头指向北 = -z 方向）──
@@ -9242,7 +9292,7 @@ function buildSW(cs) {
     xyz: xyz, idxs: idxs, idxTimes: idxTimes,
     ground: ground, S: S, view: view, cleanup: cleanup,
     lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON,
-    project: project, boundary: _boundary,
+    project: project, boundary: _boundary, coast: _coast,
   };
   window.addEventListener('resize', _onResize);
 }
@@ -9294,8 +9344,26 @@ function drawSW() {
     ctx.fillText('N', tip.x + (tip.x - back.x) * 0.18, tip.y + (tip.y - back.y) * 0.18);   // N 标在箭头北端
   })();
 
-  // 终端区边界（FDRG.json，橙色闭合多边形贴地面）
+  // 珠三角海岸线（青色折线贴地面）
+  if (sc.coast && sc.coast.length) {
+    ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 1;
+    for (i = 0; i < sc.coast.length; i++) {
+      var cPoly = sc.coast[i];
+      ctx.beginPath();
+      var cStarted = false, cP;
+      for (var cK = 0; cK < cPoly.length; cK++) {
+        cP = project((cPoly[cK][1] - sc.lon0) * sc.mLon, 0, -(cPoly[cK][0] - sc.lat0) * sc.mLat);
+        if (cP.z <= 45) { cStarted = false; continue; }
+        if (!cStarted) { ctx.moveTo(cP.x, cP.y); cStarted = true; }
+        else ctx.lineTo(cP.x, cP.y);
+      }
+      ctx.stroke();
+    }
+  }
+
+  // 终端区边界（FDRG.json，橙色闭合多边形贴地面）+ 3D 空域体（4800m 顶线 + 竖直角柱 + 标牌）
   if (sc.boundary && sc.boundary.length > 2) {
+    var TMA_TOP = 4800 * VERT_EXAG;
     ctx.strokeStyle = '#ff8c42'; ctx.lineWidth = 2;
     ctx.beginPath();
     var bStarted = false, pb;
@@ -9307,6 +9375,37 @@ function drawSW() {
       else ctx.lineTo(pb.x, pb.y);
     }
     ctx.stroke();
+    // 4800m 顶面边界线（亮橙）
+    ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    var tStarted = false, tP, tFirst = null;
+    for (i = 0; i <= sc.boundary.length; i++) {
+      var bv2 = sc.boundary[i % sc.boundary.length];
+      tP = project((bv2[1] - sc.lon0) * sc.mLon, TMA_TOP, -(bv2[0] - sc.lat0) * sc.mLat);
+      if (i === 0) tFirst = tP;
+      if (tP.z <= 45) { tStarted = false; continue; }
+      if (!tStarted) { ctx.moveTo(tP.x, tP.y); tStarted = true; }
+      else ctx.lineTo(tP.x, tP.y);
+    }
+    ctx.stroke();
+    // 竖直角柱（地面 ~ 4800m）
+    ctx.strokeStyle = 'rgba(255,140,66,0.5)'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    var gP, tP2;
+    for (i = 0; i < sc.boundary.length; i++) {
+      var bv3 = sc.boundary[i];
+      gP = project((bv3[1] - sc.lon0) * sc.mLon, 0, -(bv3[0] - sc.lat0) * sc.mLat);
+      tP2 = project((bv3[1] - sc.lon0) * sc.mLon, TMA_TOP, -(bv3[0] - sc.lat0) * sc.mLat);
+      if (gP.z > 45 && tP2.z > 45) { ctx.moveTo(gP.x, gP.y); ctx.lineTo(tP2.x, tP2.y); }
+    }
+    ctx.stroke();
+    // 顶高标牌
+    if (tFirst && tFirst.z > 45) {
+      ctx.fillStyle = '#ffb347';
+      ctx.font = 'bold 18px sans-serif';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText('4800m', tFirst.x + 8, tFirst.y - 12);
+    }
   }
 
   // 全轨迹（黄）+ 已飞高亮（青）
