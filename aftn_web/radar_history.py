@@ -160,6 +160,8 @@ class RadarHistoryStore:
             "lt": parsed.get("latitude", 0.0),
             "ln": parsed.get("longitude", 0.0),
             "fl": parsed.get("flight_level", 0.0),
+            "qh": (float(parsed.get("qnh_height_m") or 0.0)
+                   if parsed.get("qnh_applied") else 0.0),
             "hd": parsed.get("heading", 0.0),
             "sp": parsed.get("speed", 0.0),
             "ap": (parsed.get("adep") or "").strip().upper(),

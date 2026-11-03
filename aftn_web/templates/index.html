@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.7</title>
+<title>ATC综合数据中心 v3.2.8</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.7</span>
+  <span class="badge">v3.2.8</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -707,7 +707,7 @@ canvas#radarMap {
   <div style="position:absolute;top:14px;left:16px;color:#e2e8f0;font-size:14px;pointer-events:none;background:rgba(10,22,40,0.72);padding:10px 14px;border-radius:8px;border:1px solid rgba(80,120,180,0.35);line-height:1.7;">
     <div style="font-size:16px;font-weight:bold;color:#7fd88f;">🛩 <span id="trd3HudCs">-</span>
       <span style="font-size:11px;color:#94a3b8;font-weight:normal;margin-left:6px;">3D 轨迹回放（垂直 ×5）</span></div>
-    <div>时刻 <b id="trd3HudTime" style="color:#facc15;">--:--:--</b>　高度 <b id="trd3HudAlt" style="color:#67e8f9;">-</b>　航向 <b id="trd3HudHd" style="color:#f9a8d4;">-</b>　速度 <b id="trd3HudSp" style="color:#fdba74;">-</b></div>
+    <div>时刻 <b id="trd3HudTime" style="color:#facc15;">--:--:--</b>　<span id="trd3HudAltLabel">高度</span> <b id="trd3HudAlt" style="color:#67e8f9;">-</b>　航向 <b id="trd3HudHd" style="color:#f9a8d4;">-</b>　速度 <b id="trd3HudSp" style="color:#fdba74;">-</b></div>
   </div>
   <!-- 右上 操作提示 + 关闭 -->
   <div style="position:absolute;top:14px;right:16px;text-align:right;">
@@ -8821,18 +8821,21 @@ window.load3DTrajectory = function() {
       var pts = (res.d || []).filter(function(p) { return p && p.lt && p.ln && p.ts; });
       if (pts.length < 2) { _showStatus('未查到 ' + _esc(cs) + ' 当日航迹点（或点数不足），请检查日期/航班号', false); return; }
       _showStatus('已获取 ' + pts.length + ' 个航迹点，正在生成 3D 场景...', true);
-      // 预处理
-      var out = [];
+      // 预处理（高度优先用 QNH 修正高度 qh（与雷达标牌一致），无 qh 时回退标准气压高度 fl。均为米，勿做 FL 换算）
+      var out = [], hasQh = false;
       for (var i = 0; i < pts.length; i++) {
         var p = pts[i];
         var t = Date.parse(p.ts);
         if (isNaN(t)) continue;
-        var alt = parseFloat(p.fl) || 0;
-        if (alt > 0 && alt < 50) alt = alt * 30.48;   // FL 量纲兜底（百英尺→米）
+        var qh = parseFloat(p.qh) || 0;
+        var alt = qh > 0 ? qh : (parseFloat(p.fl) || 0);
+        if (qh > 0) hasQh = true;
         out.push({ t: t, lon: parseFloat(p.ln), lat: parseFloat(p.lt),
                    alt: alt, hd: parseFloat(p.hd) || 0, sp: parseFloat(p.sp) || 0 });
       }
       out.sort(function(a, b) { return a.t - b.t; });
+      if (out.length < 2) { _showStatus('有效航迹点不足', false); return; }
+      _$('trd3HudAltLabel').textContent = hasQh ? '高度(QNH)' : '高度';
       if (out.length < 2) { _showStatus('有效航迹点不足', false); return; }
       open3DView(cs, out);
     })
