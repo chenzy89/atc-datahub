@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.6</title>
+<title>ATC综合数据中心 v3.2.7</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.6</span>
+  <span class="badge">v3.2.7</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -9185,7 +9185,7 @@ function buildSW(cs) {
     var z1 = -px * syw + pz * cyw;
     var cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
     var y2 = dy * cp - z1 * sp;
-    var z2 = dy * sp + z1 * cp;
+    var z2 = -dy * sp - z1 * cp;   // 深度：相机在南上方向，越高/越南越靠近相机（此前高度项符号反了，轨迹被压到地面之下）
     var z3 = z2 + view.dist;
     if (z3 < 30) z3 = 30;
     var k = dims.h * 0.9 / z3;
