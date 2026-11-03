@@ -79,12 +79,45 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             return jsonify({"error": "decode failed"}), 500
         return text, 200, {"Content-Type": "text/plain; charset=utf-8"}
 
-    # ── AI 工具（v3.1.1）─────────────────────────────────────
+    # ── AI 工具（v3.1.1；v3.1.2 增加管理员密码验证与启用开关）──
+    import secrets
+    import time as _time
     from . import ai_draw
+
+    # 管理员验证通过后发放的短期 token（内存缓存，重启失效）
+    _ai_tokens: dict = {}
+
+    def _ai_auth_token() -> Optional[str]:
+        return request.headers.get("X-AI-Token") or (request.get_json(silent=True) or {}).get("token")
+
+    def _ai_token_valid() -> bool:
+        tok = _ai_auth_token()
+        if not tok:
+            return False
+        exp = _ai_tokens.get(tok)
+        if not exp or exp < _time.time():
+            _ai_tokens.pop(tok, None)
+            return False
+        return True
+
+    def _ai_auth_error():
+        return jsonify({"ok": False, "error": "管理员验证已过期或无效，请重新验证"}), 401
+
+    @app.route("/api/ai_auth", methods=["POST"])
+    def api_ai_auth():
+        """管理员密码验证，通过后发放 10 分钟 token"""
+        data = request.get_json(silent=True) or {}
+        cfg = ai_draw.load_config()
+        if not ai_draw.verify_admin_password(cfg, str(data.get("password") or "")):
+            logger.info("ai_auth: 管理员密码验证失败 (remote=%s)", request.remote_addr)
+            return jsonify({"ok": False, "error": "管理员密码错误"}), 401
+        tok = secrets.token_hex(16)
+        _ai_tokens[tok] = _time.time() + 600
+        return jsonify({"ok": True, "token": tok})
 
     @app.route("/api/ai_config", methods=["GET", "POST"])
     def api_ai_config():
-        """AI 工具配置：GET 返回脱敏配置；POST 保存（key 含 * 视为未修改）"""
+        """AI 工具配置：GET 返回脱敏配置；POST 需管理员 token（key 含 * 视为未修改）"""
         if request.method == "GET":
             cfg = ai_draw.load_config()
             return jsonify({
@@ -93,7 +126,11 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
                 "app_id": cfg.get("app_id", ""),
                 "api_key_masked": ai_draw.mask_key(cfg.get("api_key", "")),
                 "configured": ai_draw.is_configured(cfg),
+                "ai_enabled": ai_draw.ai_enabled(cfg),
+                "using_default_password": not (cfg.get("admin_password") or "").strip(),
             })
+        if not _ai_token_valid():
+            return _ai_auth_error()
         data = request.get_json(silent=True) or {}
         cfg = ai_draw.load_config()
         for field in ("api_base", "model", "app_id"):
@@ -102,14 +139,24 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         key = str(data.get("api_key") or "").strip()
         if key and "*" not in key:  # 脱敏值（含****）不覆盖真实 key
             cfg["api_key"] = key
+        cfg["ai_enabled"] = "1" if data.get("ai_enabled") else ""
+        new_pwd = str(data.get("admin_password") or "").strip()
+        if new_pwd and "*" not in new_pwd:
+            if len(new_pwd) < 4:
+                return jsonify({"ok": False, "error": "管理员密码至少 4 位"}), 400
+            ai_draw.set_admin_password(cfg, new_pwd)
         ai_draw.save_config(cfg)
         return jsonify({"ok": True})
 
     @app.route("/api/ai_test", methods=["POST"])
     def api_ai_test():
-        """AI 连通性测试"""
+        """AI 连通性测试（需管理员 token，且 AI 工具已启用）"""
+        if not _ai_token_valid():
+            return _ai_auth_error()
         data = request.get_json(silent=True) or {}
         cfg = ai_draw.load_config()
+        if not ai_draw.ai_enabled(cfg):
+            return jsonify({"ok": False, "error": "AI 工具未启用，请先勾选「启用 AI 工具」并保存"})
         key = str(data.get("api_key") or "").strip()
         if key and "*" not in key:
             cfg["api_key"] = key
@@ -147,7 +194,8 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         if not file_text.strip():
             return jsonify({"error": "文件内容为空"}), 400
         try:
-            result = ai_draw.draw(ai_draw.load_config(), file_text, prompt, name)
+            _cfg = ai_draw.load_config()
+            result = ai_draw.draw(_cfg, file_text, prompt, name)
         except ai_draw.AIDrawError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({
@@ -156,6 +204,7 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             "shape_count": result["shape_count"],
             "engine": result["engine"],
             "note": result["note"],
+            "ai_enabled": ai_draw.ai_enabled(_cfg),
         })
 
     @app.route("/api/overlays")

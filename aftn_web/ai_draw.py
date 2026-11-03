@@ -26,7 +26,15 @@ _BASE_DIR = Path("/home/share/atc_datahub")
 CONFIG_PATH = _BASE_DIR / "config" / "ai_config.json"
 OVERLAY_DIR = _BASE_DIR / "data" / "user_overlays"
 
-_DEFAULT_CONFIG = {"api_base": "", "api_key": "", "model": "", "app_id": ""}
+_DEFAULT_CONFIG = {
+    "api_base": "",
+    "api_key": "",
+    "model": "",
+    "app_id": "",
+    "ai_enabled": "",        # "1" = 已启用 AI 工具；空/其他 = 未启用
+    "admin_password": "",    # 管理员密码；为空时使用默认密码
+}
+DEFAULT_ADMIN_PASSWORD = "atc123"
 
 MAX_FILE_BYTES = 512 * 1024          # 上传文件上限 512KB
 MAX_SHAPES = 50                      # 单次作图图形数上限
@@ -78,6 +86,24 @@ def mask_key(key: str) -> str:
 
 def is_configured(cfg: dict) -> bool:
     return bool(cfg.get("api_base") and cfg.get("api_key") and cfg.get("model"))
+
+
+def ai_enabled(cfg: dict) -> bool:
+    return str(cfg.get("ai_enabled", "")).strip() == "1"
+
+
+def api_ready(cfg: dict) -> bool:
+    """AI API 可被调用：已启用 且 三项配置齐全"""
+    return ai_enabled(cfg) and is_configured(cfg)
+
+
+def verify_admin_password(cfg: dict, password: str) -> bool:
+    expected = (cfg.get("admin_password") or "").strip() or DEFAULT_ADMIN_PASSWORD
+    return (password or "").strip() == expected
+
+
+def set_admin_password(cfg: dict, new_password: str) -> None:
+    cfg["admin_password"] = (new_password or "").strip()
 
 
 # ── LLM 调用（OpenAI 兼容 /chat/completions）─────────────────
@@ -454,7 +480,7 @@ def draw(cfg: dict, file_text: str, prompt: str, name: str) -> dict:
     """执行一次作图。返回 {name, shapes, engine, note}。"""
     engine, note, ai_name = "ai", "", None
     shapes: List[dict] = []
-    if is_configured(cfg):
+    if api_ready(cfg):
         try:
             shapes, ai_name = ai_generate_shapes(cfg, file_text, prompt)
         except AIDrawError as exc:
@@ -464,7 +490,10 @@ def draw(cfg: dict, file_text: str, prompt: str, name: str) -> dict:
             shapes = fallback_shapes(file_text)
     else:
         engine = "fallback"
-        note = "AI 未配置，使用内置解析器（把文件中的点按顺序连成多边形）"
+        if not ai_enabled(cfg):
+            note = "AI 工具未启用（点⚙配置勾选「启用AI工具」），已使用内置解析器，未调用外部 API"
+        else:
+            note = "AI 未配置完整（API 地址/Key/模型），已使用内置解析器"
         shapes = fallback_shapes(file_text)
 
     final_name = safe_overlay_name(name) or safe_overlay_name(ai_name or "") or default_overlay_name()

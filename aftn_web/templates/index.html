@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.1.1</title>
+<title>ATC综合数据中心 v3.1.2</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.1.1</span>
+  <span class="badge">v3.1.2</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -622,9 +622,32 @@ canvas#radarMap {
 </div>
 
 <!-- ══════════ AI 工具配置弹窗（v3.1.1，全局）══════════ -->
+<!-- 管理员密码验证（v3.1.2）：先验证密码才允许进入配置 -->
+<div class="map-layers-overlay" id="aiAuthOverlay">
+  <div class="map-layers-dialog" style="min-width:380px;">
+    <h3>🔒 管理员验证</h3>
+    <div class="ai-form-row">
+      <label>请输入管理员密码，验证通过后才能进入 AI 工具配置</label>
+      <input id="aiAuthPwd" type="password" autocomplete="off" spellcheck="false"
+             placeholder="管理员密码" onkeydown="if(event.key==='Enter')submitAiAuth()">
+      <div class="ai-form-hint" id="aiAuthHint"></div>
+    </div>
+    <div class="ai-status" id="aiAuthStatus"></div>
+    <div class="map-layers-close" style="display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="cancelAiAuth()">取消</button>
+      <button class="ai-btn-primary" id="aiAuthBtn" onclick="submitAiAuth()">验证</button>
+    </div>
+  </div>
+</div>
 <div class="map-layers-overlay" id="aiConfigOverlay">
   <div class="map-layers-dialog" style="min-width:460px;">
     <h3>⚙️ AI 工具配置</h3>
+    <div class="ai-form-row" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+      <input id="aiCfgEnabled" type="checkbox" style="width:auto;accent-color:#34d399;cursor:pointer;">
+      <label for="aiCfgEnabled" style="margin:0;cursor:pointer;color:#e2e8f0;font-size:13px;">
+        启用 AI 工具（未启用时作图仅使用内置解析，<b>不调用外部 API</b>）
+      </label>
+    </div>
     <div class="ai-form-row">
       <label>API 地址（OpenAI 兼容）</label>
       <input id="aiCfgBase" type="text" autocomplete="off" spellcheck="false" placeholder="如 https://api.deepseek.com 或 https://api.openai.com/v1">
@@ -641,6 +664,10 @@ canvas#radarMap {
     <div class="ai-form-row">
       <label>模型名称</label>
       <input id="aiCfgModel" type="text" autocomplete="off" spellcheck="false" placeholder="如 deepseek-chat / gpt-4o-mini / qwen-plus">
+    </div>
+    <div class="ai-form-row">
+      <label>修改管理员密码（可选，留空不修改）</label>
+      <input id="aiCfgNewPwd" type="password" autocomplete="off" spellcheck="false" placeholder="至少 4 位">
     </div>
     <div class="ai-status" id="aiCfgStatus"></div>
     <div class="map-layers-close" style="display:flex;justify-content:flex-end;gap:8px;">
@@ -935,7 +962,7 @@ canvas#radarMap {
       <button class="map-tool-btn" id="cloudToggleBtn" onclick="toggleCloudMap()">云图</button>
       <button class="map-tool-btn" onclick="openWatchDialog()">筛选</button>
       <button class="map-tool-btn" onclick="openWatchSectorDialog()">扇区</button>
-      <button class="map-tool-btn" onclick="openAiDraw()">✏ 作图</button>
+      <button class="map-tool-btn" onclick="openAiDraw()"> 作图</button>
     </div>
     <!-- ── 航班搜索窗（空格键开/关，匹配航迹+标牌琥珀高亮）── -->
     <div class="track-search" id="trackSearchPanel">
@@ -962,7 +989,7 @@ canvas#radarMap {
   <!-- ── AI 作图弹窗（v3.1.1）── -->
   <div class="map-layers-overlay" id="aiDrawOverlay">
     <div class="map-layers-dialog" style="min-width:500px;">
-      <h3>✏ AI 作图</h3>
+      <h3>✏ 智能作图</h3>
       <div class="ai-form-row">
         <label>坐标文件（txt / csv / kml / json 等，≤512KB）</label>
         <input type="file" id="aiDrawFile" class="ai-draw-file">
@@ -2192,6 +2219,50 @@ function _showAiStatus(id, msg, ok) {
 }
 
 function openAiConfig() {
+  // v3.1.2：先管理员密码验证，通过后才打开配置弹窗
+  document.getElementById('aiAuthPwd').value = '';
+  _showAiStatus('aiAuthStatus', '', true);
+  var cfg = null;
+  fetch('/api/ai_config').then(function(r) { return r.json(); }).then(function(c) {
+    cfg = c;
+    document.getElementById('aiAuthHint').textContent = c.using_default_password
+      ? '当前为初始密码 atc123，登录后请在配置中修改' : '';
+  }).catch(function() {});
+  document.getElementById('aiAuthOverlay').classList.add('show');
+  setTimeout(function() { document.getElementById('aiAuthPwd').focus(); }, 50);
+  window._aiAuthCfg = function() { return cfg; };
+}
+
+function cancelAiAuth() {
+  var el = document.getElementById('aiAuthOverlay');
+  if (el) el.classList.remove('show');
+}
+
+function submitAiAuth() {
+  var pwd = document.getElementById('aiAuthPwd').value;
+  if (!pwd) { _showAiStatus('aiAuthStatus', '请输入管理员密码', false); return; }
+  var btn = document.getElementById('aiAuthBtn');
+  btn.disabled = true;
+  _showAiStatus('aiAuthStatus', '验证中...', true);
+  fetch('/api/ai_auth', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password: pwd})
+  }).then(function(r) { return r.json().then(function(d) { return {status: r.status, data: d}; }); })
+    .then(function(res) {
+      btn.disabled = false;
+      if (res.status !== 200 || !res.data.ok) {
+        _showAiStatus('aiAuthStatus', '❌ ' + (res.data.error || '验证失败'), false);
+        return;
+      }
+      window._aiToken = res.data.token;   // 10 分钟有效
+      cancelAiAuth();
+      _openAiConfigAfterAuth();
+    })
+    .catch(function(e) { btn.disabled = false; _showAiStatus('aiAuthStatus', '请求失败: ' + e, false); });
+}
+
+function _openAiConfigAfterAuth() {
   fetch('/api/ai_config')
     .then(function(r) { return r.json(); })
     .then(function(c) {
@@ -2201,7 +2272,10 @@ function openAiConfig() {
       document.getElementById('aiCfgKeyHint').textContent =
         c.api_key_masked ? ('已保存：' + c.api_key_masked + '（留空表示不修改）') : '';
       document.getElementById('aiCfgModel').value = c.model || '';
-      _showAiStatus('aiCfgStatus', '', true);
+      document.getElementById('aiCfgNewPwd').value = '';
+      document.getElementById('aiCfgEnabled').checked = !!c.ai_enabled;
+      _showAiStatus('aiCfgStatus',
+        c.ai_enabled ? 'AI 工具：已启用' : 'AI 工具：未启用（作图仅使用内置解析）', !!c.ai_enabled);
       document.getElementById('aiConfigOverlay').classList.add('show');
     })
     .catch(function(e) {
@@ -2217,11 +2291,24 @@ function closeAiConfig() {
 
 function _collectAiConfig() {
   return {
+    token: window._aiToken || '',
     api_base: document.getElementById('aiCfgBase').value.trim(),
     app_id: document.getElementById('aiCfgId').value.trim(),
     api_key: document.getElementById('aiCfgKey').value.trim(),
     model: document.getElementById('aiCfgModel').value.trim(),
+    ai_enabled: document.getElementById('aiCfgEnabled').checked,
+    admin_password: document.getElementById('aiCfgNewPwd').value.trim(),
   };
+}
+
+function _aiAuthExpired(res) {
+  if (res.status === 401) {
+    closeAiConfig();
+    _showAiStatus('aiAuthStatus', '验证已过期，请重新输入管理员密码', false);
+    document.getElementById('aiAuthOverlay').classList.add('show');
+    return true;
+  }
+  return false;
 }
 
 function saveAiConfig() {
@@ -2232,14 +2319,16 @@ function saveAiConfig() {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(_collectAiConfig())
-  }).then(function(r) { return r.json(); })
-    .then(function(d) {
+  }).then(function(r) { return r.json().then(function(d) { return {status: r.status, data: d}; }); })
+    .then(function(res) {
       btn.disabled = false;
-      if (d.ok) {
+      if (_aiAuthExpired(res)) return;
+      if (res.data.ok) {
+        window._aiToken = null;
         _showAiStatus('aiCfgStatus', '✅ 已保存', true);
         setTimeout(closeAiConfig, 700);
       } else {
-        _showAiStatus('aiCfgStatus', '保存失败: ' + (d.error || '未知错误'), false);
+        _showAiStatus('aiCfgStatus', '保存失败: ' + (res.data.error || '未知错误'), false);
       }
     })
     .catch(function(e) { btn.disabled = false; _showAiStatus('aiCfgStatus', '请求失败: ' + e, false); });
@@ -2253,11 +2342,12 @@ function testAiConfig() {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(_collectAiConfig())
-  }).then(function(r) { return r.json(); })
-    .then(function(d) {
+  }).then(function(r) { return r.json().then(function(d) { return {status: r.status, data: d}; }); })
+    .then(function(res) {
       btn.disabled = false;
-      if (d.ok) _showAiStatus('aiCfgStatus', '✅ 连接正常，模型回复：' + (d.reply || ''), true);
-      else _showAiStatus('aiCfgStatus', '❌ ' + (d.error || '连接失败'), false);
+      if (_aiAuthExpired(res)) return;
+      if (res.data.ok) _showAiStatus('aiCfgStatus', '✅ 连接正常，模型回复：' + (res.data.reply || ''), true);
+      else _showAiStatus('aiCfgStatus', '❌ ' + (res.data.error || '连接失败'), false);
     })
     .catch(function(e) { btn.disabled = false; _showAiStatus('aiCfgStatus', '请求失败: ' + e, false); });
 }
@@ -2311,6 +2401,8 @@ function submitAiDraw() {
 }
 
 window.openAiConfig = openAiConfig;
+window.cancelAiAuth = cancelAiAuth;
+window.submitAiAuth = submitAiAuth;
 window.closeAiConfig = closeAiConfig;
 window.saveAiConfig = saveAiConfig;
 window.testAiConfig = testAiConfig;
