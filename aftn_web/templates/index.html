@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.5</title>
+<title>ATC综合数据中心 v3.2.6</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.5</span>
+  <span class="badge">v3.2.6</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -9174,14 +9174,15 @@ function buildSW(cs) {
   var ctx = canvas.getContext('2d');
   var dims = { w: W, h: H };                        // 投影用动态尺寸（供窗口变化时更新）
 
-  // 初始视角：正上方俯视（pitch≈90°），上北下南左西右东
-  var view = { yaw: 0, pitch: 1.45, dist: Math.max(maxAlt * 2.0, span * 1.55, 3500), cy: maxAlt * 0.35 };
+  // 初始视角：正上方俯视（pitch≈90°），上北下南左西右东；tx/tz 为平移目标（米）
+  var view = { yaw: 0, pitch: 1.45, dist: Math.max(maxAlt * 2.0, span * 1.55, 3500), cy: maxAlt * 0.35, tx: 0, tz: 0 };
 
   function project(x, y, z) {
+    var px = x - view.tx, pz = z - view.tz;   // 平移目标偏移
     var dy = y - view.cy;
     var cyw = Math.cos(view.yaw), syw = Math.sin(view.yaw);
-    var x1 = x * cyw + z * syw;
-    var z1 = -x * syw + z * cyw;
+    var x1 = px * cyw + pz * syw;
+    var z1 = -px * syw + pz * cyw;
     var cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
     var y2 = dy * cp - z1 * sp;
     var z2 = dy * sp + z1 * cp;
@@ -9191,14 +9192,29 @@ function buildSW(cs) {
     return { x: dims.w / 2 + x1 * k, y: dims.h / 2 - y2 * k, k: k, z: z3 };
   }
 
-  // 交互：拖动旋转 / 滚轮缩放
+  // 交互：左键拖动旋转 / 右键拖动平移 / 滚轮缩放
   var drag = null;
-  function onDown(e) { drag = { x: e.clientX, y: e.clientY }; canvas.style.cursor = 'grabbing'; e.preventDefault(); }
+  function onDown(e) {
+    drag = { x: e.clientX, y: e.clientY, pan: (e.button === 2 || e.button === 1) };
+    canvas.style.cursor = 'grabbing'; e.preventDefault();
+  }
   function onMove(e) {
     if (!drag) return;
-    view.yaw += (e.clientX - drag.x) * 0.005;
-    view.pitch = Math.max(-0.05, Math.min(1.45, view.pitch + (e.clientY - drag.y) * 0.005));
-    drag = { x: e.clientX, y: e.clientY };
+    var dsx = e.clientX - drag.x, dsy = e.clientY - drag.y;
+    if (drag.pan) {
+      // 右键平移：把屏幕拖动量换算成世界坐标平移量（含 yaw 旋转与 pitch 投影）
+      var sp = Math.max(Math.sin(view.pitch), 0.1);
+      var cyw = Math.cos(view.yaw), syw = Math.sin(view.yaw);
+      var k0 = dims.h * 0.9 / view.dist;
+      var dxW = (cyw * dsx - (syw / sp) * dsy) / k0;
+      var dzW = (syw * dsx + cyw * dsy) / k0;
+      view.tx = Math.max(-ground, Math.min(ground, view.tx - dxW));
+      view.tz = Math.max(-ground, Math.min(ground, view.tz - dzW));
+    } else {
+      view.yaw += dsx * 0.005;
+      view.pitch = Math.max(-0.05, Math.min(1.45, view.pitch + dsy * 0.005));
+    }
+    drag = { x: e.clientX, y: e.clientY, pan: drag.pan };
   }
   function onUp() { drag = null; canvas.style.cursor = 'grab'; }
   function onWheel(e) {
@@ -9457,6 +9473,9 @@ _$('trd3Slider').addEventListener('input', function() {
   _playhead = parseInt(this.value, 10) || 0;
   if (_scene) { updateState(true); }
 });
+
+// 屏蔽 3D 全屏页右键菜单（右键拖动留给平移）
+_$('trd3Fullscreen').addEventListener('contextmenu', function(e) { e.preventDefault(); });
 
 // Esc 退出全屏
 document.addEventListener('keydown', function(e) {
