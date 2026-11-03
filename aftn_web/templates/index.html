@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.2</title>
+<title>ATC综合数据中心 v3.2.3</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.2</span>
+  <span class="badge">v3.2.3</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -9043,6 +9043,34 @@ function buildScene(cs) {
   marker(xyz[0], 0x4ade80);                          // 起点（绿）
   marker(xyz[xyz.length-1], 0xf87171);               // 终点（红）
 
+  // ── 指北针（地面固定，箭头指向北 = -z 方向）──
+  (function addCompass() {
+    var coneLen = Math.max(ground / 55, 90), coneR = Math.max(ground / 380, 24);
+    var shaftLen = Math.max(ground / 38, 130), shaftR = coneR * 0.35;
+    var zN = -ground * 0.45;
+    var mat = new THREE.MeshBasicMaterial({ color: 0x4ade80 });
+    var cone = new THREE.Mesh(new THREE.ConeGeometry(coneR, coneLen, 12), mat);
+    cone.rotation.x = -Math.PI / 2;                  // 锥尖朝 -z（北）
+    cone.position.set(0, 2, zN);
+    var shaft = new THREE.Mesh(new THREE.CylinderGeometry(shaftR, shaftR, shaftLen, 10), mat);
+    shaft.rotation.x = -Math.PI / 2;
+    shaft.position.set(0, 2, zN + coneLen / 2 + shaftLen / 2);
+    var lblCv = document.createElement('canvas');
+    lblCv.width = lblCv.height = 128;
+    var lc = lblCv.getContext('2d');
+    lc.font = 'bold 96px sans-serif';
+    lc.textAlign = 'center'; lc.textBaseline = 'middle';
+    lc.fillStyle = '#4ade80';
+    lc.fillText('N', 64, 64);
+    var spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(lblCv), transparent: true, depthTest: false
+    }));
+    var ls = Math.max(ground / 45, 110);
+    spr.scale.set(ls, ls, 1);
+    spr.position.set(0, ls * 0.6, zN + coneLen / 2 + shaftLen);
+    scene.add(cone); scene.add(shaft); scene.add(spr);
+  })();
+
   // ── 飞机模型（低多边形，机头朝 -z）──
   var plane = new THREE.Group();
   var matBody = new THREE.MeshStandardMaterial({ color: 0xe8eef7, roughness: 0.45, metalness: 0.25 });
@@ -9192,6 +9220,28 @@ function drawSW() {
       if (c.z > 40 && d.z > 40) { ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(d.x, d.y); ctx.stroke(); }
     }
   }
+
+  // 指北针（地面固定，箭头指向北 = -z 方向）
+  (function drawCompass() {
+    var zN = -sc.ground * 0.45, len = sc.ground / 12;
+    var tip = project(0, 0, zN), back = project(0, 0, zN + len);
+    if (tip.z <= 45 || back.z <= 45) return;
+    var ang = Math.atan2(tip.y - back.y, tip.x - back.x);
+    var wing = Math.max(6, tip.k * sc.S * 0.7);
+    ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(back.x, back.y); ctx.lineTo(tip.x, tip.y);
+    ctx.moveTo(tip.x, tip.y);
+    ctx.lineTo(tip.x - wing * Math.cos(ang - 0.45), tip.y - wing * Math.sin(ang - 0.45));
+    ctx.moveTo(tip.x, tip.y);
+    ctx.lineTo(tip.x - wing * Math.cos(ang + 0.45), tip.y - wing * Math.sin(ang + 0.45));
+    ctx.stroke();
+    var fs = Math.max(16, Math.min(34, tip.k * sc.S * 1.1));
+    ctx.fillStyle = '#4ade80';
+    ctx.font = 'bold ' + fs + 'px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('N', back.x + (back.x - tip.x) * 0.18, back.y + (back.y - tip.y) * 0.18);
+  })();
 
   // 全轨迹（黄）+ 已飞高亮（青）
   var target = _pts[0].t + _playhead * 1000;
