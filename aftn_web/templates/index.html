@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.3</title>
+<title>ATC综合数据中心 v3.2.4</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.3</span>
+  <span class="badge">v3.2.4</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -9067,7 +9067,7 @@ function buildScene(cs) {
     }));
     var ls = Math.max(ground / 45, 110);
     spr.scale.set(ls, ls, 1);
-    spr.position.set(0, ls * 0.6, zN + coneLen / 2 + shaftLen);
+    spr.position.set(0, ls * 0.6, zN - coneLen / 2 - shaftLen);   // N 标在箭头所指的北端
     scene.add(cone); scene.add(shaft); scene.add(spr);
   })();
 
@@ -9097,6 +9097,12 @@ function buildScene(cs) {
   cockpit.position.set(0, S*0.16, -S*0.95);
   cockpit.scale.z = 1.6;
   plane.add(cockpit);
+  // 航向引领线（青色，机头前方，随机体旋转，指示即时飞行方向）
+  var leader = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, -S*1.6), new THREE.Vector3(0, 0, -S*4.6)]),
+    new THREE.LineBasicMaterial({ color: 0x38e8ff })
+  );
+  plane.add(leader);
   scene.add(plane);
 
   _scene = { mode: 'gl', renderer: renderer, scene: scene, camera: camera, controls: controls,
@@ -9240,7 +9246,7 @@ function drawSW() {
     ctx.fillStyle = '#4ade80';
     ctx.font = 'bold ' + fs + 'px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('N', back.x + (back.x - tip.x) * 0.18, back.y + (back.y - tip.y) * 0.18);
+    ctx.fillText('N', tip.x + (tip.x - back.x) * 0.18, tip.y + (tip.y - back.y) * 0.18);   // N 标在箭头北端
   })();
 
   // 全轨迹（黄）+ 已飞高亮（青）
@@ -9294,6 +9300,12 @@ function drawSW() {
   if (pPos.z > 45) {
     var ang = Math.atan2(pNose.y - pTail.y, pNose.x - pTail.x);
     var s = Math.max(4, pPos.k * sc.S);
+    // 航向引领线（青色，指向即时飞行方向）
+    var pLead = project(px + dirX * sc.S * 4.6, py, pz + dirZ * sc.S * 4.6);
+    if (pLead.z > 45) {
+      ctx.strokeStyle = '#38e8ff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(pPos.x, pPos.y); ctx.lineTo(pLead.x, pLead.y); ctx.stroke();
+    }
     ctx.save();
     ctx.translate(pPos.x, pPos.y);
     ctx.rotate(ang);
