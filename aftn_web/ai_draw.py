@@ -364,16 +364,19 @@ def _dms_lon(lon: float) -> str:
 def shapes_to_map_text(shapes: List[dict], layer_name: str = "AI绘图") -> str:
     """把图形列表转换为与 map/*.txt 同格式的图层文本（TAB 分隔）。
 
-    polygon → GPxx 多边形（半透明填充）；polyline → GR 航路多点连线；
+    polygon → GPxx 多边形（0.12 半透明填充）；polyline → GR 航路多点连线；
     point → GST 点标；text → GTXT 文字。
+    注意：.map 格式以空白分隔字段，名称/标签中的空格会挤错后续字段，
+    必须替换为下划线（与 CUSTOM_AREA.txt 等现有图层惯例一致）。
     """
     lines: List[str] = []
     for sh in shapes:
         color = sh.get("color", 30)
         label = (sh.get("label") or layer_name or "AI").replace("\t", " ")
+        label = re.sub(r"\s+", "_", label.strip()) or "AI"
         pts = sh["points"]
         if sh["type"] == "polygon":
-            lines.append("GP%d\t%s\t0\t1\t%d\t2" % (color, label, len(pts)))
+            lines.append("GP%d\t%s\t0\t0.12\t%d\t2" % (color, label, len(pts)))
             for lon, lat in pts:
                 lines.append("GPP\t%s\t%s\t0" % (_dms_lat(lat), _dms_lon(lon)))
         elif sh["type"] == "polyline":
