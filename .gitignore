@@ -31,3 +31,6 @@ cloud_map/*.png
 
 # 机场进离场航迹缓存（运行时生成）
 data/airport_tracks/
+
+# AI 密钥配置（含 API Key，不入库）
+config/ai_config.json

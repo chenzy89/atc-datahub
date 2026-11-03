@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v2.4.2</title>
+<title>ATC综合数据中心 v3.1.1</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -310,6 +310,55 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   color: #e2e8f0;
 }
 
+/* ── AI 工具（v3.1.1）── */
+.ai-gear-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 11px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: .15s;
+}
+.ai-gear-btn:hover { border-color: var(--accent); transform: rotate(30deg); }
+.ai-form-row { margin-bottom: 12px; }
+.ai-form-row label { display: block; font-size: 12px; color: #8b949e; margin-bottom: 4px; }
+.ai-form-row input, .ai-form-row textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #0d1117;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 7px 9px;
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+}
+.ai-form-row input:focus, .ai-form-row textarea:focus { border-color: var(--accent); }
+.ai-form-row textarea { resize: vertical; min-height: 70px; }
+.ai-form-hint { font-size: 11px; color: #64748b; margin-top: 4px; }
+.ai-btn-primary {
+  background: #1f6feb; border-color: #1f6feb; color: #fff;
+}
+.ai-btn-primary:hover { background: #388bfd; }
+.ai-btn-primary:disabled, .map-layers-close button:disabled { opacity: .5; cursor: not-allowed; }
+.ai-status { font-size: 12px; margin-top: 8px; min-height: 16px; }
+.ai-status.ok { color: #34d399; }
+.ai-status.err { color: #f87171; }
+.ov-del {
+  background: none; border: none; color: #64748b; cursor: pointer;
+  font-size: 11px; padding: 0 4px; margin-left: auto;
+}
+.ov-del:hover { color: #f87171; }
+.ai-draw-file {
+  display: block; width: 100%; box-sizing: border-box;
+  background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+  border-radius: 4px; padding: 6px 9px; font-size: 12px; cursor: pointer;
+}
+
 /* ── 雷达地图 ── */
 .map-container {
   position: relative;
@@ -559,7 +608,8 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v2.4.2</span>
+  <span class="badge">v3.1.1</span>
+  <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
 <div class="tabs">
@@ -569,6 +619,36 @@ canvas#radarMap {
   <button class="tab-btn" onclick="switchTab('map')">雷达地图</button>
   <button class="tab-btn" onclick="switchTab('voice')">通话负荷</button>
   <button class="tab-btn" onclick="switchTab('asr')">语音识别</button>
+</div>
+
+<!-- ══════════ AI 工具配置弹窗（v3.1.1，全局）══════════ -->
+<div class="map-layers-overlay" id="aiConfigOverlay">
+  <div class="map-layers-dialog" style="min-width:460px;">
+    <h3>⚙️ AI 工具配置</h3>
+    <div class="ai-form-row">
+      <label>API 地址（OpenAI 兼容）</label>
+      <input id="aiCfgBase" type="text" autocomplete="off" spellcheck="false" placeholder="如 https://api.deepseek.com 或 https://api.openai.com/v1">
+    </div>
+    <div class="ai-form-row">
+      <label>ID（可选，部分服务商需要）</label>
+      <input id="aiCfgId" type="text" autocomplete="off" spellcheck="false" placeholder="应用 ID / 用户 ID，留空则不发送">
+    </div>
+    <div class="ai-form-row">
+      <label>API Key</label>
+      <input id="aiCfgKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-...">
+      <div class="ai-form-hint" id="aiCfgKeyHint"></div>
+    </div>
+    <div class="ai-form-row">
+      <label>模型名称</label>
+      <input id="aiCfgModel" type="text" autocomplete="off" spellcheck="false" placeholder="如 deepseek-chat / gpt-4o-mini / qwen-plus">
+    </div>
+    <div class="ai-status" id="aiCfgStatus"></div>
+    <div class="map-layers-close" style="display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeAiConfig()">取消</button>
+      <button id="aiCfgTestBtn" onclick="testAiConfig()">测试连接</button>
+      <button class="ai-btn-primary" id="aiCfgSaveBtn" onclick="saveAiConfig()">保存</button>
+    </div>
+  </div>
 </div>
 
 <!-- ════════════════════════════════════════════════════════
@@ -855,6 +935,7 @@ canvas#radarMap {
       <button class="map-tool-btn" id="cloudToggleBtn" onclick="toggleCloudMap()">云图</button>
       <button class="map-tool-btn" onclick="openWatchDialog()">筛选</button>
       <button class="map-tool-btn" onclick="openWatchSectorDialog()">扇区</button>
+      <button class="map-tool-btn" onclick="openAiDraw()">✏ 作图</button>
     </div>
     <!-- ── 航班搜索窗（空格键开/关，匹配航迹+标牌琥珀高亮）── -->
     <div class="track-search" id="trackSearchPanel">
@@ -875,6 +956,29 @@ canvas#radarMap {
       <div id="mapLayersList"></div>
       <div class="map-layers-close">
         <button onclick="closeMapLayers()">关闭</button>
+      </div>
+    </div>
+  </div>
+  <!-- ── AI 作图弹窗（v3.1.1）── -->
+  <div class="map-layers-overlay" id="aiDrawOverlay">
+    <div class="map-layers-dialog" style="min-width:500px;">
+      <h3>✏ AI 作图</h3>
+      <div class="ai-form-row">
+        <label>坐标文件（txt / csv / kml / json 等，≤512KB）</label>
+        <input type="file" id="aiDrawFile" class="ai-draw-file">
+      </div>
+      <div class="ai-form-row">
+        <label>作图要求</label>
+        <textarea id="aiDrawPrompt" placeholder="例：把文件中的点按顺序连接为多边形，绿色显示"></textarea>
+      </div>
+      <div class="ai-form-row">
+        <label>保存名称（可选，默认为日期时间 yyMMddHHmm）</label>
+        <input id="aiDrawName" type="text" autocomplete="off" spellcheck="false" placeholder="如 江门空域申请区域">
+      </div>
+      <div class="ai-status" id="aiDrawStatus"></div>
+      <div class="map-layers-close" style="display:flex;justify-content:flex-end;gap:8px;">
+        <button onclick="closeAiDraw()">取消</button>
+        <button class="ai-btn-primary" id="aiDrawSubmitBtn" onclick="submitAiDraw()">开始作图</button>
       </div>
     </div>
   </div>
@@ -2077,6 +2181,144 @@ function esc(s) {
 }
 
 // ═══════════════════════════════════════════════════════
+// AI 工具（v3.1.1）：配置弹窗 + 作图弹窗
+// ═══════════════════════════════════════════════════════
+
+function _showAiStatus(id, msg, ok) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg || '';
+  el.className = 'ai-status' + (msg ? (ok ? ' ok' : ' err') : '');
+}
+
+function openAiConfig() {
+  fetch('/api/ai_config')
+    .then(function(r) { return r.json(); })
+    .then(function(c) {
+      document.getElementById('aiCfgBase').value = c.api_base || '';
+      document.getElementById('aiCfgId').value = c.app_id || '';
+      document.getElementById('aiCfgKey').value = '';
+      document.getElementById('aiCfgKeyHint').textContent =
+        c.api_key_masked ? ('已保存：' + c.api_key_masked + '（留空表示不修改）') : '';
+      document.getElementById('aiCfgModel').value = c.model || '';
+      _showAiStatus('aiCfgStatus', '', true);
+      document.getElementById('aiConfigOverlay').classList.add('show');
+    })
+    .catch(function(e) {
+      _showAiStatus('aiCfgStatus', '读取配置失败: ' + e, false);
+      document.getElementById('aiConfigOverlay').classList.add('show');
+    });
+}
+
+function closeAiConfig() {
+  var el = document.getElementById('aiConfigOverlay');
+  if (el) el.classList.remove('show');
+}
+
+function _collectAiConfig() {
+  return {
+    api_base: document.getElementById('aiCfgBase').value.trim(),
+    app_id: document.getElementById('aiCfgId').value.trim(),
+    api_key: document.getElementById('aiCfgKey').value.trim(),
+    model: document.getElementById('aiCfgModel').value.trim(),
+  };
+}
+
+function saveAiConfig() {
+  var btn = document.getElementById('aiCfgSaveBtn');
+  btn.disabled = true;
+  _showAiStatus('aiCfgStatus', '保存中...', true);
+  fetch('/api/ai_config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(_collectAiConfig())
+  }).then(function(r) { return r.json(); })
+    .then(function(d) {
+      btn.disabled = false;
+      if (d.ok) {
+        _showAiStatus('aiCfgStatus', '✅ 已保存', true);
+        setTimeout(closeAiConfig, 700);
+      } else {
+        _showAiStatus('aiCfgStatus', '保存失败: ' + (d.error || '未知错误'), false);
+      }
+    })
+    .catch(function(e) { btn.disabled = false; _showAiStatus('aiCfgStatus', '请求失败: ' + e, false); });
+}
+
+function testAiConfig() {
+  var btn = document.getElementById('aiCfgTestBtn');
+  btn.disabled = true;
+  _showAiStatus('aiCfgStatus', '测试连接中（最长 30 秒）...', true);
+  fetch('/api/ai_test', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(_collectAiConfig())
+  }).then(function(r) { return r.json(); })
+    .then(function(d) {
+      btn.disabled = false;
+      if (d.ok) _showAiStatus('aiCfgStatus', '✅ 连接正常，模型回复：' + (d.reply || ''), true);
+      else _showAiStatus('aiCfgStatus', '❌ ' + (d.error || '连接失败'), false);
+    })
+    .catch(function(e) { btn.disabled = false; _showAiStatus('aiCfgStatus', '请求失败: ' + e, false); });
+}
+
+function openAiDraw() {
+  document.getElementById('aiDrawFile').value = '';
+  document.getElementById('aiDrawPrompt').value = '';
+  document.getElementById('aiDrawName').value = '';
+  _showAiStatus('aiDrawStatus', '', true);
+  document.getElementById('aiDrawOverlay').classList.add('show');
+}
+
+function closeAiDraw() {
+  var el = document.getElementById('aiDrawOverlay');
+  if (el) el.classList.remove('show');
+}
+
+function submitAiDraw() {
+  var fileInput = document.getElementById('aiDrawFile');
+  var f = fileInput.files && fileInput.files[0];
+  if (!f) { _showAiStatus('aiDrawStatus', '请先选择坐标文件', false); return; }
+  var fd = new FormData();
+  fd.append('file', f);
+  fd.append('prompt', document.getElementById('aiDrawPrompt').value);
+  fd.append('name', document.getElementById('aiDrawName').value);
+  var btn = document.getElementById('aiDrawSubmitBtn');
+  btn.disabled = true;
+  btn.textContent = '作图中...';
+  _showAiStatus('aiDrawStatus', '正在解析文件并作图（AI 调用可能需要数十秒）...', true);
+  fetch('/api/ai_draw', { method: 'POST', body: fd })
+    .then(function(r) { return r.json().then(function(d) { return {status: r.status, data: d}; }); })
+    .then(function(res) {
+      btn.disabled = false;
+      btn.textContent = '开始作图';
+      if (res.status !== 200 || !res.data.ok) {
+        _showAiStatus('aiDrawStatus', '❌ 作图失败: ' + (res.data.error || ('HTTP ' + res.status)), false);
+        return;
+      }
+      var engineTxt = res.data.engine === 'ai' ? 'AI' : '内置解析';
+      _showAiStatus('aiDrawStatus',
+        '✅ 已生成图层「' + res.data.name + '」（' + res.data.shape_count + ' 个图形，' + engineTxt + '）'
+        + (res.data.note ? ' · ' + res.data.note : ''), true);
+      if (window._reloadOverlays) window._reloadOverlays();
+      setTimeout(closeAiDraw, 1500);
+    })
+    .catch(function(e) {
+      btn.disabled = false;
+      btn.textContent = '开始作图';
+      _showAiStatus('aiDrawStatus', '请求失败: ' + e, false);
+    });
+}
+
+window.openAiConfig = openAiConfig;
+window.closeAiConfig = closeAiConfig;
+window.saveAiConfig = saveAiConfig;
+window.testAiConfig = testAiConfig;
+window.openAiDraw = openAiDraw;
+window.closeAiDraw = closeAiDraw;
+window.submitAiDraw = submitAiDraw;
+
+// ═══════════════════════════════════════════════════════
 // 雷达地图 - ATC Display 风格
 // ═══════════════════════════════════════════════════════
 
@@ -2715,7 +2957,7 @@ function esc(s) {
               };
             }
             isLoading = false;
-            drawMap();
+            loadOverlays(drawMap);
           });
         })
         .catch(function(err) {
@@ -5566,6 +5808,35 @@ function esc(s) {
       })
       .catch(function() { /* 静默 */ });
   }
+  // ── AI 作图覆盖层加载（v3.1.1）──
+  // 覆盖层以 "OV:<名称>" 为 key 存入 mapLayers，复用 parseMapFile + drawElement 管线
+  function loadOverlays(done) {
+    fetch('/api/overlays')
+      .then(function(r) { return r.json(); })
+      .then(function(list) {
+        // 先移除旧覆盖层
+        mapLayerOrder = mapLayerOrder.filter(function(n) { return n.indexOf('OV:') !== 0; });
+        for (var k in mapLayers) {
+          if (mapLayers.hasOwnProperty(k) && k.indexOf('OV:') === 0) delete mapLayers[k];
+        }
+        var promises = (list || []).map(function(o) {
+          return fetch('/api/overlay_file/' + encodeURIComponent(o.name))
+            .then(function(r) { return r.ok ? r.text() : null; })
+            .then(function(t) {
+              if (!t) return;
+              var key = 'OV:' + o.name;
+              mapLayers[key] = { enabled: true, name: o.name, elements: parseMapFile(t), overlay: true };
+              mapLayerOrder.push(key);
+            })
+            .catch(function() {});
+        });
+        return Promise.all(promises).then(function() { if (done) done(); });
+      })
+      .catch(function() { if (done) done(); });
+  }
+  // 供全局 AI 作图 JS 调用：作图成功后重载覆盖层并重绘
+  window._reloadOverlays = function() { loadOverlays(function() { drawMap(); }); };
+
   // ── 地图图层弹窗 ──
   function openMapLayers() {
     var overlay = document.getElementById('mapLayersOverlay');
@@ -5578,12 +5849,15 @@ function esc(s) {
       var layer = mapLayers[name];
       if (!layer) continue;
       var checked = layer.enabled ? 'checked' : '';
-      // 取中文描述（文件名去掉扩展名）
-      var label = name;
+      // AI 作图覆盖层：显示保存名 + 删除按钮
+      var isOv = name.indexOf('OV:') === 0;
+      var label = isOv ? name.slice(3) : name;
       html += '<div class="map-layer-item">'
         + '<input type="checkbox" id="ml_' + i + '" '
         + 'data-layer="' + name.replace(/"/g,'&quot;') + '" ' + checked + '>'
-        + '<label for="ml_' + i + '">' + label + '</label>'
+        + '<label for="ml_' + i + '" title="' + (isOv ? 'AI作图图层 · ' : '') + label.replace(/"/g,'&quot;') + '">'
+        + (isOv ? '✏ ' : '') + label + '</label>'
+        + (isOv ? '<span class="ov-del" data-ov="' + label.replace(/"/g,'&quot;') + '" title="删除该图层">✕</span>' : '')
         + '</div>';
     }
     listEl.innerHTML = html;
@@ -5602,6 +5876,21 @@ function esc(s) {
           }
           drawMap();
         }
+      });
+    }
+
+    // 绑定覆盖层删除按钮
+    var dels = listEl.querySelectorAll('.ov-del');
+    for (var di = 0; di < dels.length; di++) {
+      dels[di].addEventListener('click', function(e) {
+        e.stopPropagation();
+        var ovName = e.target.getAttribute('data-ov');
+        if (!confirm('删除 AI 作图图层「' + ovName + '」？此操作不可恢复。')) return;
+        fetch('/api/overlays/' + encodeURIComponent(ovName), { method: 'DELETE' })
+          .then(function() {
+            loadOverlays(function() { drawMap(); });
+            openMapLayers();  // 刷新弹窗列表
+          });
       });
     }
 

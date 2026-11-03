@@ -79,6 +79,104 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
             return jsonify({"error": "decode failed"}), 500
         return text, 200, {"Content-Type": "text/plain; charset=utf-8"}
 
+    # ── AI 工具（v3.1.1）─────────────────────────────────────
+    from . import ai_draw
+
+    @app.route("/api/ai_config", methods=["GET", "POST"])
+    def api_ai_config():
+        """AI 工具配置：GET 返回脱敏配置；POST 保存（key 含 * 视为未修改）"""
+        if request.method == "GET":
+            cfg = ai_draw.load_config()
+            return jsonify({
+                "api_base": cfg.get("api_base", ""),
+                "model": cfg.get("model", ""),
+                "app_id": cfg.get("app_id", ""),
+                "api_key_masked": ai_draw.mask_key(cfg.get("api_key", "")),
+                "configured": ai_draw.is_configured(cfg),
+            })
+        data = request.get_json(silent=True) or {}
+        cfg = ai_draw.load_config()
+        for field in ("api_base", "model", "app_id"):
+            if field in data:
+                cfg[field] = str(data.get(field) or "").strip()
+        key = str(data.get("api_key") or "").strip()
+        if key and "*" not in key:  # 脱敏值（含****）不覆盖真实 key
+            cfg["api_key"] = key
+        ai_draw.save_config(cfg)
+        return jsonify({"ok": True})
+
+    @app.route("/api/ai_test", methods=["POST"])
+    def api_ai_test():
+        """AI 连通性测试"""
+        data = request.get_json(silent=True) or {}
+        cfg = ai_draw.load_config()
+        key = str(data.get("api_key") or "").strip()
+        if key and "*" not in key:
+            cfg["api_key"] = key
+        for field in ("api_base", "model", "app_id"):
+            if data.get(field):
+                cfg[field] = str(data[field]).strip()
+        if not ai_draw.is_configured(cfg):
+            return jsonify({"ok": False, "error": "请先填写 API 地址、API Key 和模型名称"})
+        try:
+            reply = ai_draw.call_llm(cfg, "你是连通性测试助手。", "请只回复两个字：正常", timeout=30)
+            return jsonify({"ok": True, "reply": reply[:50]})
+        except ai_draw.AIDrawError as exc:
+            return jsonify({"ok": False, "error": str(exc)})
+
+    @app.route("/api/ai_draw", methods=["POST"])
+    def api_ai_draw():
+        """AI 作图：multipart 上传坐标文件 + 作图要求 + 可选保存名"""
+        f = request.files.get("file")
+        prompt = request.form.get("prompt", "").strip()
+        name = request.form.get("name", "").strip()
+        if f is None or not f.filename:
+            return jsonify({"error": "请选择坐标文件"}), 400
+        raw = f.read()
+        if len(raw) > ai_draw.MAX_FILE_BYTES:
+            return jsonify({"error": "文件过大（上限 512KB）"}), 400
+        file_text = None
+        for enc in ("utf-8-sig", "gbk", "utf-16"):
+            try:
+                file_text = raw.decode(enc)
+                break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+        if file_text is None:
+            file_text = raw.decode("utf-8", "replace")
+        if not file_text.strip():
+            return jsonify({"error": "文件内容为空"}), 400
+        try:
+            result = ai_draw.draw(ai_draw.load_config(), file_text, prompt, name)
+        except ai_draw.AIDrawError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({
+            "ok": True,
+            "name": result["name"],
+            "shape_count": result["shape_count"],
+            "engine": result["engine"],
+            "note": result["note"],
+        })
+
+    @app.route("/api/overlays")
+    def api_overlays():
+        """AI 作图覆盖层列表"""
+        return jsonify(ai_draw.list_overlays())
+
+    @app.route("/api/overlay_file/<name>")
+    def api_overlay_file(name: str):
+        """读取覆盖层图层文本（与 map/*.txt 同格式）"""
+        text = ai_draw.read_overlay(name)
+        if text is None:
+            return jsonify({"error": "file not found"}), 404
+        return text, 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+    @app.route("/api/overlays/<name>", methods=["DELETE"])
+    def api_overlay_delete(name: str):
+        ok = ai_draw.delete_overlay(name)
+        return jsonify({"ok": ok})
+
+
     # ── 雷达 FDR ──────────────────────────────────────────────
 
     @app.route("/api/radar_tracks")
