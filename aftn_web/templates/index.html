@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.10</title>
+<title>ATC综合数据中心 v3.2.11</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.10</span>
+  <span class="badge">v3.2.11</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -9079,19 +9079,35 @@ function buildScene(cs) {
     // 4800m 顶面边界线（亮橙）
     scene.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(topPts),
       new THREE.LineBasicMaterial({ color: 0xffb347 })));
-    // 半透明侧壁（地面 ~ 4800m）
-    var wv = [];
+    // 半透明侧壁（地面 ~ 4800m，按墙面朝向明暗着色显立体感：光源方位西北）
+    var lightAz = 315 * Math.PI / 180;
+    var Lx = Math.sin(lightAz), Lz = -Math.cos(lightAz);   // 指向光源的水平方向（x=东, -z=北）
+    var cenX = 0, cenZ = 0;
+    for (i = 0; i < nB; i++) {
+      cenX += (_boundary[i][1] - lon0) * M_PER_DEG_LON;
+      cenZ += -(_boundary[i][0] - lat0) * M_PER_DEG_LAT;
+    }
+    cenX /= nB; cenZ /= nB;
+    var wv = [], wc = [], ty = 4800 * VERT_EXAG;
     for (i = 0; i < nB; i++) {
       var j2 = (i + 1) % nB;
       var ax = (_boundary[i][1] - lon0) * M_PER_DEG_LON, az = -(_boundary[i][0] - lat0) * M_PER_DEG_LAT;
       var cx2 = (_boundary[j2][1] - lon0) * M_PER_DEG_LON, cz2 = -(_boundary[j2][0] - lat0) * M_PER_DEG_LAT;
-      wv.push(ax, 0, az, cx2, 0, cz2, cx2, 4800 * VERT_EXAG, cz2);
-      wv.push(ax, 0, az, cx2, 4800 * VERT_EXAG, cz2, ax, 4800 * VERT_EXAG, az);
+      var nx = cz2 - az, nz = -(cx2 - ax);                 // 边法向（待定向）
+      var mx = (ax + cx2) / 2 - cenX, mz = (az + cz2) / 2 - cenZ;
+      if (nx * mx + nz * mz < 0) { nx = -nx; nz = -nz; }   // 定向为外法向
+      var nl = Math.sqrt(nx * nx + nz * nz) || 1; nx /= nl; nz /= nl;
+      var f = 0.35 + 0.65 * Math.max(0, nx * Lx + nz * Lz); // 朝光面亮，背光面暗
+      var r = f, g = 0.549 * f, b = 0.259 * f;             // 基色 #ff8c42 × 明暗系数
+      wv.push(ax, 0, az, cx2, 0, cz2, cx2, ty, cz2);
+      wv.push(ax, 0, az, cx2, ty, cz2, ax, ty, az);
+      for (var q3 = 0; q3 < 6; q3++) wc.push(r, g, b);
     }
     var wallGeo = new THREE.BufferGeometry();
     wallGeo.setAttribute('position', new THREE.Float32BufferAttribute(wv, 3));
+    wallGeo.setAttribute('color', new THREE.Float32BufferAttribute(wc, 3));
     scene.add(new THREE.Mesh(wallGeo, new THREE.MeshBasicMaterial({
-      color: 0xff8c42, transparent: true, opacity: 0.10, side: THREE.DoubleSide, depthWrite: false })));
+      vertexColors: true, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false })));
     // 顶高标牌 "4800m"
     (function() {
       var c = document.createElement('canvas'); c.width = 256; c.height = 64;
@@ -9405,6 +9421,43 @@ function drawSW() {
       else ctx.lineTo(pb.x, pb.y);
     }
     ctx.stroke();
+    // 半透明侧壁（按墙面朝向明暗着色 + 远近排序，显立体感；光源方位西北）
+    var lightAz2 = 315 * Math.PI / 180;
+    var Lx2 = Math.sin(lightAz2), Lz2 = -Math.cos(lightAz2);
+    var cenX2 = 0, cenZ2 = 0;
+    for (i = 0; i < sc.boundary.length; i++) {
+      cenX2 += (sc.boundary[i][1] - sc.lon0) * sc.mLon;
+      cenZ2 += -(sc.boundary[i][0] - sc.lat0) * sc.mLat;
+    }
+    cenX2 /= sc.boundary.length; cenZ2 /= sc.boundary.length;
+    var walls = [];
+    for (i = 0; i < sc.boundary.length; i++) {
+      var j3 = (i + 1) % sc.boundary.length;
+      var a1 = sc.boundary[i], b1 = sc.boundary[j3];
+      var axw = (a1[1] - sc.lon0) * sc.mLon, azw = -(a1[0] - sc.lat0) * sc.mLat;
+      var bxw = (b1[1] - sc.lon0) * sc.mLon, bzw = -(b1[0] - sc.lat0) * sc.mLat;
+      var nx2 = bzw - azw, nz2 = -(bxw - axw);
+      var mx2 = (axw + bxw) / 2 - cenX2, mz2 = (azw + bzw) / 2 - cenZ2;
+      if (nx2 * mx2 + nz2 * mz2 < 0) { nx2 = -nx2; nz2 = -nz2; }   // 定向为外法向
+      var nl2 = Math.sqrt(nx2 * nx2 + nz2 * nz2) || 1; nx2 /= nl2; nz2 /= nl2;
+      var f2 = 0.35 + 0.65 * Math.max(0, nx2 * Lx2 + nz2 * Lz2);   // 朝光面亮，背光面暗
+      var ga = project(axw, 0, azw), gb = project(bxw, 0, bzw);
+      var ta = project(axw, TMA_TOP, azw), tb = project(bxw, TMA_TOP, bzw);
+      if (ga.z <= 45 || gb.z <= 45 || ta.z <= 45 || tb.z <= 45) continue;
+      walls.push({ d: (ga.z + gb.z + ta.z + tb.z) / 4, ga: ga, gb: gb, ta: ta, tb: tb, f: f2 });
+    }
+    walls.sort(function(u, v) { return v.d - u.d; });   // 深度大的（远）先画
+    for (i = 0; i < walls.length; i++) {
+      var wk = walls[i];
+      var rr = Math.round(255 * wk.f), gg = Math.round(140 * wk.f), bb = Math.round(66 * wk.f);
+      ctx.fillStyle = 'rgba(' + rr + ',' + gg + ',' + bb + ',0.12)';
+      ctx.beginPath();
+      ctx.moveTo(wk.ga.x, wk.ga.y); ctx.lineTo(wk.gb.x, wk.gb.y);
+      ctx.lineTo(wk.tb.x, wk.tb.y); ctx.lineTo(wk.ta.x, wk.ta.y);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,140,66,0.28)'; ctx.lineWidth = 0.5;
+      ctx.stroke();
+    }
     // 4800m 顶面边界线（亮橙）
     ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -9416,17 +9469,6 @@ function drawSW() {
       if (tP.z <= 45) { tStarted = false; continue; }
       if (!tStarted) { ctx.moveTo(tP.x, tP.y); tStarted = true; }
       else ctx.lineTo(tP.x, tP.y);
-    }
-    ctx.stroke();
-    // 竖直角柱（地面 ~ 4800m）
-    ctx.strokeStyle = 'rgba(255,140,66,0.5)'; ctx.lineWidth = 1;
-    ctx.beginPath();
-    var gP, tP2;
-    for (i = 0; i < sc.boundary.length; i++) {
-      var bv3 = sc.boundary[i];
-      gP = project((bv3[1] - sc.lon0) * sc.mLon, 0, -(bv3[0] - sc.lat0) * sc.mLat);
-      tP2 = project((bv3[1] - sc.lon0) * sc.mLon, TMA_TOP, -(bv3[0] - sc.lat0) * sc.mLat);
-      if (gP.z > 45 && tP2.z > 45) { ctx.moveTo(gP.x, gP.y); ctx.lineTo(tP2.x, tP2.y); }
     }
     ctx.stroke();
     // 顶高标牌
