@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.12</title>
+<title>ATC综合数据中心 v3.2.13</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.12</span>
+  <span class="badge">v3.2.13</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -9007,6 +9007,62 @@ function _stateAt(sec) {
   };
 }
 
+// ── 陆地多边形与网格对齐（v3.2.13）──
+// 大陆主体多边形西侧/北侧裁剪直边对齐网格西缘/北缘（Sutherland–Hodgman 矩形裁剪），
+// 网格东缘对齐大陆主体多边形的最东经度；点格式 [lat, lon]
+function _clipPolyRect(poly, lonMin, latMin, lonMax, latMax) {
+  function clipEdge(pts, inside, inter) {
+    if (pts.length < 3) return [];
+    var out = [];
+    for (var i = 0; i < pts.length; i++) {
+      var cur = pts[i], prev = pts[(i + pts.length - 1) % pts.length];
+      var cIn = inside(cur), pIn = inside(prev);
+      if (cIn) {
+        if (!pIn) out.push(inter(prev, cur));
+        out.push(cur);
+      } else if (pIn) {
+        out.push(inter(prev, cur));
+      }
+    }
+    return out;
+  }
+  function ip(a, b, fa, fb) {          // fa/fb 为有符号距离，线性插值边交点
+    var t = (fa - fb) ? fa / (fa - fb) : 0;
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  }
+  var r = poly;
+  r = clipEdge(r, function(p) { return p[1] >= lonMin; }, function(a, b) { return ip(a, b, a[1] - lonMin, b[1] - lonMin); });
+  r = clipEdge(r, function(p) { return p[1] <= lonMax; }, function(a, b) { return ip(a, b, lonMax - a[1], lonMax - b[1]); });
+  r = clipEdge(r, function(p) { return p[0] >= latMin; }, function(a, b) { return ip(a, b, a[0] - latMin, b[0] - latMin); });
+  r = clipEdge(r, function(p) { return p[0] <= latMax; }, function(a, b) { return ip(a, b, latMax - a[0], latMax - b[0]); });
+  return r;
+}
+function _alignCoast(coast, lon0, lat0, mLon, mLat, gh) {
+  if (!coast || !coast.length) return [[], gh];
+  var mi = 0, mArea = -1, k, j;
+  for (k = 0; k < coast.length; k++) {          // 大陆主体 = 包围盒面积最大的多边形
+    var lonMn = 1e9, lonMx = -1e9, latMn = 1e9, latMx = -1e9;
+    for (j = 0; j < coast[k].length; j++) {
+      var lo = coast[k][j][1], la = coast[k][j][0];
+      if (lo < lonMn) lonMn = lo;
+      if (lo > lonMx) lonMx = lo;
+      if (la < latMn) latMn = la;
+      if (la > latMx) latMx = la;
+    }
+    var ar = (lonMx - lonMn) * (latMx - latMn);
+    if (ar > mArea) { mArea = ar; mi = k; }
+  }
+  var eLon = -1e9;
+  for (j = 0; j < coast[mi].length; j++) { if (coast[mi][j][1] > eLon) eLon = coast[mi][j][1]; }
+  var lonMin = lon0 - gh / mLon, latMin = lat0 - gh / mLat, latMax = lat0 + gh / mLat;
+  var out = [];
+  for (k = 0; k < coast.length; k++) {
+    var c = _clipPolyRect(coast[k], lonMin, latMin, eLon, latMax);
+    if (c.length >= 3) out.push(c);
+  }
+  return [out, Math.max((eLon - lon0) * mLon, gh)];
+}
+
 function buildScene(cs) {
   var box = _$('trd3CanvasBox');
   box.innerHTML = '';
@@ -9034,11 +9090,18 @@ function buildScene(cs) {
     if (Math.abs(xyz[i].z) > spanN) spanN = Math.abs(xyz[i].z);
   }
   var ground = Math.max(spanE, spanN) * 2.1 + 4000;   // 地面网格尺寸
+  // v3.2.13 网格与陆地多边形对齐：西/北缘=轨迹外扩范围（-gh/+gh），东缘=大陆主体多边形最东经度
+  var ghG = ground / 2;
+  var _al = _alignCoast(_coast, lon0, lat0, M_PER_DEG_LON, M_PER_DEG_LAT, ghG);
+  var coastAdj = _al[0], eastX = _al[1];
+  var extW = eastX + ghG;                       // 网格东西向总宽
+  var cx0 = (eastX - ghG) / 2;                  // 矩形中心 x
+  var maxDim = Math.max(ground, extW);
   var scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a1628);
-  scene.fog = new THREE.Fog(0x0a1628, ground * 1.6, ground * 3.6);
+  scene.fog = new THREE.Fog(0x0a1628, maxDim * 1.6, maxDim * 3.6);
 
-  var camera = new THREE.PerspectiveCamera(55, W / H, 10, ground * 5);
+  var camera = new THREE.PerspectiveCamera(55, W / H, 10, maxDim * 5);
   // 初始视角：正上方俯视，上北下南左西右东（相机略偏南避免 up 向量退化）
   var camH = Math.max(maxAlt * 2.0, Math.max(spanE, spanN) * 1.55, 3500);
   camera.position.set(0, camH, 2);
@@ -9062,15 +9125,18 @@ function buildScene(cs) {
   sun.position.set(ground, ground * 1.5, ground * 0.6);
   scene.add(sun);
 
-  // 地面网格 + 平面
-  var grid = new THREE.GridHelper(ground, 40, 0x2a4a75, 0x16283f);
+  // 地面网格 + 平面（东西向矩形：西缘 -gh，东缘 eastX = 大陆主体最东经度）
+  var gridDiv = Math.max(10, Math.round(extW / (ground / 40)));
+  var grid = new THREE.GridHelper(extW, gridDiv, 0x2a4a75, 0x16283f);
+  grid.scale.z = ground / extW;               // GridHelper 为正方形，z 向缩放成矩形
+  grid.position.x = cx0;
   scene.add(grid);
   var gnd = new THREE.Mesh(
-    new THREE.PlaneGeometry(ground, ground),
+    new THREE.PlaneGeometry(extW, ground),
     new THREE.MeshBasicMaterial({ color: 0x0d1f38, transparent: true, opacity: 0.86 })
   );
   gnd.rotation.x = -Math.PI / 2;
-  gnd.position.y = -2;
+  gnd.position.set(cx0, -2, 0);
   scene.add(gnd);
 
   // 轨迹线（黄色）+ 轨迹点
@@ -9168,16 +9234,16 @@ function buildScene(cs) {
 
   // 珠三角陆地（大陆+海岛灰白填充，岸线青色描边；数据源 map/COASTLINE.txt）
   // 性能优化：402 个填充 Mesh + 402 个 LineLoop 合并为单张 2048² 贴图地面（1 个绘制对象）
-  if (_coast && _coast.length) {
+  if (coastAdj && coastAdj.length) {
     (function() {
       var TS = 2048;
       var lcv = document.createElement('canvas');
       lcv.width = lcv.height = TS;
       var g2 = lcv.getContext('2d');
-      function w2p(wx, wz) { return [(wx / ground * 0.5 + 0.5) * TS, (wz / ground * 0.5 + 0.5) * TS]; }
+      function w2p(wx, wz) { return [(wx + ghG) / extW * TS, (wz + ghG) / ground * TS]; }
       function drawPolys(stroke) {
-        for (var cI = 0; cI < _coast.length; cI++) {
-          var poly = _coast[cI];
+        for (var cI = 0; cI < coastAdj.length; cI++) {
+          var poly = coastAdj[cI];
           g2.beginPath();
           for (var cJ = 0; cJ < poly.length; cJ++) {
             var pp = w2p((poly[cJ][1] - lon0) * M_PER_DEG_LON, -(poly[cJ][0] - lat0) * M_PER_DEG_LAT);
@@ -9196,10 +9262,10 @@ function buildScene(cs) {
         landTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
       }
       var landMesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(ground, ground),
+        new THREE.PlaneGeometry(extW, ground),
         new THREE.MeshBasicMaterial({ map: landTex, transparent: true, depthWrite: false }));
       landMesh.rotation.x = -Math.PI / 2;
-      landMesh.position.y = 1.2;
+      landMesh.position.set(cx0, 1.2, 0);
       scene.add(landMesh);
     })();
   }
@@ -9292,6 +9358,10 @@ function buildSW(cs) {
   var span = Math.max(spanE, spanN, 1500);
   var ground = span * 2.1 + 4000;
   var S = Math.max(ground / 260, 55);
+  // v3.2.13 网格与陆地多边形对齐：西/北缘=轨迹外扩范围，东缘=大陆主体多边形最东经度
+  var ghS = ground / 2;
+  var _al = _alignCoast(_coast, lon0, lat0, M_PER_DEG_LON, M_PER_DEG_LAT, ghS);
+  var coastAdj = _al[0], eastX = _al[1];
 
   // 大轨迹抽稀（软件渲染每帧重画，>6000 点等距抽样）
   var step = Math.max(1, Math.ceil(xyz.length / 6000));
@@ -9377,9 +9447,9 @@ function buildSW(cs) {
     mode: 'sw', canvas: canvas, ctx: ctx, W: W, H: H, dims: dims,
     staticCv: staticCv, sctx: sctx, _staticKey: null, _lastKey: null,
     xyz: xyz, idxs: idxs, idxTimes: idxTimes,
-    ground: ground, S: S, view: view, cleanup: cleanup,
+    ground: ground, gh: ghS, eastX: eastX, S: S, view: view, cleanup: cleanup,
     lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON,
-    project: project, boundary: _boundary, coast: _coast,
+    project: project, boundary: _boundary, coast: coastAdj,
   };
   window.addEventListener('resize', _onResize);
 }
@@ -9427,9 +9497,9 @@ function renderSWStatic(sc) {
   ctx.fillStyle = '#0a1628';
   ctx.fillRect(0, 0, W, H);
 
-  // 地面
-  var gh = sc.ground / 2;
-  var c0 = project(-gh, 0, -gh), c1 = project(gh, 0, -gh), c2 = project(gh, 0, gh), c3 = project(-gh, 0, gh);
+  // 地面（东西向矩形：西缘 -gh，东缘 eastX = 大陆主体最东经度）
+  var gh = sc.gh, ghE = sc.eastX;
+  var c0 = project(-gh, 0, -gh), c1 = project(ghE, 0, -gh), c2 = project(ghE, 0, gh), c3 = project(-gh, 0, gh);
   if (c0.z > 40 && c2.z > 40) {
     ctx.fillStyle = '#0d1f38';
     ctx.beginPath();
@@ -9451,14 +9521,18 @@ function renderSWStatic(sc) {
       }
     }
     ctx.strokeStyle = '#16283f'; ctx.lineWidth = 1;
-    var N = 20;
-    for (i = 0; i <= N; i++) {
-      var t = -gh + sc.ground * i / N;
-      var segsA = clipStroke3(project, [{ x: t, y: 0, z: -gh }, { x: t, y: 0, z: gh }], false, 120);
-      var segsB = clipStroke3(project, [{ x: -gh, y: 0, z: t }, { x: gh, y: 0, z: t }], false, 120);
+    var N = 20, cell = sc.ground / N;
+    var nX = Math.max(1, Math.round((ghE + gh) / cell));   // 纵线：西缘→东缘，间距≈cell
+    for (i = 0; i <= nX; i++) {
+      var tx = -gh + (ghE + gh) * i / nX;
+      var segsA = clipStroke3(project, [{ x: tx, y: 0, z: -gh }, { x: tx, y: 0, z: gh }], false, 120);
       for (var gi = 0; gi < segsA.length; gi++) {
         ctx.beginPath(); ctx.moveTo(segsA[gi][0].x, segsA[gi][0].y); ctx.lineTo(segsA[gi][1].x, segsA[gi][1].y); ctx.stroke();
       }
+    }
+    for (i = 0; i <= N; i++) {
+      var t = -gh + sc.ground * i / N;
+      var segsB = clipStroke3(project, [{ x: -gh, y: 0, z: t }, { x: ghE, y: 0, z: t }], false, 120);
       for (gi = 0; gi < segsB.length; gi++) {
         ctx.beginPath(); ctx.moveTo(segsB[gi][0].x, segsB[gi][0].y); ctx.lineTo(segsB[gi][1].x, segsB[gi][1].y); ctx.stroke();
       }

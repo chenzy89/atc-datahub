@@ -156,6 +156,37 @@ def _ease(t):
     return t * t * (3 - 2 * t)
 
 
+def _clip_poly_rect(poly, lon_min, lat_min, lon_max, lat_max):
+    """Sutherland–Hodgman 矩形裁剪（点格式 [lat, lon]，v3.2.13 陆地与网格对齐用）"""
+    def clip(pts, inside, inter):
+        if len(pts) < 3:
+            return []
+        out = []
+        n = len(pts)
+        for i in range(n):
+            cur = pts[i]
+            prev = pts[i - 1]
+            ci, pi = inside(cur), inside(prev)
+            if ci:
+                if not pi:
+                    out.append(inter(prev, cur))
+                out.append(cur)
+            elif pi:
+                out.append(inter(prev, cur))
+        return out
+
+    def ip(a, b, fa, fb):
+        t = fa / (fa - fb) if (fa - fb) else 0.0
+        return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+
+    r = poly
+    r = clip(r, lambda p: p[1] >= lon_min, lambda a, b: ip(a, b, a[1] - lon_min, b[1] - lon_min))
+    r = clip(r, lambda p: p[1] <= lon_max, lambda a, b: ip(a, b, lon_max - a[1], lon_max - b[1]))
+    r = clip(r, lambda p: p[0] >= lat_min, lambda a, b: ip(a, b, a[0] - lat_min, b[0] - lat_min))
+    r = clip(r, lambda p: p[0] <= lat_max, lambda a, b: ip(a, b, lat_max - a[0], lat_max - b[0]))
+    return r
+
+
 def _render_worker(job_id, pts, callsign, date_str):
     try:
         _set_job(job_id, status="rendering")
@@ -219,12 +250,31 @@ def _render_video(job_id, pts, callsign, date_str):
         boundary = []
     bxyz = [((v[1] - lon0) * m_lon, 0, -(v[0] - lat0) * m_lat) for v in boundary] if boundary else []
     land = []
+    east_x = gh                       # 网格东缘（默认 = 正方形网格）
     try:
         cjson = json.loads((BASE_DIR / "aftn_web" / "static" / "coastline_prd.json").read_text(encoding="utf-8"))
-        for poly in cjson.get("land") or []:
-            land.append([((q[1] - lon0) * m_lon, 0, -(q[0] - lat0) * m_lat) for q in poly])
+        polys = cjson.get("land") or []
+        if polys:
+            # v3.2.13 网格与陆地多边形对齐：大陆主体 = 包围盒面积最大的多边形
+            main_i, main_area = 0, -1.0
+            for pi_, poly in enumerate(polys):
+                lons = [q[1] for q in poly]
+                lats = [q[0] for q in poly]
+                area = (max(lons) - min(lons)) * (max(lats) - min(lats))
+                if area > main_area:
+                    main_area, main_i = area, pi_
+            e_lon = max(q[1] for q in polys[main_i])
+            # 西/北/南缘 = 轨迹外扩网格边，东缘 = 大陆主体最东经度
+            lon_min, lon_max = lon0 - gh / m_lon, e_lon
+            lat_min, lat_max = lat0 - gh / m_lat, lat0 + gh / m_lat
+            for poly in polys:
+                c = _clip_poly_rect(poly, lon_min, lat_min, lon_max, lat_max)
+                if len(c) >= 3:
+                    land.append([((q[1] - lon0) * m_lon, 0, -(q[0] - lat0) * m_lat) for q in c])
+            east_x = max((e_lon - lon0) * m_lon, gh)
     except Exception:
         land = []
+        east_x = gh
 
     n_total = int(FPS * (TARGET_SEC + TAIL_SEC))
     _set_job(job_id, total=n_total)
@@ -255,8 +305,8 @@ def _render_video(job_id, pts, callsign, date_str):
         img = Image.new("RGB", (OUT_W, OUT_H), (10, 22, 40))
         dr = ImageDraw.Draw(img)
 
-        # 地面
-        c_pts = [(-gh, 0, -gh), (gh, 0, -gh), (gh, 0, gh), (-gh, 0, gh)]
+        # 地面（东西向矩形：西缘 -gh，东缘 east_x = 大陆主体最东经度）
+        c_pts = [(-gh, 0, -gh), (east_x, 0, -gh), (east_x, 0, gh), (-gh, 0, gh)]
         cscr = [cam.project(*p) for p in c_pts]
         if all(p[2] > 40 for p in cscr):
             dr.polygon([(p[0], p[1]) for p in cscr], fill=(13, 31, 56))
@@ -268,12 +318,16 @@ def _render_video(job_id, pts, callsign, date_str):
                 continue
             dr.polygon([(p[0], p[1]) for p in scr], fill=(214, 218, 224))
 
-        # 网格
+        # 网格（纵线西缘→东缘间距≈cell，横线 z 向 20 等分，方格保持近正方形）
         grid_c = (22, 40, 63)
+        cell = ground / 20
+        n_x = max(1, int(round((east_x + gh) / cell)))
+        for gi in range(n_x + 1):
+            t = -gh + (east_x + gh) * gi / n_x
+            _draw_segs(dr, _clip_stroke(cam, [(t, 0, -gh), (t, 0, gh)], False), grid_c, 1)
         for gi in range(21):
             t = -gh + ground * gi / 20
-            _draw_segs(dr, _clip_stroke(cam, [(t, 0, -gh), (t, 0, gh)], False), grid_c, 1)
-            _draw_segs(dr, _clip_stroke(cam, [(-gh, 0, t), (gh, 0, t)], False), grid_c, 1)
+            _draw_segs(dr, _clip_stroke(cam, [(-gh, 0, t), (east_x, 0, t)], False), grid_c, 1)
 
         # 岸线
         for poly in land:
