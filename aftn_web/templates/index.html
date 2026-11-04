@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.9</title>
+<title>ATC综合数据中心 v3.2.10</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.9</span>
+  <span class="badge">v3.2.10</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -8766,7 +8766,7 @@ var _lastFrame = 0;
 var _raf = 0;
 var _libsLoading = false;
 var _boundary = [];              // 珠海终端区边界顶点 [[lat,lon],...]（来自 FDRG.json）
-var _coast = [];                 // 珠三角海岸线折线 [[[lat,lon],...],...]（来自 static/coastline_prd.json）
+var _coast = [];                 // 珠三角陆地多边形（大陆+海岛，[[lat,lon],...] 数组；来自 map/COASTLINE.txt，灰白填充）
 
 function _$(id) { return document.getElementById(id); }
 // 懒加载终端区边界（/api/config/terminal_airports 由 FDRG.json 提供 vertices）+ 海岸线
@@ -8780,7 +8780,7 @@ function _loadBoundary(cb) {
     .catch(function() { done(); });
   fetch('/static/coastline_prd.json')
     .then(function(r) { return r.json(); })
-    .then(function(d) { _coast = (d && d.coast) || []; done(); })
+    .then(function(d) { _coast = (d && d.land) || []; done(); })
     .catch(function() { done(); });
 }
 function _esc(s) {
@@ -9107,17 +9107,31 @@ function buildScene(cs) {
     })();
   }
 
-  // 珠三角海岸线（青色折线贴地面，数据源 map/WorldMap.txt Natural Earth 1:10m）
+  // 珠三角陆地（大陆+海岛灰白填充，岸线青色描边；数据源 map/COASTLINE.txt）
   if (_coast && _coast.length) {
-    var cm = new THREE.LineBasicMaterial({ color: 0x38bdf8 });
+    var landMat = new THREE.MeshBasicMaterial({
+      color: 0xd6dae0, transparent: true, opacity: 0.88, side: THREE.DoubleSide, depthWrite: false });
+    var lineMat = new THREE.LineBasicMaterial({ color: 0x38bdf8 });
     for (i = 0; i < _coast.length; i++) {
-      var cpArr = [];
-      for (var k3 = 0; k3 < _coast[i].length; k3++) {
-        cpArr.push(new THREE.Vector3(
-          (_coast[i][k3][1] - lon0) * M_PER_DEG_LON, 1.5,
-          -(_coast[i][k3][0] - lat0) * M_PER_DEG_LAT));
+      var polyC = _coast[i];
+      var shape = new THREE.Shape();
+      for (var k3 = 0; k3 < polyC.length; k3++) {
+        var sx = (polyC[k3][1] - lon0) * M_PER_DEG_LON, sy = (polyC[k3][0] - lat0) * M_PER_DEG_LAT;
+        if (k3 === 0) shape.moveTo(sx, sy); else shape.lineTo(sx, sy);
       }
-      scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(cpArr), cm));
+      var geo = new THREE.ShapeGeometry(shape);
+      geo.rotateX(-Math.PI / 2);          // (x,y) → (x,0,-y)：形状 y=北向 → 世界 -z=北
+      var fillMesh = new THREE.Mesh(geo, landMat);
+      fillMesh.position.y = 1.2;
+      scene.add(fillMesh);
+      // 岸线描边（闭合）
+      var cpArr = [];
+      for (k3 = 0; k3 < polyC.length; k3++) {
+        cpArr.push(new THREE.Vector3(
+          (polyC[k3][1] - lon0) * M_PER_DEG_LON, 2.5,
+          -(polyC[k3][0] - lat0) * M_PER_DEG_LAT));
+      }
+      scene.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(cpArr), lineMat));
     }
   }
 
@@ -9312,6 +9326,22 @@ function drawSW() {
     ctx.beginPath();
     ctx.moveTo(c0.x, c0.y); ctx.lineTo(c1.x, c1.y); ctx.lineTo(c2.x, c2.y); ctx.lineTo(c3.x, c3.y);
     ctx.closePath(); ctx.fill();
+    // 珠三角陆地灰白填充（大陆+海岛，画在网格之下）
+    if (sc.coast && sc.coast.length) {
+      ctx.fillStyle = 'rgba(214,218,224,0.82)';
+      for (i = 0; i < sc.coast.length; i++) {
+        var landP = sc.coast[i];
+        ctx.beginPath();
+        var lStarted = false, lP;
+        for (var lK = 0; lK < landP.length; lK++) {
+          lP = project((landP[lK][1] - sc.lon0) * sc.mLon, 0, -(landP[lK][0] - sc.lat0) * sc.mLat);
+          if (lP.z <= 45) { lStarted = false; continue; }
+          if (!lStarted) { ctx.moveTo(lP.x, lP.y); lStarted = true; }
+          else ctx.lineTo(lP.x, lP.y);
+        }
+        ctx.closePath(); ctx.fill();
+      }
+    }
     ctx.strokeStyle = '#16283f'; ctx.lineWidth = 1;
     var N = 20;
     for (i = 0; i <= N; i++) {
@@ -9344,7 +9374,7 @@ function drawSW() {
     ctx.fillText('N', tip.x + (tip.x - back.x) * 0.18, tip.y + (tip.y - back.y) * 0.18);   // N 标在箭头北端
   })();
 
-  // 珠三角海岸线（青色折线贴地面）
+  // 珠三角岸线（青色闭合描边，与陆地填充配套）
   if (sc.coast && sc.coast.length) {
     ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 1;
     for (i = 0; i < sc.coast.length; i++) {
@@ -9357,7 +9387,7 @@ function drawSW() {
         if (!cStarted) { ctx.moveTo(cP.x, cP.y); cStarted = true; }
         else ctx.lineTo(cP.x, cP.y);
       }
-      ctx.stroke();
+      ctx.closePath(); ctx.stroke();
     }
   }
 
