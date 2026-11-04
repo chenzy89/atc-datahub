@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.11</title>
+<title>ATC综合数据中心 v3.2.12</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.11</span>
+  <span class="badge">v3.2.12</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -695,6 +695,7 @@ canvas#radarMap {
     <div class="ai-status" id="trd3Status"></div>
     <div class="map-layers-close" style="display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="close3DTrajectory()">取消</button>
+      <button id="trd3VideoBtn" onclick="render3DVideo()">🎬 导出视频</button>
       <button class="ai-btn-primary" id="trd3LoadBtn" onclick="load3DTrajectory()">生成 3D 轨迹</button>
     </div>
   </div>
@@ -8849,6 +8850,49 @@ window.load3DTrajectory = function() {
     .catch(function(e) { btn.disabled = false; _showStatus('请求失败: ' + e, false); });
 };
 
+// ── 服务端视频导出（v3.2.12）：服务器离线渲染 MP4，任何电脑流畅播放 ──
+window.render3DVideo = function() {
+  var cs = _$('trd3Callsign').value.trim().toUpperCase();
+  var date = _$('trd3Date').value;
+  if (!cs) { _showStatus('请输入航班号', false); return; }
+  if (!date) { _showStatus('请选择日期', false); return; }
+  var btn = _$('trd3VideoBtn');
+  btn.disabled = true;
+  _showStatus('已提交服务端渲染任务，正在查询航迹并排队...', true);
+  fetch('/api/render3d', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callsign: cs, date: date })
+  }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+    .then(function(res) {
+      if (!res.ok) { btn.disabled = false; _showStatus('提交失败: ' + (res.d.error || res.status), false); return; }
+      _pollRender3D(res.d.job_id, btn);
+    })
+    .catch(function(e) { btn.disabled = false; _showStatus('请求失败: ' + e, false); });
+};
+function _pollRender3D(jobId, btn) {
+  fetch('/api/render3d_status?job=' + encodeURIComponent(jobId))
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error && !d.status) { btn.disabled = false; _showStatus('渲染失败: ' + d.error, false); return; }
+      if (d.status === 'error') { btn.disabled = false; _showStatus('渲染失败: ' + (d.error || '未知错误'), false); return; }
+      if (d.status === 'done' && d.file_url) {
+        btn.disabled = false;
+        _showStatus('视频已生成，开始下载（也可右键复制链接）...', true);
+        var a = document.createElement('a');
+        a.href = d.file_url;
+        a.target = '_blank';
+        document.body.appendChild(a); a.click(); a.remove();
+        return;
+      }
+      var pct = d.total ? Math.round(d.progress / d.total * 100) : 0;
+      var phase = d.status === 'encoding' ? '编码 MP4 中' : (d.status === 'pending' ? '排队中' : '渲染帧中');
+      _showStatus('服务端渲染：' + phase + ' ' + pct + '%（约 1~2 分钟，期间可正常使用系统）', true);
+      setTimeout(function() { _pollRender3D(jobId, btn); }, 2000);
+    })
+    .catch(function() { btn.disabled = false; _showStatus('状态查询失败', false); });
+}
+
 // ── three.js 懒加载 ──
 function _loadLib(cb) {
   if (window.THREE && THREE.OrbitControls) { cb(); return; }
@@ -9088,7 +9132,7 @@ function buildScene(cs) {
       cenZ += -(_boundary[i][0] - lat0) * M_PER_DEG_LAT;
     }
     cenX /= nB; cenZ /= nB;
-    var wv = [], wc = [], ty = 4800 * VERT_EXAG;
+    var ty = 4800 * VERT_EXAG;
     for (i = 0; i < nB; i++) {
       var j2 = (i + 1) % nB;
       var ax = (_boundary[i][1] - lon0) * M_PER_DEG_LON, az = -(_boundary[i][0] - lat0) * M_PER_DEG_LAT;
@@ -9098,16 +9142,15 @@ function buildScene(cs) {
       if (nx * mx + nz * mz < 0) { nx = -nx; nz = -nz; }   // 定向为外法向
       var nl = Math.sqrt(nx * nx + nz * nz) || 1; nx /= nl; nz /= nl;
       var f = 0.35 + 0.65 * Math.max(0, nx * Lx + nz * Lz); // 朝光面亮，背光面暗
-      var r = f, g = 0.549 * f, b = 0.259 * f;             // 基色 #ff8c42 × 明暗系数
-      wv.push(ax, 0, az, cx2, 0, cz2, cx2, ty, cz2);
-      wv.push(ax, 0, az, cx2, ty, cz2, ax, ty, az);
-      for (var q3 = 0; q3 < 6; q3++) wc.push(r, g, b);
+      // 每面墙独立 Mesh：three.js 对透明对象按深度逐对象排序，
+      // 修复此前单 Mesh 内三角形按顶点顺序绘制导致的透明叠加着色错误
+      var fgeo = new THREE.BufferGeometry();
+      fgeo.setAttribute('position', new THREE.Float32BufferAttribute(
+        [ax, 0, az, cx2, 0, cz2, cx2, ty, cz2, ax, 0, az, cx2, ty, cz2, ax, ty, az], 3));
+      scene.add(new THREE.Mesh(fgeo, new THREE.MeshBasicMaterial({
+        color: new THREE.Color(f, 0.549 * f, 0.259 * f),
+        transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false })));
     }
-    var wallGeo = new THREE.BufferGeometry();
-    wallGeo.setAttribute('position', new THREE.Float32BufferAttribute(wv, 3));
-    wallGeo.setAttribute('color', new THREE.Float32BufferAttribute(wc, 3));
-    scene.add(new THREE.Mesh(wallGeo, new THREE.MeshBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false })));
     // 顶高标牌 "4800m"
     (function() {
       var c = document.createElement('canvas'); c.width = 256; c.height = 64;
@@ -9124,31 +9167,41 @@ function buildScene(cs) {
   }
 
   // 珠三角陆地（大陆+海岛灰白填充，岸线青色描边；数据源 map/COASTLINE.txt）
+  // 性能优化：402 个填充 Mesh + 402 个 LineLoop 合并为单张 2048² 贴图地面（1 个绘制对象）
   if (_coast && _coast.length) {
-    var landMat = new THREE.MeshBasicMaterial({
-      color: 0xd6dae0, transparent: true, opacity: 0.88, side: THREE.DoubleSide, depthWrite: false });
-    var lineMat = new THREE.LineBasicMaterial({ color: 0x38bdf8 });
-    for (i = 0; i < _coast.length; i++) {
-      var polyC = _coast[i];
-      var shape = new THREE.Shape();
-      for (var k3 = 0; k3 < polyC.length; k3++) {
-        var sx = (polyC[k3][1] - lon0) * M_PER_DEG_LON, sy = (polyC[k3][0] - lat0) * M_PER_DEG_LAT;
-        if (k3 === 0) shape.moveTo(sx, sy); else shape.lineTo(sx, sy);
+    (function() {
+      var TS = 2048;
+      var lcv = document.createElement('canvas');
+      lcv.width = lcv.height = TS;
+      var g2 = lcv.getContext('2d');
+      function w2p(wx, wz) { return [(wx / ground * 0.5 + 0.5) * TS, (wz / ground * 0.5 + 0.5) * TS]; }
+      function drawPolys(stroke) {
+        for (var cI = 0; cI < _coast.length; cI++) {
+          var poly = _coast[cI];
+          g2.beginPath();
+          for (var cJ = 0; cJ < poly.length; cJ++) {
+            var pp = w2p((poly[cJ][1] - lon0) * M_PER_DEG_LON, -(poly[cJ][0] - lat0) * M_PER_DEG_LAT);
+            if (cJ === 0) g2.moveTo(pp[0], pp[1]); else g2.lineTo(pp[0], pp[1]);
+          }
+          g2.closePath();
+          if (stroke) g2.stroke(); else g2.fill();
+        }
       }
-      var geo = new THREE.ShapeGeometry(shape);
-      geo.rotateX(-Math.PI / 2);          // (x,y) → (x,0,-y)：形状 y=北向 → 世界 -z=北
-      var fillMesh = new THREE.Mesh(geo, landMat);
-      fillMesh.position.y = 1.2;
-      scene.add(fillMesh);
-      // 岸线描边（闭合）
-      var cpArr = [];
-      for (k3 = 0; k3 < polyC.length; k3++) {
-        cpArr.push(new THREE.Vector3(
-          (polyC[k3][1] - lon0) * M_PER_DEG_LON, 2.5,
-          -(polyC[k3][0] - lat0) * M_PER_DEG_LAT));
+      g2.fillStyle = 'rgba(214,218,224,0.82)';
+      drawPolys(false);
+      g2.strokeStyle = '#38bdf8'; g2.lineWidth = 2;
+      drawPolys(true);
+      var landTex = new THREE.CanvasTexture(lcv);
+      if (renderer.capabilities.getMaxAnisotropy) {
+        landTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
       }
-      scene.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(cpArr), lineMat));
-    }
+      var landMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(ground, ground),
+        new THREE.MeshBasicMaterial({ map: landTex, transparent: true, depthWrite: false }));
+      landMesh.rotation.x = -Math.PI / 2;
+      landMesh.position.y = 1.2;
+      scene.add(landMesh);
+    })();
   }
 
   // ── 指北针（地面固定，箭头指向北 = -z 方向）──
@@ -9255,6 +9308,10 @@ function buildSW(cs) {
   canvas.style.cssText = 'position:absolute;inset:0;cursor:grab;';
   box.appendChild(canvas);
   var ctx = canvas.getContext('2d');
+  // 离屏静态层：地面/陆地/网格/海岸线/空域体/全轨迹等不随播放变化的图元，只在视角变化时重绘
+  var staticCv = document.createElement('canvas');
+  staticCv.width = W; staticCv.height = H;
+  var sctx = staticCv.getContext('2d');
   var dims = { w: W, h: H };                        // 投影用动态尺寸（供窗口变化时更新）
 
   // 初始视角：正上方俯视（pitch≈90°），上北下南左西右东；tx/tz 为平移目标（米）
@@ -9269,9 +9326,8 @@ function buildSW(cs) {
     var cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
     var y2 = dy * cp - z1 * sp;
     var z2 = -dy * sp - z1 * cp;   // 深度：相机在南上方向，越高/越南越靠近相机（此前高度项符号反了，轨迹被压到地面之下）
-    var z3 = z2 + view.dist;
-    if (z3 < 30) z3 = 30;
-    var k = dims.h * 0.9 / z3;
+    var z3 = z2 + view.dist;       // z3 保留真实值（可为负），供近平面裁剪插值；k 仍按 30 下限钳制
+    var k = dims.h * 0.9 / (z3 > 30 ? z3 : 30);
     return { x: dims.w / 2 + x1 * k, y: dims.h / 2 - y2 * k, k: k, z: z3 };
   }
 
@@ -9319,6 +9375,7 @@ function buildSW(cs) {
 
   _scene = {
     mode: 'sw', canvas: canvas, ctx: ctx, W: W, H: H, dims: dims,
+    staticCv: staticCv, sctx: sctx, _staticKey: null, _lastKey: null,
     xyz: xyz, idxs: idxs, idxTimes: idxTimes,
     ground: ground, S: S, view: view, cleanup: cleanup,
     lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON,
@@ -9327,8 +9384,44 @@ function buildSW(cs) {
   window.addEventListener('resize', _onResize);
 }
 
-function drawSW() {
-  var sc = _scene, ctx = sc.ctx, W = sc.W, H = sc.H, view = sc.view;
+// ── 兼容模式绘制辅助：世界坐标折线的近平面裁剪 ──
+// 段穿过近平面（z3<zmin）时按线性插值把端点投到 zmin 处，消除"爆坐标横线/缺口"错误连接
+function clipStroke3(project, pts, closed, zmin) {
+  var n = pts.length;
+  if (n < 2) return [];
+  var segs = [], cur = [];
+  var prev = pts[0], PA = project(prev.x, prev.y, prev.z);
+  var last = closed ? n : n - 1;
+  for (var i2 = 1; i2 <= last; i2++) {
+    var idx2 = i2 % n;
+    var cur3 = pts[idx2];
+    var PB = project(cur3.x, cur3.y, cur3.z);
+    var aok = PA.z >= zmin, bok = PB.z >= zmin;
+    if (aok && bok) {
+      cur.push(PB);
+    } else if (aok !== bok) {                 // 一端可见一端被裁：插值交点
+      var t2 = (zmin - PA.z) / (PB.z - PA.z);
+      var PM = project(prev.x + (cur3.x - prev.x) * t2,
+                       prev.y + (cur3.y - prev.y) * t2,
+                       prev.z + (cur3.z - prev.z) * t2);
+      if (aok) { cur.push(PM); if (cur.length > 1) segs.push(cur); cur = []; }
+      else { cur.push(PM); cur.push(PB); }
+    }                                          // 两端都不可见：整段丢弃
+    prev = cur3; PA = PB;
+  }
+  if (cur.length > 1) segs.push(cur);
+  return segs;
+}
+// 全部顶点在近平面前才填充（部分被裁的多边形放弃填充——极近视角下偶发，优于错误覆盖）
+function poly3Visible(project, pts, zmin) {
+  for (var i2 = 0; i2 < pts.length; i2++) {
+    if (project(pts[i2].x, pts[i2].y, pts[i2].z).z < zmin) return false;
+  }
+  return true;
+}
+
+function renderSWStatic(sc) {
+  var ctx = sc.sctx, W = sc.W, H = sc.H;
   var project = sc.project;
   var i, pr;
   ctx.fillStyle = '#0a1628';
@@ -9342,19 +9435,18 @@ function drawSW() {
     ctx.beginPath();
     ctx.moveTo(c0.x, c0.y); ctx.lineTo(c1.x, c1.y); ctx.lineTo(c2.x, c2.y); ctx.lineTo(c3.x, c3.y);
     ctx.closePath(); ctx.fill();
-    // 珠三角陆地灰白填充（大陆+海岛，画在网格之下）
+    // 珠三角陆地灰白填充（大陆+海岛，画在网格之下；有顶点落到近平面之后则跳过该多边形）
     if (sc.coast && sc.coast.length) {
       ctx.fillStyle = 'rgba(214,218,224,0.82)';
       for (i = 0; i < sc.coast.length; i++) {
-        var landP = sc.coast[i];
+        var landP = sc.coast[i], okAll = true, lP;
         ctx.beginPath();
-        var lStarted = false, lP;
         for (var lK = 0; lK < landP.length; lK++) {
           lP = project((landP[lK][1] - sc.lon0) * sc.mLon, 0, -(landP[lK][0] - sc.lat0) * sc.mLat);
-          if (lP.z <= 45) { lStarted = false; continue; }
-          if (!lStarted) { ctx.moveTo(lP.x, lP.y); lStarted = true; }
-          else ctx.lineTo(lP.x, lP.y);
+          if (lP.z < 120) { okAll = false; break; }
+          if (lK === 0) ctx.moveTo(lP.x, lP.y); else ctx.lineTo(lP.x, lP.y);
         }
+        if (!okAll) continue;
         ctx.closePath(); ctx.fill();
       }
     }
@@ -9362,9 +9454,14 @@ function drawSW() {
     var N = 20;
     for (i = 0; i <= N; i++) {
       var t = -gh + sc.ground * i / N;
-      var a = project(t, 0, -gh), b = project(t, 0, gh), c = project(-gh, 0, t), d = project(gh, 0, t);
-      if (a.z > 40 && b.z > 40) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
-      if (c.z > 40 && d.z > 40) { ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(d.x, d.y); ctx.stroke(); }
+      var segsA = clipStroke3(project, [{ x: t, y: 0, z: -gh }, { x: t, y: 0, z: gh }], false, 120);
+      var segsB = clipStroke3(project, [{ x: -gh, y: 0, z: t }, { x: gh, y: 0, z: t }], false, 120);
+      for (var gi = 0; gi < segsA.length; gi++) {
+        ctx.beginPath(); ctx.moveTo(segsA[gi][0].x, segsA[gi][0].y); ctx.lineTo(segsA[gi][1].x, segsA[gi][1].y); ctx.stroke();
+      }
+      for (gi = 0; gi < segsB.length; gi++) {
+        ctx.beginPath(); ctx.moveTo(segsB[gi][0].x, segsB[gi][0].y); ctx.lineTo(segsB[gi][1].x, segsB[gi][1].y); ctx.stroke();
+      }
     }
   }
 
@@ -9394,16 +9491,19 @@ function drawSW() {
   if (sc.coast && sc.coast.length) {
     ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 1;
     for (i = 0; i < sc.coast.length; i++) {
-      var cPoly = sc.coast[i];
-      ctx.beginPath();
-      var cStarted = false, cP;
+      var cPoly = sc.coast[i], cPts = [];
       for (var cK = 0; cK < cPoly.length; cK++) {
-        cP = project((cPoly[cK][1] - sc.lon0) * sc.mLon, 0, -(cPoly[cK][0] - sc.lat0) * sc.mLat);
-        if (cP.z <= 45) { cStarted = false; continue; }
-        if (!cStarted) { ctx.moveTo(cP.x, cP.y); cStarted = true; }
-        else ctx.lineTo(cP.x, cP.y);
+        cPts.push({ x: (cPoly[cK][1] - sc.lon0) * sc.mLon, y: 0, z: -(cPoly[cK][0] - sc.lat0) * sc.mLat });
       }
-      ctx.closePath(); ctx.stroke();
+      var cSegs = clipStroke3(project, cPts, true, 120);
+      for (var cS = 0; cS < cSegs.length; cS++) {
+        ctx.beginPath();
+        for (cK = 0; cK < cSegs[cS].length; cK++) {
+          if (cK === 0) ctx.moveTo(cSegs[cS][cK].x, cSegs[cS][cK].y);
+          else ctx.lineTo(cSegs[cS][cK].x, cSegs[cS][cK].y);
+        }
+        ctx.stroke();
+      }
     }
   }
 
@@ -9411,16 +9511,19 @@ function drawSW() {
   if (sc.boundary && sc.boundary.length > 2) {
     var TMA_TOP = 4800 * VERT_EXAG;
     ctx.strokeStyle = '#ff8c42'; ctx.lineWidth = 2;
-    ctx.beginPath();
-    var bStarted = false, pb;
-    for (i = 0; i <= sc.boundary.length; i++) {
-      var bv = sc.boundary[i % sc.boundary.length];
-      pb = project((bv[1] - sc.lon0) * sc.mLon, 0, -(bv[0] - sc.lat0) * sc.mLat);
-      if (pb.z <= 45) { bStarted = false; continue; }
-      if (!bStarted) { ctx.moveTo(pb.x, pb.y); bStarted = true; }
-      else ctx.lineTo(pb.x, pb.y);
+    var bPts3 = [];
+    for (i = 0; i < sc.boundary.length; i++) {
+      bPts3.push({ x: (sc.boundary[i][1] - sc.lon0) * sc.mLon, y: 0, z: -(sc.boundary[i][0] - sc.lat0) * sc.mLat });
     }
-    ctx.stroke();
+    var bSegs = clipStroke3(project, bPts3, true, 120);
+    for (var bS = 0; bS < bSegs.length; bS++) {
+      ctx.beginPath();
+      for (var bK = 0; bK < bSegs[bS].length; bK++) {
+        if (bK === 0) ctx.moveTo(bSegs[bS][bK].x, bSegs[bS][bK].y);
+        else ctx.lineTo(bSegs[bS][bK].x, bSegs[bS][bK].y);
+      }
+      ctx.stroke();
+    }
     // 半透明侧壁（按墙面朝向明暗着色 + 远近排序，显立体感；光源方位西北）
     var lightAz2 = 315 * Math.PI / 180;
     var Lx2 = Math.sin(lightAz2), Lz2 = -Math.cos(lightAz2);
@@ -9460,56 +9563,48 @@ function drawSW() {
     }
     // 4800m 顶面边界线（亮橙）
     ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    var tStarted = false, tP, tFirst = null;
-    for (i = 0; i <= sc.boundary.length; i++) {
-      var bv2 = sc.boundary[i % sc.boundary.length];
-      tP = project((bv2[1] - sc.lon0) * sc.mLon, TMA_TOP, -(bv2[0] - sc.lat0) * sc.mLat);
-      if (i === 0) tFirst = tP;
-      if (tP.z <= 45) { tStarted = false; continue; }
-      if (!tStarted) { ctx.moveTo(tP.x, tP.y); tStarted = true; }
-      else ctx.lineTo(tP.x, tP.y);
+    var topPts3 = [];
+    for (i = 0; i < sc.boundary.length; i++) {
+      topPts3.push({ x: (sc.boundary[i][1] - sc.lon0) * sc.mLon, y: TMA_TOP, z: -(sc.boundary[i][0] - sc.lat0) * sc.mLat });
     }
-    ctx.stroke();
-    // 顶高标牌
-    if (tFirst && tFirst.z > 45) {
+    var tSegs = clipStroke3(project, topPts3, true, 120);
+    for (var tS = 0; tS < tSegs.length; tS++) {
+      ctx.beginPath();
+      for (var tK = 0; tK < tSegs[tS].length; tK++) {
+        if (tK === 0) ctx.moveTo(tSegs[tS][tK].x, tSegs[tS][tK].y);
+        else ctx.lineTo(tSegs[tS][tK].x, tSegs[tS][tK].y);
+      }
+      ctx.stroke();
+    }
+    // 顶高标牌（贴第一段顶线的起点）
+    if (tSegs.length) {
+      var tf = tSegs[0][0];
       ctx.fillStyle = '#ffb347';
       ctx.font = 'bold 18px sans-serif';
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      ctx.fillText('4800m', tFirst.x + 8, tFirst.y - 12);
+      ctx.fillText('4800m', tf.x + 8, tf.y - 12);
     }
   }
 
-  // 全轨迹（黄）+ 已飞高亮（青）
-  var target = _pts[0].t + _playhead * 1000;
-  var flownCount = 0;
-  while (flownCount < sc.idxTimes.length && sc.idxTimes[flownCount] <= target) flownCount++;
+  // 全轨迹（黄，静态层）
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = '#ffd54a';
-  ctx.beginPath();
-  var started = false;
+  var trailPts3 = [];
   for (i = 0; i < sc.idxs.length; i++) {
-    pr = project(sc.xyz[sc.idxs[i]].x, Math.max(sc.xyz[sc.idxs[i]].y, 0), sc.xyz[sc.idxs[i]].z);
-    if (pr.z <= 45) { started = false; continue; }
-    if (!started) { ctx.moveTo(pr.x, pr.y); started = true; }
-    else ctx.lineTo(pr.x, pr.y);
+    var ti = sc.xyz[sc.idxs[i]];
+    trailPts3.push({ x: ti.x, y: Math.max(ti.y, 0), z: ti.z });
   }
-  ctx.stroke();
-  if (flownCount >= 2) {
-    ctx.strokeStyle = '#38e8ff'; ctx.lineWidth = 2.5;
+  var trSegs = clipStroke3(project, trailPts3, false, 120);
+  for (i = 0; i < trSegs.length; i++) {
     ctx.beginPath();
-    started = false;
-    for (i = 0; i < flownCount; i++) {
-      var pi = sc.xyz[sc.idxs[i]];
-      pr = project(pi.x, Math.max(pi.y, 0), pi.z);
-      if (pr.z <= 45) { started = false; continue; }
-      if (!started) { ctx.moveTo(pr.x, pr.y); started = true; }
-      else ctx.lineTo(pr.x, pr.y);
+    for (var tj = 0; tj < trSegs[i].length; tj++) {
+      if (tj === 0) ctx.moveTo(trSegs[i][tj].x, trSegs[i][tj].y);
+      else ctx.lineTo(trSegs[i][tj].x, trSegs[i][tj].y);
     }
     ctx.stroke();
   }
 
-  // 起终点
+  // 起终点（静态层）
   function dot(idx, color) {
     var p = sc.xyz[idx];
     pr = project(p.x, Math.max(p.y, 0), p.z);
@@ -9520,8 +9615,49 @@ function drawSW() {
   dot(0, '#4ade80');
   dot(sc.xyz.length - 1, '#f87171');
 
-  // 飞机（跟随插值状态）
+  // ── 静态层完成 ──
+}
+
+function drawSW() {
+  var sc = _scene, ctx = sc.ctx, view = sc.view;
+  var project = sc.project;
+  var i, pr;
   var st = _stateAt(_playhead);
+  // 帧级跳过：暂停且视角未动时不重绘（零开销）
+  var key = [view.yaw, view.pitch, view.dist, view.tx, view.tz, sc.dims.w, sc.dims.h, _playhead.toFixed(2)].join('|');
+  if (key === sc._lastKey) return st;
+  sc._lastKey = key;
+  // 静态层缓存：视角/尺寸变化才重绘（renderSWStatic），播放期间每帧只 blit + 动态图元
+  var vkey = [view.yaw, view.pitch, view.dist, view.tx, view.tz, sc.dims.w, sc.dims.h].join('|');
+  if (vkey !== sc._staticKey) {
+    sc._staticKey = vkey;
+    renderSWStatic(sc);
+  }
+  ctx.drawImage(sc.staticCv, 0, 0);
+
+  // 已飞高亮（青，动态层，随播放头变化）
+  var target = _pts[0].t + _playhead * 1000;
+  var flownCount = 0;
+  while (flownCount < sc.idxTimes.length && sc.idxTimes[flownCount] <= target) flownCount++;
+  if (flownCount >= 2) {
+    var flPts3 = [];
+    for (i = 0; i < flownCount; i++) {
+      var pi = sc.xyz[sc.idxs[i]];
+      flPts3.push({ x: pi.x, y: Math.max(pi.y, 0), z: pi.z });
+    }
+    var flSegs = clipStroke3(project, flPts3, false, 120);
+    ctx.strokeStyle = '#38e8ff'; ctx.lineWidth = 2.5;
+    for (i = 0; i < flSegs.length; i++) {
+      ctx.beginPath();
+      for (var fj = 0; fj < flSegs[i].length; fj++) {
+        if (fj === 0) ctx.moveTo(flSegs[i][fj].x, flSegs[i][fj].y);
+        else ctx.lineTo(flSegs[i][fj].x, flSegs[i][fj].y);
+      }
+      ctx.stroke();
+    }
+  }
+
+  // 飞机（跟随插值状态；st 已在函数开头算好）
   var px = (st.lon - sc.lon0) * sc.mLon, pz = -(st.lat - sc.lat0) * sc.mLat, py = Math.max(st.alt * VERT_EXAG, sc.S * 0.5);
   var hdRad = st.hd * Math.PI / 180;
   var dirX = Math.sin(hdRad), dirZ = -Math.cos(hdRad);   // 世界坐标：北=-z
@@ -9565,6 +9701,10 @@ function _onResize() {
     _scene.W = box.clientWidth || window.innerWidth; _scene.H = box.clientHeight || window.innerHeight;
     _scene.canvas.width = _scene.W; _scene.canvas.height = _scene.H;
     if (_scene.dims) { _scene.dims.w = _scene.W; _scene.dims.h = _scene.H; }
+    if (_scene.staticCv) {
+      _scene.staticCv.width = _scene.W; _scene.staticCv.height = _scene.H;
+      _scene._staticKey = null; _scene._lastKey = null;   // 强制重建静态层
+    }
   }
 }
 

@@ -23,6 +23,7 @@ logger = logging.getLogger("aftn_web.webapp")
 
 
 from .radar_history import RadarHistoryStore
+from . import render3d as render3d_mod
 from .asr_receiver import AsrReceiver
 from .voice_receiver import VoiceReceiver, SECTOR_CHANNELS, SECTOR_ALL_CHANNELS, SECTOR_MERGE_RULES
 
@@ -326,17 +327,8 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         start, end = radar_history_store.get_time_range()
         return jsonify({"start": start, "end": end})
 
-    @app.route("/api/flight_trail")
-    def api_flight_trail():
-        """返回指定航班号当天的全部历史航迹点（用于飞行计划页的轨迹图）
-        对于跨午夜航班，自动扩展查询到次日（ATA 落在次日的情况）。
-        """
-        if radar_history_store is None:
-            return jsonify([])
-        callsign = _req_str("callsign")
-        if not callsign:
-            return jsonify({"error": "callsign required"}), 400
-        date_str = _req_str("date") or datetime.utcnow().strftime("%Y-%m-%d")
+    def _query_trail_pts(callsign, date_str):
+        """按日期查询航迹点（含前一天回退与跨午夜扩展），返回 (pts_sorted, 实际date_str)"""
         ts_from = f"{date_str}T00:00:00.000Z"
         ts_to = f"{date_str}T23:59:59.000Z"
 
@@ -383,8 +375,59 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
                 pts_sorted.sort(key=lambda p: p.get("ts", ""))
             except Exception:
                 pass
+        return pts_sorted, date_str
 
+    @app.route("/api/flight_trail")
+    def api_flight_trail():
+        """返回指定航班号当天的全部历史航迹点（用于飞行计划页的轨迹图）
+        对于跨午夜航班，自动扩展查询到次日（ATA 落在次日的情况）。
+        """
+        if radar_history_store is None:
+            return jsonify([])
+        callsign = _req_str("callsign")
+        if not callsign:
+            return jsonify({"error": "callsign required"}), 400
+        date_str = _req_str("date") or datetime.utcnow().strftime("%Y-%m-%d")
+        pts_sorted, _ = _query_trail_pts(callsign, date_str)
         return jsonify(pts_sorted)
+
+    # ══════════════════════════════════════════════════════════
+    # 3D 轨迹服务端视频渲染（v3.2.12）：服务器离线渲染 MP4，
+    # 浏览器 <video> 播放，任何客户端零 GPU 依赖、零卡顿
+    # ══════════════════════════════════════════════════════════
+    @app.route("/api/render3d", methods=["POST"])
+    def api_render3d():
+        if radar_history_store is None:
+            return jsonify({"error": "雷达历史数据不可用"}), 503
+        data = request.get_json(silent=True) or {}
+        callsign = (data.get("callsign") or _req_str("callsign") or "").strip().upper()
+        date_str = data.get("date") or _req_str("date") or datetime.utcnow().strftime("%Y-%m-%d")
+        if not callsign:
+            return jsonify({"error": "callsign required"}), 400
+        pts_sorted, ds = _query_trail_pts(callsign, date_str)
+        pts_sorted = [p for p in pts_sorted if p.get("lt") and p.get("ln") and p.get("ts")]
+        if len(pts_sorted) < 2:
+            return jsonify({"error": "未查到该航班当日航迹点（或点数不足）"}), 404
+        job_id = render3d_mod.start_render(pts_sorted, callsign, ds)
+        return jsonify({"job_id": job_id})
+
+    @app.route("/api/render3d_status")
+    def api_render3d_status():
+        job_id = _req_str("job")
+        st = render3d_mod.job_status(job_id)
+        if st is None:
+            return jsonify({"error": "job not found"}), 404
+        return jsonify(st)
+
+    @app.route("/renders/<path:filename>")
+    def api_render3d_file(filename):
+        # 防路径穿越
+        if ".." in filename or filename.startswith("/"):
+            return jsonify({"error": "bad filename"}), 400
+        fp = render3d_mod.OUT_DIR / filename
+        if not fp.exists():
+            return jsonify({"error": "not found"}), 404
+        return send_file(str(fp))
 
     # ══════════════════════════════════════════════════════════
     # 航迹保存（flight_tracks 数据库查询）
