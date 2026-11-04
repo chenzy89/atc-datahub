@@ -318,16 +318,9 @@ def _render_video(job_id, pts, callsign, date_str):
                 continue
             dr.polygon([(p[0], p[1]) for p in scr], fill=(214, 218, 224))
 
-        # 网格（纵线西缘→东缘间距≈cell，横线 z 向 20 等分，方格保持近正方形）
-        grid_c = (22, 40, 63)
-        cell = ground / 20
-        n_x = max(1, int(round((east_x + gh) / cell)))
-        for gi in range(n_x + 1):
-            t = -gh + (east_x + gh) * gi / n_x
-            _draw_segs(dr, _clip_stroke(cam, [(t, 0, -gh), (t, 0, gh)], False), grid_c, 1)
-        for gi in range(21):
-            t = -gh + ground * gi / 20
-            _draw_segs(dr, _clip_stroke(cam, [(-gh, 0, t), (east_x, 0, t)], False), grid_c, 1)
+        # 地面矩形外框（v3.2.14 取消网格线，仅保留边框）
+        _draw_segs(dr, _clip_stroke(cam, [(-gh, 0, -gh), (east_x, 0, -gh), (east_x, 0, gh), (-gh, 0, gh)],
+                                   True), (42, 74, 117), 2)
 
         # 岸线
         for poly in land:

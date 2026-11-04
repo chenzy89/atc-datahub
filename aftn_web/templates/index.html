@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.13</title>
+<title>ATC综合数据中心 v3.2.14</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.13</span>
+  <span class="badge">v3.2.14</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -865,7 +865,7 @@ canvas#radarMap {
       <button class="btn btn-secondary" onclick="exportExcel()">导出</button>
       <button class="btn btn-secondary" onclick="batchFlightTrail()" style="font-size:12px;padding:4px 10px;">批量轨迹</button>
       <button class="btn btn-secondary" onclick="openAirportTrailPicker()" style="font-size:12px;padding:4px 10px;">机场进离场</button>
-      <button class="btn btn-secondary" onclick="open3DTrajectory()" style="font-size:12px;padding:4px 10px;">🛩 3D轨迹</button>
+      <button class="btn btn-secondary" onclick="open3DAllFlights()" style="font-size:12px;padding:4px 10px;">🛩 3D轨迹</button>
       <span id="fpl-info" class="text-muted" style="margin-left:6px;"></span>
     </div>
   </div>
@@ -1758,6 +1758,7 @@ function showFplMsg(callsign, dof) {
 // Flight Plans — 排序
 // ═══════════════════════════════════════════════════════
 var fplSortBy = '';    // 'callsign' | 'etd'
+var _fplRows = null;   // 当前查询结果记录（v3.2.14 供「3D轨迹」批量生成）
 var fplSortOrder = ''; // 'asc' | 'desc'
 
 function sortFpl(field) {
@@ -1819,6 +1820,7 @@ function searchPlans(r) {
 }
 
 function renderPlans(rs) {
+  _fplRows = rs || null;
   var tb = document.getElementById('tbl-fpl');
   if (!rs || rs.length === 0) {
     tb.innerHTML = '<tr><td colspan="16" class="text-muted text-center" style="padding:30px">没有匹配的飞行计划</td></tr>';
@@ -8760,6 +8762,9 @@ function asrExport() {
 
 var VERT_EXAG = 5;               // 垂直高度放大倍数
 var _pts = null;                 // [{t(ms), lon, lat, alt(m), hd, sp}]
+var _multi = null;               // v3.2.14 多航班模式：{flights:[{cs,color,pts}], t0, t1}（epoch ms）；null=单航班
+var _palette = ['#38e8ff', '#ffd54a', '#4ade80', '#f87171', '#c084fc', '#fb923c', '#f472b6', '#a3e635', '#60a5fa', '#fbbf24', '#e879f9', '#34d399'];
+var _hudCsLast = '';             // HUD 呼号去重
 var _scene = null;               // {renderer, scene, camera, controls, planeGroup, markers, duration}
 var _playing = false;
 var _playhead = 0;               // 当前回放时刻（相对轨迹起点的秒数）
@@ -8850,6 +8855,62 @@ window.load3DTrajectory = function() {
     .catch(function(e) { btn.disabled = false; _showStatus('请求失败: ' + e, false); });
 };
 
+// ── v3.2.14 批量 3D 轨迹：用当前查询结果直接生成多航班 3D 场景（跳过选择弹窗）──
+window.open3DAllFlights = function() {
+  var rows = _fplRows;
+  if (!rows || !rows.length) { alert('请先「查询」出航班计划，再点 3D轨迹'); return; }
+  var info = document.getElementById('fpl-info');
+  var queue = rows.slice(0, 100);            // 性能保护：单次最多 100 架
+  var ok = [], done = 0, total = queue.length;
+  info.textContent = '🛩 3D轨迹：获取航迹 0/' + total + ' ...';
+  function finish() {
+    if (!ok.length) {
+      info.textContent = '🛩 3D轨迹：这 ' + total + ' 条计划均未找到航迹数据';
+      return;
+    }
+    info.textContent = '🛩 3D轨迹：共 ' + ok.length + ' 架航班，正在生成 3D 场景...';
+    setTimeout(function() {
+      info.textContent = '🛩 3D轨迹：' + ok.length + ' 架航班';
+      open3DViewMulti(ok);
+    }, 30);
+  }
+  function worker() {
+    if (!queue.length) { if (done >= total) finish(); return; }
+    var rec = queue.shift();
+    var cs = (rec.callsign || '').trim().toUpperCase();
+    var date = rec.dof ? rec.dof.slice(0, 10) : '';
+    if (!cs || !date) { done++; info.textContent = '🛩 3D轨迹：获取航迹 ' + done + '/' + total + ' ...'; if (done >= total) finish(); else worker(); return; }
+    fetch('/api/flight_trail?callsign=' + encodeURIComponent(cs) + '&date=' + encodeURIComponent(date))
+      .then(function(r) { return r.json(); })
+      .then(function(pts) {
+        pts = (pts || []).filter(function(p) { return p && p.lt && p.ln && p.ts; });
+        var out = [], hasQh = false;
+        for (var i = 0; i < pts.length; i++) {
+          var p = pts[i];
+          var t = Date.parse(p.ts);
+          if (isNaN(t)) continue;
+          var qh = parseFloat(p.qh) || 0;
+          var alt = qh > 0 ? qh : (parseFloat(p.fl) || 0);
+          if (qh > 0) hasQh = true;
+          out.push({ t: t, lon: parseFloat(p.ln), lat: parseFloat(p.lt),
+                     alt: alt, hd: parseFloat(p.hd) || 0, sp: parseFloat(p.sp) || 0 });
+        }
+        out.sort(function(a, b) { return a.t - b.t; });
+        if (out.length >= 2) {
+          if (hasQh) { _$('trd3HudAltLabel').textContent = '高度(QNH)'; }
+          ok.push({ cs: cs, pts: out });
+        }
+      })
+      .catch(function() {})
+      .then(function() {
+        done++;
+        info.textContent = '🛩 3D轨迹：获取航迹 ' + done + '/' + total + ' ...';
+        if (done >= total) { finish(); } else { worker(); }
+      });
+  }
+  worker(); worker(); worker(); worker();   // 4 路并发
+};
+
 // ── 服务端视频导出（v3.2.12）：服务器离线渲染 MP4，任何电脑流畅播放 ──
 window.render3DVideo = function() {
   var cs = _$('trd3Callsign').value.trim().toUpperCase();
@@ -8923,16 +8984,31 @@ function _webglOK() {
   } catch (e) { return false; }
 }
 
-function open3DView(cs, pts) {
+function open3DView(cs, pts, multi) {
   _loadLib(function() {
-    _loadBoundary(function() { open3DViewInner(cs, pts); });
+    _loadBoundary(function() { open3DViewInner(cs, pts, multi); });
   });
 }
-function open3DViewInner(cs, pts) {
+// v3.2.14 多航班入口：list = [{cs, pts:[{t,lon,lat,alt,hd,sp}]}]（pts 已按时间排序）
+function open3DViewMulti(list) {
+  if (!list || !list.length) return;
+  var t0 = 1e18, t1 = -1e18, anyQh = false;
+  for (var i = 0; i < list.length; i++) {
+    if (!list[i].color) list[i].color = _palette[i % _palette.length];
+    if (list[i].pts[0].t < t0) t0 = list[i].pts[0].t;
+    if (list[i].pts[list[i].pts.length - 1].t > t1) t1 = list[i].pts[list[i].pts.length - 1].t;
+  }
+  _loadLib(function() {
+    _loadBoundary(function() { open3DViewInner(list[0].cs, list[0].pts, { flights: list, t0: t0, t1: t1 }); });
+  });
+}
+function open3DViewInner(cs, pts, multi) {
     _pts = pts;
+    _multi = multi || null;
     _playhead = 0;
     _playing = false;
-    _$('trd3HudCs').textContent = cs;
+    _hudCsLast = '';
+    _$('trd3HudCs').textContent = _multi ? (_multi.flights.length + ' 架航班') : cs;
     _$('trd3TimeEnd').textContent = _fmtHMS(_duration());
     _$('trd3Slider').max = Math.floor(_duration());
 
@@ -8955,7 +9031,7 @@ function open3DViewInner(cs, pts) {
       return;
     }
     if (_scene.mode === 'sw') {
-      _$('trd3HudCs').textContent = cs + '（兼容模式）';
+      _$('trd3HudCs').textContent = (_multi ? _multi.flights.length + ' 架航班' : cs) + '（兼容模式）';
     }
     startLoop();
 }
@@ -8971,7 +9047,7 @@ window.close3DView = function() {
       try { _scene.canvas.remove(); } catch (e) {}
     }
   }
-  _scene = null; _pts = null;
+  _scene = null; _pts = null; _multi = null;
   _$('trd3Fullscreen').style.display = 'none';
   _$('trd3PlayBtn').textContent = '▶';
 };
@@ -8985,7 +9061,50 @@ function _headingDelta(a, b) {  // 最短角差（度）
   return d;
 }
 
+function _duration() {
+  if (_multi) return (_multi.t1 - _multi.t0) / 1000;   // 多航班：全局时间轴
+  return (_pts[_pts.length-1].t - _pts[0].t) / 1000;
+}
+
+// v3.2.14 多航班：单条航迹在指定 epoch 时刻的插值状态；不在该航迹时间跨度内返回 null
+function _flightStateAt(f, tMs) {
+  var p = f.pts;
+  if (tMs < p[0].t || tMs > p[p.length - 1].t) return null;
+  var lo = 0, hi = p.length - 1;
+  while (hi - lo > 1) {
+    var mid = (lo + hi) >> 1;
+    if (p[mid].t <= tMs) lo = mid; else hi = mid;
+  }
+  if (p[lo].t === tMs) { var q0 = p[lo]; return { lon: q0.lon, lat: q0.lat, alt: q0.alt, hd: q0.hd, sp: q0.sp, ts: tMs }; }
+  var a = p[lo], b = p[hi];
+  var f2 = (tMs - a.t) / (b.t - a.t);
+  return {
+    lon: a.lon + (b.lon - a.lon) * f2,
+    lat: a.lat + (b.lat - a.lat) * f2,
+    alt: a.alt + (b.alt - a.alt) * f2,
+    hd: a.hd + _headingDelta(a.hd, b.hd) * f2,
+    sp: a.sp + (b.sp - a.sp) * f2,
+    ts: tMs,
+  };
+}
+
 function _stateAt(sec) {
+  if (_multi) {
+    // 多航班：返回当前时刻"最近活跃"的航班状态（供 HUD）；各航迹绘制在 drawSW/updateState 内独立处理
+    var t = _multi.t0 + sec * 1000, best = null, bestD = 1e18;
+    for (var i = 0; i < _multi.flights.length; i++) {
+      var f = _multi.flights[i], p = f.pts;
+      var tt = Math.max(p[0].t, Math.min(p[p.length - 1].t, t));
+      var d = Math.abs(tt - t);
+      if (d < bestD) {
+        bestD = d;
+        best = _flightStateAt(f, tt);
+        best.cs = f.cs;
+        best.active = (d === 0);
+      }
+    }
+    return best;
+  }
   var t0 = _pts[0].t, target = t0 + sec * 1000;
   if (sec <= 0) { var p0 = _pts[0]; return { lon: p0.lon, lat: p0.lat, alt: p0.alt, hd: p0.hd, sp: p0.sp, ts: p0.t }; }
   if (sec >= _duration()) { var pn = _pts[_pts.length-1]; return { lon: pn.lon, lat: pn.lat, alt: pn.alt, hd: pn.hd, sp: pn.sp, ts: pn.t }; }
@@ -9069,10 +9188,19 @@ function buildScene(cs) {
   var W = box.clientWidth, H = box.clientHeight;
   if (!W || !H) { W = window.innerWidth || 1280; H = window.innerHeight || 720; }   // 兜底
 
-  // ── 坐标转换：以轨迹中心为原点的 ENU（米）──
-  var lon0 = 0, lat0 = 0;
-  for (var i = 0; i < _pts.length; i++) { lon0 += _pts[i].lon; lat0 += _pts[i].lat; }
-  lon0 /= _pts.length; lat0 /= _pts.length;
+  // ── 坐标转换：以轨迹中心为原点的 ENU（米）──（多航班时中心取所有航班航迹点质心）
+  var lon0 = 0, lat0 = 0, nAll = 0, i;
+  if (_multi) {
+    for (var mi0 = 0; mi0 < _multi.flights.length; mi0++) {
+      var fp0 = _multi.flights[mi0].pts;
+      for (var fj0 = 0; fj0 < fp0.length; fj0++) { lon0 += fp0[fj0].lon; lat0 += fp0[fj0].lat; }
+      nAll += fp0.length;
+    }
+  } else {
+    for (i = 0; i < _pts.length; i++) { lon0 += _pts[i].lon; lat0 += _pts[i].lat; }
+    nAll = _pts.length;
+  }
+  lon0 /= nAll; lat0 /= nAll;
   var M_PER_DEG_LAT = 110540, M_PER_DEG_LON = 111320 * Math.cos(lat0 * Math.PI / 180);
   function toXYZ(p) {
     return {
@@ -9088,6 +9216,17 @@ function buildScene(cs) {
     if (xyz[i].y > maxAlt) maxAlt = xyz[i].y;
     if (Math.abs(xyz[i].x) > spanE) spanE = Math.abs(xyz[i].x);
     if (Math.abs(xyz[i].z) > spanN) spanN = Math.abs(xyz[i].z);
+  }
+  if (_multi) {   // 多航班：范围覆盖所有航班航迹
+    for (var ms0 = 0; ms0 < _multi.flights.length; ms0++) {
+      var fps = _multi.flights[ms0].pts;
+      for (var fs0 = 0; fs0 < fps.length; fs0++) {
+        var xs = (fps[fs0].lon - lon0) * M_PER_DEG_LON, zs = -(fps[fs0].lat - lat0) * M_PER_DEG_LAT, ys = fps[fs0].alt * VERT_EXAG;
+        if (ys > maxAlt) maxAlt = ys;
+        if (Math.abs(xs) > spanE) spanE = Math.abs(xs);
+        if (Math.abs(zs) > spanN) spanN = Math.abs(zs);
+      }
+    }
   }
   var ground = Math.max(spanE, spanN) * 2.1 + 4000;   // 地面网格尺寸
   // v3.2.13 网格与陆地多边形对齐：西/北缘=轨迹外扩范围（-gh/+gh），东缘=大陆主体多边形最东经度
@@ -9125,12 +9264,12 @@ function buildScene(cs) {
   sun.position.set(ground, ground * 1.5, ground * 0.6);
   scene.add(sun);
 
-  // 地面网格 + 平面（东西向矩形：西缘 -gh，东缘 eastX = 大陆主体最东经度）
-  var gridDiv = Math.max(10, Math.round(extW / (ground / 40)));
-  var grid = new THREE.GridHelper(extW, gridDiv, 0x2a4a75, 0x16283f);
-  grid.scale.z = ground / extW;               // GridHelper 为正方形，z 向缩放成矩形
-  grid.position.x = cx0;
-  scene.add(grid);
+  // 地面矩形外框（v3.2.14 取消网格线，仅保留边框）+ 平面（东西向矩形：西缘 -gh，东缘 eastX = 大陆主体最东经度）
+  var frameGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(cx0 - extW / 2, 0.5, -ghG), new THREE.Vector3(cx0 + extW / 2, 0.5, -ghG),
+    new THREE.Vector3(cx0 + extW / 2, 0.5, ghG), new THREE.Vector3(cx0 - extW / 2, 0.5, ghG)
+  ]);
+  scene.add(new THREE.LineLoop(frameGeo, new THREE.LineBasicMaterial({ color: 0x2a4a75 })));
   var gnd = new THREE.Mesh(
     new THREE.PlaneGeometry(extW, ground),
     new THREE.MeshBasicMaterial({ color: 0x0d1f38, transparent: true, opacity: 0.86 })
@@ -9139,42 +9278,71 @@ function buildScene(cs) {
   gnd.position.set(cx0, -2, 0);
   scene.add(gnd);
 
-  // 轨迹线（黄色）+ 轨迹点
-  var lineGeo = new THREE.BufferGeometry();
+  // 轨迹线（多航班：每条独立配色+已飞高亮+移动锥标；单航班：黄色）
   var arr = new Float32Array(xyz.length * 3);
   for (i = 0; i < xyz.length; i++) { arr[i*3] = xyz[i].x; arr[i*3+1] = xyz[i].y; arr[i*3+2] = xyz[i].z; }
-  lineGeo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
-  scene.add(new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xffd54a })));
+  var multiList = [];
+  var flownLine = null;
+  if (_multi) {
+    for (var mq0 = 0; mq0 < _multi.flights.length; mq0++) {
+      var mf0 = _multi.flights[mq0];
+      var ci0 = parseInt(mf0.color.slice(1), 16);
+      var mxyz0 = [], marr = new Float32Array(mf0.pts.length * 3);
+      for (var mj1 = 0; mj1 < mf0.pts.length; mj1++) {
+        var qp = mf0.pts[mj1];
+        mxyz0.push({ x: (qp.lon - lon0) * M_PER_DEG_LON, z: -(qp.lat - lat0) * M_PER_DEG_LAT, y: Math.max(qp.alt * VERT_EXAG, 0) });
+        marr[mj1*3] = mxyz0[mj1].x; marr[mj1*3+1] = mxyz0[mj1].y; marr[mj1*3+2] = mxyz0[mj1].z;
+      }
+      var slg = new THREE.BufferGeometry();
+      slg.setAttribute('position', new THREE.BufferAttribute(marr, 3));
+      scene.add(new THREE.Line(slg, new THREE.LineBasicMaterial({ color: ci0, transparent: true, opacity: 0.5 })));
+      var fgg = new THREE.BufferGeometry();
+      fgg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(marr), 3));
+      var ffl = new THREE.Line(fgg, new THREE.LineBasicMaterial({ color: ci0 }));
+      ffl.geometry.setDrawRange(0, 0);
+      scene.add(ffl);
+      var mk0 = new THREE.Mesh(
+        new THREE.ConeGeometry(Math.max(ground / 280, 22), Math.max(ground / 170, 42), 10),
+        new THREE.MeshBasicMaterial({ color: ci0 }));
+      mk0.rotation.x = -Math.PI / 2;
+      scene.add(mk0);
+      multiList.push({ f: mf0, xyz: mxyz0, flownGeo: fgg, marker: mk0 });
+    }
+  } else {
+    var lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    scene.add(new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xffd54a })));
 
-  var ptGeo = new THREE.BufferGeometry();
-  ptGeo.setAttribute('position', new THREE.BufferAttribute(arr.slice(), 3));
-  scene.add(new THREE.Points(ptGeo, new THREE.PointsMaterial({ color: 0xffe27a, size: Math.max(ground/300, 12), sizeAttenuation: true })));
+    var ptGeo = new THREE.BufferGeometry();
+    ptGeo.setAttribute('position', new THREE.BufferAttribute(arr.slice(), 3));
+    scene.add(new THREE.Points(ptGeo, new THREE.PointsMaterial({ color: 0xffe27a, size: Math.max(ground/300, 12), sizeAttenuation: true })));
 
-  // 已飞部分高亮线（青色）
-  var flownGeo = new THREE.BufferGeometry();
-  flownGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(xyz.length * 3), 3));
-  var flownLine = new THREE.Line(flownGeo, new THREE.LineBasicMaterial({ color: 0x38e8ff }));
-  scene.add(flownLine);
+    // 已飞部分高亮线（青色）
+    var flownGeo = new THREE.BufferGeometry();
+    flownGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(xyz.length * 3), 3));
+    flownLine = new THREE.Line(flownGeo, new THREE.LineBasicMaterial({ color: 0x38e8ff }));
+    scene.add(flownLine);
 
-  // 起 / 终点标记
-  function marker(pos, color, text) {
-    var m = new THREE.Mesh(
-      new THREE.SphereGeometry(Math.max(ground/220, 28), 16, 12),
-      new THREE.MeshBasicMaterial({ color: color })
-    );
-    m.position.set(pos.x, Math.max(pos.y, 0), pos.z);
-    scene.add(m);
-    var ring = new THREE.Mesh(
-      new THREE.RingGeometry(Math.max(ground/160, 40), Math.max(ground/140, 55), 32),
-      new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide, transparent: true, opacity: 0.6 })
-    );
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.set(pos.x, 2, pos.z);
-    scene.add(ring);
-    return m;
+    // 起 / 终点标记
+    function marker(pos, color, text) {
+      var m = new THREE.Mesh(
+        new THREE.SphereGeometry(Math.max(ground/220, 28), 16, 12),
+        new THREE.MeshBasicMaterial({ color: color })
+      );
+      m.position.set(pos.x, Math.max(pos.y, 0), pos.z);
+      scene.add(m);
+      var ring = new THREE.Mesh(
+        new THREE.RingGeometry(Math.max(ground/160, 40), Math.max(ground/140, 55), 32),
+        new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide, transparent: true, opacity: 0.6 })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(pos.x, 2, pos.z);
+      scene.add(ring);
+      return m;
+    }
+    marker(xyz[0], 0x4ade80);                          // 起点（绿）
+    marker(xyz[xyz.length-1], 0xf87171);               // 终点（红）
   }
-  marker(xyz[0], 0x4ade80);                          // 起点（绿）
-  marker(xyz[xyz.length-1], 0xf87171);               // 终点（红）
 
   // 终端区边界（FDRG.json，橙色闭合多边形贴地面）+ 3D 空域体（0~4800m 半透明侧壁 + 顶线 + 标牌）
   if (_boundary && _boundary.length > 2) {
@@ -9299,7 +9467,9 @@ function buildScene(cs) {
   })();
 
   // ── 飞机模型（低多边形，机头朝 -z）──
-  var plane = new THREE.Group();
+  var plane = null;
+  if (!_multi) {   // 多航班模式不建单机模型（每航班用锥形标记）
+  plane = new THREE.Group();
   var matBody = new THREE.MeshStandardMaterial({ color: 0xe8eef7, roughness: 0.45, metalness: 0.25 });
   var matAccent = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.5, metalness: 0.2 });
   var S = Math.max(ground/260, 55);                  // 模型缩放
@@ -9331,9 +9501,10 @@ function buildScene(cs) {
   );
   plane.add(leader);
   scene.add(plane);
+  }   // end if (!_multi)
 
   _scene = { mode: 'gl', renderer: renderer, scene: scene, camera: camera, controls: controls,
-             plane: plane, flownLine: flownLine, xyz: xyz, arr: arr,
+             plane: plane, flownLine: flownLine, xyz: xyz, arr: arr, multi: multiList,
              lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON, S: S };
 
   window.addEventListener('resize', _onResize);
@@ -9342,8 +9513,18 @@ function buildScene(cs) {
 // ══════════ 软件渲染 3D 兜底（纯 Canvas 2D，无需 WebGL）══════════
 function buildSW(cs) {
   var lon0 = 0, lat0 = 0, i;
-  for (i = 0; i < _pts.length; i++) { lon0 += _pts[i].lon; lat0 += _pts[i].lat; }
-  lon0 /= _pts.length; lat0 /= _pts.length;
+  var nAllS = 0;
+  if (_multi) {   // 多航班：中心取所有航迹点质心
+    for (var mi1 = 0; mi1 < _multi.flights.length; mi1++) {
+      var fp1 = _multi.flights[mi1].pts;
+      for (var fj1 = 0; fj1 < fp1.length; fj1++) { lon0 += fp1[fj1].lon; lat0 += fp1[fj1].lat; }
+      nAllS += fp1.length;
+    }
+  } else {
+    for (i = 0; i < _pts.length; i++) { lon0 += _pts[i].lon; lat0 += _pts[i].lat; }
+    nAllS = _pts.length;
+  }
+  lon0 /= nAllS; lat0 /= nAllS;
   var M_PER_DEG_LAT = 110540, M_PER_DEG_LON = 111320 * Math.cos(lat0 * Math.PI / 180);
   function toXYZ(p) {
     return { x: (p.lon - lon0) * M_PER_DEG_LON, z: -(p.lat - lat0) * M_PER_DEG_LAT, y: p.alt * VERT_EXAG };
@@ -9354,6 +9535,17 @@ function buildSW(cs) {
     if (xyz[i].y > maxAlt) maxAlt = xyz[i].y;
     if (Math.abs(xyz[i].x) > spanE) spanE = Math.abs(xyz[i].x);
     if (Math.abs(xyz[i].z) > spanN) spanN = Math.abs(xyz[i].z);
+  }
+  if (_multi) {   // 多航班：范围覆盖所有航班航迹
+    for (var ms1 = 0; ms1 < _multi.flights.length; ms1++) {
+      var fps1 = _multi.flights[ms1].pts;
+      for (var fs1 = 0; fs1 < fps1.length; fs1++) {
+        var xs1 = (fps1[fs1].lon - lon0) * M_PER_DEG_LON, zs1 = -(fps1[fs1].lat - lat0) * M_PER_DEG_LAT, ys1 = fps1[fs1].alt * VERT_EXAG;
+        if (ys1 > maxAlt) maxAlt = ys1;
+        if (Math.abs(xs1) > spanE) spanE = Math.abs(xs1);
+        if (Math.abs(zs1) > spanN) spanN = Math.abs(zs1);
+      }
+    }
   }
   var span = Math.max(spanE, spanN, 1500);
   var ground = span * 2.1 + 4000;
@@ -9368,6 +9560,23 @@ function buildSW(cs) {
   var idxs = [], idxTimes = [];
   for (i = 0; i < xyz.length; i += step) { idxs.push(i); idxTimes.push(_pts[i].t); }
   if (idxs[idxs.length - 1] !== xyz.length - 1) { idxs.push(xyz.length - 1); idxTimes.push(_pts[_pts.length - 1].t); }
+
+  // v3.2.14 多航班：逐条配色轨迹（抽稀≤1200 点，兼顾兼容模式每帧重画性能）
+  var multiData = null;
+  if (_multi) {
+    multiData = [];
+    for (var mq1 = 0; mq1 < _multi.flights.length; mq1++) {
+      var mf1 = _multi.flights[mq1];
+      var mstep = Math.max(1, Math.ceil(mf1.pts.length / 1200));
+      var mxyz1 = [], mts1 = [];
+      for (var mk1 = 0; mk1 < mf1.pts.length; mk1 += mstep) {
+        var mp1 = mf1.pts[mk1];
+        mxyz1.push({ x: (mp1.lon - lon0) * M_PER_DEG_LON, y: Math.max(mp1.alt * VERT_EXAG, 0), z: -(mp1.lat - lat0) * M_PER_DEG_LAT });
+        mts1.push(mp1.t);
+      }
+      multiData.push({ f: mf1, xyz: mxyz1, ts: mts1 });
+    }
+  }
 
   var box = _$('trd3CanvasBox');
   box.innerHTML = '';
@@ -9449,7 +9658,7 @@ function buildSW(cs) {
     xyz: xyz, idxs: idxs, idxTimes: idxTimes,
     ground: ground, gh: ghS, eastX: eastX, S: S, view: view, cleanup: cleanup,
     lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON,
-    project: project, boundary: _boundary, coast: coastAdj,
+    project: project, boundary: _boundary, coast: coastAdj, multi: multiData,
   };
   window.addEventListener('resize', _onResize);
 }
@@ -9520,22 +9729,19 @@ function renderSWStatic(sc) {
         ctx.closePath(); ctx.fill();
       }
     }
-    ctx.strokeStyle = '#16283f'; ctx.lineWidth = 1;
-    var N = 20, cell = sc.ground / N;
-    var nX = Math.max(1, Math.round((ghE + gh) / cell));   // 纵线：西缘→东缘，间距≈cell
-    for (i = 0; i <= nX; i++) {
-      var tx = -gh + (ghE + gh) * i / nX;
-      var segsA = clipStroke3(project, [{ x: tx, y: 0, z: -gh }, { x: tx, y: 0, z: gh }], false, 120);
-      for (var gi = 0; gi < segsA.length; gi++) {
-        ctx.beginPath(); ctx.moveTo(segsA[gi][0].x, segsA[gi][0].y); ctx.lineTo(segsA[gi][1].x, segsA[gi][1].y); ctx.stroke();
+    // 地面矩形外框（v3.2.14 取消网格线，仅保留边框）
+    ctx.strokeStyle = '#2a4a75'; ctx.lineWidth = 1.5;
+    var fSegs = clipStroke3(project, [
+      { x: -gh, y: 0, z: -gh }, { x: ghE, y: 0, z: -gh },
+      { x: ghE, y: 0, z: gh }, { x: -gh, y: 0, z: gh }
+    ], true, 120);
+    for (i = 0; i < fSegs.length; i++) {
+      ctx.beginPath();
+      for (var fk = 0; fk < fSegs[i].length; fk++) {
+        if (fk === 0) ctx.moveTo(fSegs[i][fk].x, fSegs[i][fk].y);
+        else ctx.lineTo(fSegs[i][fk].x, fSegs[i][fk].y);
       }
-    }
-    for (i = 0; i <= N; i++) {
-      var t = -gh + sc.ground * i / N;
-      var segsB = clipStroke3(project, [{ x: -gh, y: 0, z: t }, { x: ghE, y: 0, z: t }], false, 120);
-      for (gi = 0; gi < segsB.length; gi++) {
-        ctx.beginPath(); ctx.moveTo(segsB[gi][0].x, segsB[gi][0].y); ctx.lineTo(segsB[gi][1].x, segsB[gi][1].y); ctx.stroke();
-      }
+      ctx.stroke();
     }
   }
 
@@ -9660,25 +9866,41 @@ function renderSWStatic(sc) {
     }
   }
 
-  // 全轨迹（黄，静态层）
+  // 全轨迹（多航班：逐条配色；单航班：黄）
   ctx.lineWidth = 1.5;
-  ctx.strokeStyle = '#ffd54a';
-  var trailPts3 = [];
-  for (i = 0; i < sc.idxs.length; i++) {
-    var ti = sc.xyz[sc.idxs[i]];
-    trailPts3.push({ x: ti.x, y: Math.max(ti.y, 0), z: ti.z });
-  }
-  var trSegs = clipStroke3(project, trailPts3, false, 120);
-  for (i = 0; i < trSegs.length; i++) {
-    ctx.beginPath();
-    for (var tj = 0; tj < trSegs[i].length; tj++) {
-      if (tj === 0) ctx.moveTo(trSegs[i][tj].x, trSegs[i][tj].y);
-      else ctx.lineTo(trSegs[i][tj].x, trSegs[i][tj].y);
+  if (sc.multi) {
+    for (i = 0; i < sc.multi.length; i++) {
+      var mtr = sc.multi[i];
+      ctx.strokeStyle = mtr.f.color;
+      var trSegsM = clipStroke3(project, mtr.xyz, false, 120);
+      for (var tm = 0; tm < trSegsM.length; tm++) {
+        ctx.beginPath();
+        for (var tjm = 0; tjm < trSegsM[tm].length; tjm++) {
+          if (tjm === 0) ctx.moveTo(trSegsM[tm][tjm].x, trSegsM[tm][tjm].y);
+          else ctx.lineTo(trSegsM[tm][tjm].x, trSegsM[tm][tjm].y);
+        }
+        ctx.stroke();
+      }
     }
-    ctx.stroke();
+  } else {
+    ctx.strokeStyle = '#ffd54a';
+    var trailPts3 = [];
+    for (i = 0; i < sc.idxs.length; i++) {
+      var ti = sc.xyz[sc.idxs[i]];
+      trailPts3.push({ x: ti.x, y: Math.max(ti.y, 0), z: ti.z });
+    }
+    var trSegs = clipStroke3(project, trailPts3, false, 120);
+    for (i = 0; i < trSegs.length; i++) {
+      ctx.beginPath();
+      for (var tj = 0; tj < trSegs[i].length; tj++) {
+        if (tj === 0) ctx.moveTo(trSegs[i][tj].x, trSegs[i][tj].y);
+        else ctx.lineTo(trSegs[i][tj].x, trSegs[i][tj].y);
+      }
+      ctx.stroke();
+    }
   }
 
-  // 起终点（静态层）
+  // 起终点（静态层，多航班模式不画）
   function dot(idx, color) {
     var p = sc.xyz[idx];
     pr = project(p.x, Math.max(p.y, 0), p.z);
@@ -9686,8 +9908,10 @@ function renderSWStatic(sc) {
     ctx.fillStyle = color;
     ctx.beginPath(); ctx.arc(pr.x, pr.y, Math.max(3, pr.k * sc.S * 0.5), 0, 6.284); ctx.fill();
   }
-  dot(0, '#4ade80');
-  dot(sc.xyz.length - 1, '#f87171');
+  if (!sc.multi) {
+    dot(0, '#4ade80');
+    dot(sc.xyz.length - 1, '#f87171');
+  }
 
   // ── 静态层完成 ──
 }
@@ -9708,6 +9932,43 @@ function drawSW() {
     renderSWStatic(sc);
   }
   ctx.drawImage(sc.staticCv, 0, 0);
+
+  // v3.2.14 多航班动态层：逐条已飞高亮 + 当前位置点 + 呼号
+  if (sc.multi) {
+    var targetM = _multi.t0 + _playhead * 1000;
+    for (i = 0; i < sc.multi.length; i++) {
+      var mi6 = sc.multi[i], f6 = mi6.f;
+      var n6 = 0;
+      while (n6 < mi6.ts.length && mi6.ts[n6] <= targetM) n6++;
+      if (n6 >= 2) {
+        var segs6 = clipStroke3(project, mi6.xyz.slice(0, n6), false, 120);
+        ctx.strokeStyle = f6.color; ctx.lineWidth = 2.5;
+        for (var s6 = 0; s6 < segs6.length; s6++) {
+          ctx.beginPath();
+          for (var u6 = 0; u6 < segs6[s6].length; u6++) {
+            if (u6 === 0) ctx.moveTo(segs6[s6][u6].x, segs6[s6][u6].y);
+            else ctx.lineTo(segs6[s6][u6].x, segs6[s6][u6].y);
+          }
+          ctx.stroke();
+        }
+      }
+      var st6 = _flightStateAt(f6, targetM);
+      if (st6) {
+        var px6 = (st6.lon - sc.lon0) * sc.mLon, pz6 = -(st6.lat - sc.lat0) * sc.mLat;
+        var py6 = Math.max(st6.alt * VERT_EXAG, sc.S * 0.5);
+        var p6 = project(px6, py6, pz6);
+        if (p6.z > 45) {
+          var r6 = Math.max(4, p6.k * sc.S * 0.7);
+          ctx.fillStyle = f6.color;
+          ctx.beginPath(); ctx.arc(p6.x, p6.y, r6, 0, 6.284); ctx.fill();
+          ctx.strokeStyle = '#e8eef7'; ctx.lineWidth = 1.5; ctx.stroke();
+          ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+          ctx.fillText(f6.cs, p6.x + r6 + 4, p6.y - 6);
+        }
+      }
+    }
+    return st;
+  }
 
   // 已飞高亮（青，动态层，随播放头变化）
   var target = _pts[0].t + _playhead * 1000;
@@ -9816,8 +10077,39 @@ function updateState(redrawFlown) {
   _$('trd3HudHd').textContent = Math.round((st.hd + 360) % 360) + '°';
   _$('trd3HudSp').textContent = Math.round(st.sp) + ' km/h';
   _$('trd3TimeCur').textContent = _fmtHMS(_playhead);
+  // v3.2.14 多航班：HUD 呼号跟随当前活跃航班
+  if (_multi && st.cs && st.cs !== _hudCsLast) {
+    _hudCsLast = st.cs;
+    _$('trd3HudCs').textContent = st.cs + '（' + _multi.flights.length + ' 架航班）';
+  }
 
   if (_scene.mode !== 'gl') return;   // 软件渲染模式的飞机/已飞线在 drawSW 里画
+
+  // v3.2.14 多航班（GL）：逐条更新已飞高亮 drawRange + 锥形标记位置
+  if (_multi) {
+    var tM = _multi.t0 + _playhead * 1000;
+    var list = _scene.multi || [];
+    for (var mi7 = 0; mi7 < list.length; mi7++) {
+      var it7 = list[mi7], f7 = it7.f;
+      var n7 = 0;
+      while (n7 < f7.pts.length && f7.pts[n7].t <= tM) n7++;
+      var pos7 = it7.flownGeo.attributes.position;
+      var st7 = _flightStateAt(f7, tM);
+      if (n7 >= 2 && st7) {
+        for (var k7 = 0; k7 < n7; k7++) pos7.setXYZ(k7, it7.xyz[k7].x, it7.xyz[k7].y, it7.xyz[k7].z);
+        pos7.setXYZ(n7, (st7.lon - _scene.lon0) * _scene.mLon, Math.max(st7.alt * VERT_EXAG, 0),
+                    -(st7.lat - _scene.lat0) * _scene.mLat);
+        pos7.needsUpdate = true;
+        it7.flownGeo.setDrawRange(0, n7 + 1);
+      } else { it7.flownGeo.setDrawRange(0, 0); }
+      if (st7) {
+        it7.marker.visible = true;
+        it7.marker.position.set((st7.lon - _scene.lon0) * _scene.mLon, Math.max(st7.alt * VERT_EXAG, 0),
+                                -(st7.lat - _scene.lat0) * _scene.mLat);
+      } else { it7.marker.visible = false; }
+    }
+    return;
+  }
 
   var xyz = _scene.xyz, arr = _scene.arr, plane = _scene.plane, S = _scene.S;
   // 飞机位置 = 轨迹点插值
