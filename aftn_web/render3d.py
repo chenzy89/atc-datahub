@@ -142,6 +142,8 @@ def _clip_stroke(cam, pts, closed, zmin=ZMIN):
         pb = cam.project(*cur3)
         aok, bok = pa[2] >= zmin, pb[2] >= zmin
         if aok and bok:
+            if not cur:
+                cur.append(pa)   # v3.2.21 修复：两点线段（垂直参考线）此前只 push 终点 pb 被整条丢弃
             cur.append(pb)
         elif aok != bok:
             t = (zmin - pa[2]) / (pb[2] - pa[2])

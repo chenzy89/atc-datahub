@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.20</title>
+<title>ATC综合数据中心 v3.2.21</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.20</span>
+  <span class="badge">v3.2.21</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -9349,7 +9349,7 @@ function buildScene(cs) {
 
   var renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(W, H);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));   // v3.2.21: 2→1.5，弱 GPU 填充率减半
   box.appendChild(renderer.domElement);
 
   var controls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -9377,6 +9377,8 @@ function buildScene(cs) {
   );
   gnd.rotation.x = -Math.PI / 2;
   gnd.position.set(cx0, -2, 0);
+  gnd.renderOrder = 1;                          // v3.2.21: 透明层固定排序，消除拖动闪烁
+  gnd.material.depthWrite = false;
   scene.add(gnd);
 
   // 轨迹线（多航班：每条独立配色+已飞高亮+移动锥标；单航班：黄色）
@@ -9511,9 +9513,11 @@ function buildScene(cs) {
       var fgeo = new THREE.BufferGeometry();
       fgeo.setAttribute('position', new THREE.Float32BufferAttribute(
         [ax, 0, az, cx2, 0, cz2, cx2, ty, cz2, ax, 0, az, cx2, ty, cz2, ax, ty, az], 3));
-      scene.add(new THREE.Mesh(fgeo, new THREE.MeshBasicMaterial({
+      var fmesh = new THREE.Mesh(fgeo, new THREE.MeshBasicMaterial({
         color: new THREE.Color(f, 0.549 * f, 0.259 * f),
-        transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false })));
+        transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }));
+      fmesh.renderOrder = 3;   // v3.2.21: 透明层固定排序，消除拖动闪烁
+      scene.add(fmesh);
     }
     // 顶高标牌 "4800m"
     (function() {
@@ -9557,13 +9561,14 @@ function buildScene(cs) {
       drawPolys(true);
       var landTex = new THREE.CanvasTexture(lcv);
       if (renderer.capabilities.getMaxAnisotropy) {
-        landTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        landTex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());   // v3.2.21: max→4，拖动时采样开销大
       }
       var landMesh = new THREE.Mesh(
         new THREE.PlaneGeometry(extW, ground),
         new THREE.MeshBasicMaterial({ map: landTex, transparent: true, depthWrite: false }));
       landMesh.rotation.x = -Math.PI / 2;
       landMesh.position.set(cx0, 1.2, 0);
+      landMesh.renderOrder = 2;                   // v3.2.21: 透明层固定排序（地面1→陆地2→侧壁3）
       scene.add(landMesh);
     })();
   }
@@ -9807,6 +9812,7 @@ function clipStroke3(project, pts, closed, zmin) {
     var PB = project(cur3.x, cur3.y, cur3.z);
     var aok = PA.z >= zmin, bok = PB.z >= zmin;
     if (aok && bok) {
+      if (!cur.length) cur.push(PA);   // v3.2.21 修复：两点线段（垂直参考线）此前只 push 终点 PB，cur 仅 1 点被丢弃导致整条线消失
       cur.push(PB);
     } else if (aok !== bok) {                 // 一端可见一端被裁：插值交点
       var t2 = (zmin - PA.z) / (PB.z - PA.z);
@@ -10231,6 +10237,15 @@ function startLoop() {
     updateState(false);
     if (_scene.mode === 'gl') {
       _scene.controls.update();
+      // v3.2.21 自适应降载：GL 持续慢帧时自动降低渲染分辨率（1.5→1.0→0.75），弱 GPU 无感降级
+      _scene._ftAcc = (_scene._ftAcc || 0) + dt; _scene._ftN = (_scene._ftN || 0) + 1;
+      if (_scene._ftN >= 120) {
+        if (_scene._ftAcc / _scene._ftN > 0.04 && _scene._prLevel < 2) {
+          _scene._prLevel = (_scene._prLevel || 0) + 1;
+          _scene.renderer.setPixelRatio(_scene._prLevel === 1 ? 1.0 : 0.75);
+        }
+        _scene._ftAcc = 0; _scene._ftN = 0;
+      }
       _scene.renderer.render(_scene.scene, _scene.camera);
     } else {
       drawSW();
