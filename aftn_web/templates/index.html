@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.18</title>
+<title>ATC综合数据中心 v3.2.19</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.18</span>
+  <span class="badge">v3.2.19</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -8786,13 +8786,30 @@ var _coast = [];                 // 珠三角陆地多边形（大陆+海岛，[
 
 // v3.2.18 3D轨迹高度筛选（离线参数 config/trail3d.json，页面加载即预取）
 var _altRange = { min: 30, max: 6000 };
+var _dropSec = 60;               // v3.2.19 垂直参考线间隔（秒）
 (function() {
   fetch('/api/config/trail3d').then(function(r) { return r.json(); }).then(function(d) {
     if (d && isFinite(d.alt_min_m)) { _altRange.min = d.alt_min_m; }
     if (d && isFinite(d.alt_max_m)) { _altRange.max = d.alt_max_m; }
+    if (d && isFinite(d.vert_exag) && d.vert_exag > 0) { VERT_EXAG = d.vert_exag; }        // 高度放大倍数可配置
+    if (d && isFinite(d.dropline_interval_s) && d.dropline_interval_s > 0) { _dropSec = d.dropline_interval_s; }
   }).catch(function() {});
 })();
 function _inAltRange(alt) { return alt >= _altRange.min && alt <= _altRange.max; }
+// v3.2.19 每隔 _dropSec 秒（对齐整分钟刻度）取一个轨迹点，用于画"地面→轨迹点"垂直参考线
+function _dropPts(pts, sec) {
+  var out = [], step = (sec || 60) * 1000;
+  if (!pts || pts.length < 2) { return out; }
+  var t1 = pts[pts.length - 1].t;
+  var tb = Math.floor(pts[0].t / step) * step + step;
+  var j = 0;
+  for (; tb <= t1; tb += step) {
+    while (j < pts.length && pts[j].t < tb) { j++; }
+    if (j >= pts.length) { break; }
+    out.push(pts[j]);
+  }
+  return out;
+}
 
 function _$(id) { return document.getElementById(id); }
 // 懒加载终端区边界（/api/config/terminal_airports 由 FDRG.json 提供 vertices）+ 海岸线
@@ -9380,6 +9397,20 @@ function buildScene(cs) {
       var slg = new THREE.BufferGeometry();
       slg.setAttribute('position', new THREE.BufferAttribute(marr, 3));
       scene.add(new THREE.Line(slg, new THREE.LineBasicMaterial({ color: ci0, transparent: true, opacity: 0.5 })));
+      // 每航班每分钟垂直参考线（地面→轨迹点，本航班配色低透明度）
+      var dpts0 = _dropPts(mf0.pts, _dropSec);
+      if (dpts0.length) {
+        var darr0 = new Float32Array(dpts0.length * 6);
+        for (var di0 = 0; di0 < dpts0.length; di0++) {
+          var dp0 = dpts0[di0];
+          var dx0 = (dp0.lon - lon0) * M_PER_DEG_LON, dz0 = -(dp0.lat - lat0) * M_PER_DEG_LAT, dy0 = Math.max(dp0.alt * VERT_EXAG, 0);
+          darr0[di0*6] = dx0; darr0[di0*6+1] = 0; darr0[di0*6+2] = dz0;
+          darr0[di0*6+3] = dx0; darr0[di0*6+4] = dy0; darr0[di0*6+5] = dz0;
+        }
+        var dg0 = new THREE.BufferGeometry();
+        dg0.setAttribute('position', new THREE.BufferAttribute(darr0, 3));
+        scene.add(new THREE.LineSegments(dg0, new THREE.LineBasicMaterial({ color: ci0, transparent: true, opacity: 0.3 })));
+      }
       var fgg = new THREE.BufferGeometry();
       fgg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(marr), 3));
       var ffl = new THREE.Line(fgg, new THREE.LineBasicMaterial({ color: ci0 }));
@@ -9400,6 +9431,21 @@ function buildScene(cs) {
     var ptGeo = new THREE.BufferGeometry();
     ptGeo.setAttribute('position', new THREE.BufferAttribute(arr.slice(), 3));
     scene.add(new THREE.Points(ptGeo, new THREE.PointsMaterial({ color: 0xffe27a, size: Math.max(ground/300, 12), sizeAttenuation: true })));
+
+    // 每分钟垂直参考线（地面→轨迹点，观察高度变化）
+    var dpts = _dropPts(_pts, _dropSec);
+    if (dpts.length) {
+      var darr = new Float32Array(dpts.length * 6);
+      for (var di = 0; di < dpts.length; di++) {
+        var dp = dpts[di];
+        var dx = (dp.lon - lon0) * M_PER_DEG_LON, dz = -(dp.lat - lat0) * M_PER_DEG_LAT, dy = Math.max(dp.alt * VERT_EXAG, 0);
+        darr[di*6] = dx; darr[di*6+1] = 0; darr[di*6+2] = dz;
+        darr[di*6+3] = dx; darr[di*6+4] = dy; darr[di*6+5] = dz;
+      }
+      var dgeo = new THREE.BufferGeometry();
+      dgeo.setAttribute('position', new THREE.BufferAttribute(darr, 3));
+      scene.add(new THREE.LineSegments(dgeo, new THREE.LineBasicMaterial({ color: 0x6b86b8, transparent: true, opacity: 0.45 })));
+    }
 
     // 已飞部分高亮线（青色）
     var flownGeo = new THREE.BufferGeometry();
@@ -9965,6 +10011,27 @@ function renderSWStatic(sc) {
         }
         ctx.stroke();
       }
+      // 每航班每分钟垂直参考线（地面→轨迹点，本航班配色）
+      var dpts1 = _dropPts(mtr.f.pts, _dropSec);
+      if (dpts1.length) {
+        ctx.save();
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = mtr.f.color;
+        for (var dv = 0; dv < dpts1.length; dv++) {
+          var qv = dpts1[dv];
+          var vx = (qv.lon - sc.lon0) * sc.mLon, vz = -(qv.lat - sc.lat0) * sc.mLat;
+          var vy = Math.max(qv.alt * VERT_EXAG, 0);
+          var vsegs = clipStroke3(project, [{ x: vx, y: 0, z: vz }, { x: vx, y: vy, z: vz }], false, 120);
+          for (var vw = 0; vw < vsegs.length; vw++) {
+            ctx.beginPath();
+            ctx.moveTo(vsegs[vw][0].x, vsegs[vw][0].y);
+            ctx.lineTo(vsegs[vw][1].x, vsegs[vw][1].y);
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      }
     }
   } else {
     ctx.strokeStyle = '#ffd54a';
@@ -9981,6 +10048,27 @@ function renderSWStatic(sc) {
         else ctx.lineTo(trSegs[i][tj].x, trSegs[i][tj].y);
       }
       ctx.stroke();
+    }
+    // 每分钟垂直参考线（地面→轨迹点）
+    var dpts2 = _dropPts(_pts, _dropSec);
+    if (dpts2.length) {
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#8aa2c8';
+      for (var dv2 = 0; dv2 < dpts2.length; dv2++) {
+        var qv2 = dpts2[dv2];
+        var vx2 = (qv2.lon - sc.lon0) * sc.mLon, vz2 = -(qv2.lat - sc.lat0) * sc.mLat;
+        var vy2 = Math.max(qv2.alt * VERT_EXAG, 0);
+        var vsegs2 = clipStroke3(project, [{ x: vx2, y: 0, z: vz2 }, { x: vx2, y: vy2, z: vz2 }], false, 120);
+        for (var vw2 = 0; vw2 < vsegs2.length; vw2++) {
+          ctx.beginPath();
+          ctx.moveTo(vsegs2[vw2][0].x, vsegs2[vw2][0].y);
+          ctx.lineTo(vsegs2[vw2][1].x, vsegs2[vw2][1].y);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
     }
   }
 

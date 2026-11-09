@@ -23,13 +23,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = BASE_DIR / "data" / "renders"
 
 
-def _load_alt_range():
-    """v3.2.18 3D轨迹高度筛选范围（离线参数 config/trail3d.json；与前端一致）"""
-    dflt = (30.0, 6000.0)
+def _load_trail3d_params():
+    """v3.2.18/19 3D轨迹参数（离线文件 config/trail3d.json；与前端一致）"""
+    dflt = {"alt_min": 30.0, "alt_max": 6000.0, "vert_exag": 5.0, "drop_sec": 60.0}
     try:
         import json
         raw = json.loads((BASE_DIR / "config" / "trail3d.json").read_text(encoding="utf-8"))
-        return (float(raw.get("alt_min_m", dflt[0])), float(raw.get("alt_max_m", dflt[1])))
+        return {
+            "alt_min": float(raw.get("alt_min_m", dflt["alt_min"])),
+            "alt_max": float(raw.get("alt_max_m", dflt["alt_max"])),
+            "vert_exag": float(raw.get("vert_exag", dflt["vert_exag"])) or dflt["vert_exag"],
+            "drop_sec": float(raw.get("dropline_interval_s", dflt["drop_sec"])) or dflt["drop_sec"],
+        }
     except Exception:
         return dflt
 
@@ -220,7 +225,10 @@ def _render_video(job_id, pts, callsign, date_str):
 
     pts = [p for p in pts if p.get("lt") and p.get("ln") and p.get("ts")]
     pts.sort(key=lambda p: p["ts"])
-    alt_min, alt_max = _load_alt_range()
+    prm = _load_trail3d_params()
+    alt_min, alt_max = prm["alt_min"], prm["alt_max"]
+    vex = prm["vert_exag"]
+    drop_sec = prm["drop_sec"]
     rec = []
     has_qh = False
     for p in pts:
@@ -244,8 +252,20 @@ def _render_video(job_id, pts, callsign, date_str):
     lat0 = sum(r["lat"] for r in rec) / len(rec)
     m_lat = 110540.0
     m_lon = 111320.0 * math.cos(lat0 * math.pi / 180)
-    xyz = [((r["lon"] - lon0) * m_lon, max(r["alt"] * VERT_EXAG, 0), -(r["lat"] - lat0) * m_lat)
+    xyz = [((r["lon"] - lon0) * m_lon, max(r["alt"] * vex, 0), -(r["lat"] - lat0) * m_lat)
            for r in rec]
+    # v3.2.19 每 drop_sec 秒（对齐整分钟刻度）取一个点，画"地面→轨迹点"垂直参考线
+    drop_xyz = []
+    if len(rec) >= 2:
+        tb = math.floor(rec[0]["t"] / drop_sec) * drop_sec + drop_sec
+        j = 0
+        while tb <= rec[-1]["t"]:
+            while j < len(rec) and rec[j]["t"] < tb:
+                j += 1
+            if j >= len(rec):
+                break
+            drop_xyz.append(xyz[j])
+            tb += drop_sec
     max_alt = max(p[1] for p in xyz)
     span_e = max(abs(p[0]) for p in xyz)
     span_n = max(abs(p[2]) for p in xyz)
@@ -341,6 +361,7 @@ def _render_video(job_id, pts, callsign, date_str):
             _draw_segs(dr, _clip_stroke(cam, poly, True), (56, 189, 248), 1)
 
         # 终端区空域体（侧壁仅斜视时绘制；俯视时所有墙面叠在边界线上会糊成实心带）
+        tma_top = 4800 * vex
         if bxyz:
             _draw_segs(dr, _clip_stroke(cam, bxyz, True), (255, 140, 66), 2)
             if pitch < 1.2:
@@ -363,7 +384,7 @@ def _render_video(job_id, pts, callsign, date_str):
                     nl = math.hypot(nx, nz) or 1
                     f = 0.35 + 0.65 * max(0, (nx / nl) * lx + (nz / nl) * lz)
                     ga, gb = cam.project(ax, 0, az), cam.project(bx, 0, bz)
-                    ta, tb = cam.project(ax, TMA_TOP, az), cam.project(bx, TMA_TOP, bz)
+                    ta, tb = cam.project(ax, tma_top, az), cam.project(bx, tma_top, bz)
                     if ga[2] <= 45 or gb[2] <= 45 or ta[2] <= 45 or tb[2] <= 45:
                         continue
                     walls.append(((ga[2] + gb[2] + ta[2] + tb[2]) / 4, ga, gb, ta, tb, f))
@@ -374,7 +395,7 @@ def _render_video(job_id, pts, callsign, date_str):
                                fill=col, outline=(255, 140, 66, 170))
                 img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
                 dr = ImageDraw.Draw(img)
-            _draw_segs(dr, _clip_stroke(cam, [(p[0], TMA_TOP, p[2]) for p in bxyz], True),
+            _draw_segs(dr, _clip_stroke(cam, [(p[0], tma_top, p[2]) for p in bxyz], True),
                        (255, 179, 71), 2)
 
         # 指北针
@@ -393,6 +414,11 @@ def _render_video(job_id, pts, callsign, date_str):
                 nx2 = tip[0] + (tip[0] - back[0]) * 0.18
                 ny2 = tip[1] + (tip[1] - back[1]) * 0.18
                 dr.text((nx2 - 8, ny2 - 12), "N", fill=(74, 222, 128), font=font_mid)
+
+        # 每分钟垂直参考线（地面→轨迹点）
+        for dp3 in drop_xyz:
+            _draw_segs(dr, _clip_stroke(cam, [(dp3[0], 0, dp3[2]), (dp3[0], dp3[1], dp3[2])], False),
+                       (107, 134, 184), 1)
 
         # 全轨迹（暗黄）+ 已飞（亮青）
         target_t = tt

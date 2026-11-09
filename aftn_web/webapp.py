@@ -628,17 +628,18 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
 
     @app.route("/api/config/trail3d")
     def api_config_trail3d():
-        """3D轨迹高度筛选参数（离线文件 config/trail3d.json，修改后刷新页面即生效，无需重启）"""
-        dflt = {"alt_min_m": 30, "alt_max_m": 6000}
+        """3D轨迹参数（离线文件 config/trail3d.json，修改后刷新页面即生效，无需重启）"""
         try:
             f = Path(__file__).resolve().parent.parent / "config" / "trail3d.json"
             raw = json.loads(f.read_text(encoding="utf-8"))
             return jsonify({
-                "alt_min_m": float(raw.get("alt_min_m", dflt["alt_min_m"])),
-                "alt_max_m": float(raw.get("alt_max_m", dflt["alt_max_m"])),
+                "alt_min_m": float(raw.get("alt_min_m", 30)),
+                "alt_max_m": float(raw.get("alt_max_m", 6000)),
+                "vert_exag": float(raw.get("vert_exag", 5)) or 5,
+                "dropline_interval_s": float(raw.get("dropline_interval_s", 60)) or 60,
             })
         except Exception:
-            return jsonify(dflt)
+            return jsonify({"alt_min_m": 30, "alt_max_m": 6000, "vert_exag": 5, "dropline_interval_s": 60})
 
     @app.route("/api/config/map_bg")
     def api_config_map_bg():
