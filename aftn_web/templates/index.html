@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.3.0</title>
+<title>ATC综合数据中心 v3.3.1</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.3.0</span>
+  <span class="badge">v3.3.1</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -739,7 +739,7 @@ canvas#radarMap {
   <!-- 左上 HUD -->
   <div style="position:absolute;top:14px;left:16px;color:#e2e8f0;font-size:14px;pointer-events:none;background:rgba(10,22,40,0.72);padding:10px 14px;border-radius:8px;border:1px solid rgba(80,120,180,0.35);line-height:1.7;">
     <div style="font-size:16px;font-weight:bold;color:#7fd88f;">📡 实时 3D 视图 · <span id="live3dCount">0</span> 架航班
-      <span style="font-size:11px;color:#94a3b8;font-weight:normal;margin-left:6px;">CAT062 实时目标（垂直 ×5）<span id="live3dModeBadge" style="color:#fbbf24;"></span></span></div>
+      <span style="font-size:11px;color:#94a3b8;font-weight:normal;margin-left:6px;">CAT062 实时目标（垂直 ×5）· 计划关联航班显示轨迹+每分钟垂线<span id="live3dModeBadge" style="color:#fbbf24;"></span></span></div>
     <div style="font-size:12px;color:#8aa2c8;">筛选 21.5–23.5°N · 112–115°E · 高度 30–6000 m　数据更新 <b id="live3dUpd" style="color:#facc15;">--:--:--</b> UTC</div>
   </div>
   <!-- 右上 操作提示 + 关闭 -->
@@ -10416,7 +10416,7 @@ document.addEventListener('keydown', function(e) {
 // 每 2s 拉取 /api/radar_tracks，按 21.5-23.5N / 112-115E / 30-6000m 筛选，
 // 圆点 + 呼号标签实时更新；打开期间 2D 雷达暂停轮询重绘（fetchTracks 守卫）。
 // ════════════════════════════════════════════════════════════
-var _live = { scene: null, raf: 0, timer: 0, flights: [], sprites: {}, seq: 0 };
+var _live = { scene: null, raf: 0, timer: 0, flights: [], sprites: {}, trails: {}, seq: 0 };
 var _liveBox = { latMin: 21.5, latMax: 23.5, lonMin: 112, lonMax: 115, altMin: 30, altMax: 6000 };
 
 window.toggleLive3D = function() {
@@ -10467,7 +10467,7 @@ window.closeLive3D = function() {
       try { sc.canvas.remove(); } catch (e) {}
     }
   }
-  _live.scene = null; _live.flights = []; _live.sprites = {}; _live.seq = 0;
+  _live.scene = null; _live.flights = []; _live.sprites = {}; _live.trails = {}; _live.seq = 0;
   _$('live3dFullscreen').style.display = 'none';
 };
 
@@ -10482,8 +10482,10 @@ function liveFetch() {
         var la = t.latitude, lo = t.longitude, al = t.flight_level;
         if (la == null || lo == null || al == null) continue;
         if (!(la > B.latMin && la < B.latMax && lo > B.lonMin && lo < B.lonMax && al > B.altMin && al < B.altMax)) continue;
-        list.push({ cs: t.callsign || '----', lat: la, lon: lo, alt: al, hd: t.heading || 0 });
+        list.push({ cs: t.callsign || '----', lat: la, lon: lo, alt: al, hd: t.heading || 0,
+                    adep: t.adep || '', adest: t.adest || '' });
       }
+      _liveTrailData(list);        // v3.3.1 关联计划航班：累积会话轨迹；消失航班清除
       _live.flights = list;
       _live.seq++;
       _$('live3dCount').textContent = list.length;
@@ -10492,6 +10494,47 @@ function liveFetch() {
       applyLiveGL();
     })
     .catch(function() { /* 静默 */ });
+}
+
+// ── v3.3.1 会话轨迹（仅关联计划航班）──
+// 逐 2s 累积航迹点；航班从 /api/radar_tracks 响应消失（服务端 FDR 已过 TTL）即立即清除
+var LIVE_TRAIL_MAX = 7200;           // 每航班轨迹点上限（2s/点 ≈ 4 小时），超出后滚动丢弃最旧点
+function _liveTrailData(list) {
+  var now = Date.now();
+  var seen = {};
+  for (var i = 0; i < list.length; i++) {
+    var f = list[i];
+    if (!(f.adep || f.adest)) continue;            // 未关联计划：只显示圆点，不画轨迹
+    seen[f.cs] = 1;
+    var tr = _live.trails[f.cs];
+    if (!tr) tr = _live.trails[f.cs] = { pts: [], dirty: false };
+    var last = tr.pts[tr.pts.length - 1];
+    if (!last || last.lon !== f.lon || last.lat !== f.lat || last.alt !== f.alt) {
+      tr.pts.push({ lon: f.lon, lat: f.lat, alt: f.alt, t: now });
+      if (tr.pts.length > LIVE_TRAIL_MAX) { tr.pts.shift(); tr.dirty = true; }   // 滚动丢弃最旧点
+    }
+  }
+  for (var k in _live.trails) {
+    if (_live.trails.hasOwnProperty(k) && !seen[k]) delete _live.trails[k];      // 信息消失 → 轨迹清除
+  }
+}
+// 每分钟取该分钟内最后一个轨迹点，用于画"地面→轨迹点"垂直参考线
+function _minutePts(pts) {
+  var out = [], lastMin = -1, lastP = null;
+  for (var i = 0; i < pts.length; i++) {
+    var m = Math.floor(pts[i].t / 60000);
+    if (m !== lastMin) { if (lastP) out.push(lastP); lastMin = m; }
+    lastP = pts[i];
+  }
+  if (lastP) out.push(lastP);
+  return out;
+}
+// 航班配色：关联计划的按分配顺序轮转 12 色；未关联计划固定青色
+function _liveColor(cs, hasPlan) {
+  if (!hasPlan) return '#38e8ff';
+  if (!_live.colorMap) _live.colorMap = {};
+  if (!_live.colorMap[cs]) _live.colorMap[cs] = _palette[_live.colorIdx = ((_live.colorIdx || 0) + 1) % _palette.length];
+  return _live.colorMap[cs];
 }
 
 // ── WebGL 场景 ──
@@ -10681,14 +10724,19 @@ function buildLiveScene() {
   window.addEventListener('resize', _onLiveResize);
 }
 
-// 圆点 + 呼号 Sprite（按呼号缓存贴图，位置每轮更新）
-function _liveSprite(cs, sc) {
+// 圆点 + 呼号 Sprite（按呼号缓存贴图，位置每轮更新；配色变化时重建贴图）
+function _liveSprite(cs, sc, color) {
   var spr = _live.sprites[cs];
-  if (spr) return spr;
+  if (spr && spr.userData.color === color) return spr;
+  if (spr) {                                       // 配色变化（如后获计划关联）：销毁旧贴图重建
+    sc.scene.remove(spr);
+    if (spr.material.map) spr.material.map.dispose();
+    spr.material.dispose();
+  }
   var cv = document.createElement('canvas'); cv.width = 256; cv.height = 64;
   var g = cv.getContext('2d');
   g.beginPath(); g.arc(26, 32, 13, 0, 6.284);
-  g.fillStyle = '#38e8ff'; g.fill();
+  g.fillStyle = color || '#38e8ff'; g.fill();
   g.lineWidth = 3; g.strokeStyle = '#ffffff'; g.stroke();
   g.font = 'bold 30px sans-serif'; g.textAlign = 'left'; g.textBaseline = 'middle';
   g.lineWidth = 4; g.strokeStyle = 'rgba(5,12,24,0.85)'; g.strokeText(cs, 50, 33);
@@ -10698,6 +10746,7 @@ function _liveSprite(cs, sc) {
   spr.center.set(26 / 256, 0.5);       // 锚点=圆点中心，文字向右展开
   spr.renderOrder = 10;
   spr.scale.set(sc.ground * 0.014, sc.ground * 0.0035, 1);
+  spr.userData.color = color || '#38e8ff';
   sc.scene.add(spr);
   _live.sprites[cs] = spr;
   return spr;
@@ -10709,14 +10758,83 @@ function applyLiveGL() {
   var seen = {};
   for (var i = 0; i < _live.flights.length; i++) {
     var f = _live.flights[i];
-    var spr = _liveSprite(f.cs, sc);
+    var hasPlan = !!(f.adep || f.adest);
+    var color = _liveColor(f.cs, hasPlan);
+    var spr = _liveSprite(f.cs, sc, color);
     seen[f.cs] = 1;
     spr.visible = true;
     spr.position.set((f.lon - sc.lon0) * sc.mLon, Math.max(f.alt * VERT_EXAG, 60), -(f.lat - sc.lat0) * sc.mLat);
+
+    // v3.3.1 会话轨迹 + 每分钟垂线（仅关联计划航班）
+    var tr = _live.trails[f.cs];
+    if (hasPlan && tr && tr.pts.length) {
+      if (!tr.gline) {                             // 首次：预分配容量缓冲，增量追加
+        tr.arr = new Float32Array((LIVE_TRAIL_MAX + 1) * 3);
+        var geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(tr.arr, 3));
+        geo.setDrawRange(0, 0);
+        tr.gline = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.85 }));
+        tr.gn = 0;
+        sc.scene.add(tr.gline);
+      }
+      if (tr.dirty) {                              // 滚动丢弃后全量重写索引
+        for (var rI = 0; rI < tr.pts.length; rI++) {
+          var rp = tr.pts[rI];
+          tr.arr[rI*3] = (rp.lon - sc.lon0) * sc.mLon;
+          tr.arr[rI*3+1] = Math.max(rp.alt * VERT_EXAG, 0);
+          tr.arr[rI*3+2] = -(rp.lat - sc.lat0) * sc.mLat;
+        }
+        tr.gn = tr.pts.length; tr.dirty = false;
+        tr.gline.geometry.attributes.position.needsUpdate = true;
+        tr.gline.geometry.setDrawRange(0, tr.gn);
+      } else if (tr.pts.length > tr.gn) {          // 增量追加新点
+        for (var pI = tr.gn; pI < tr.pts.length; pI++) {
+          var pp = tr.pts[pI];
+          tr.arr[pI*3] = (pp.lon - sc.lon0) * sc.mLon;
+          tr.arr[pI*3+1] = Math.max(pp.alt * VERT_EXAG, 0);
+          tr.arr[pI*3+2] = -(pp.lat - sc.lat0) * sc.mLat;
+        }
+        tr.gn = tr.pts.length;
+        tr.gline.geometry.attributes.position.needsUpdate = true;
+        tr.gline.geometry.setDrawRange(0, tr.gn);
+      }
+      // 每分钟垂线：整组重建（点数少，2s 一次开销可忽略）
+      var drops = _minutePts(tr.pts);
+      if (drops.length) {
+        var darr = new Float32Array(drops.length * 6);
+        for (var dI = 0; dI < drops.length; dI++) {
+          var dp = drops[dI];
+          var dX = (dp.lon - sc.lon0) * sc.mLon, dZ = -(dp.lat - sc.lat0) * sc.mLat, dY = Math.max(dp.alt * VERT_EXAG, 0);
+          darr[dI*6] = dX; darr[dI*6+1] = 0; darr[dI*6+2] = dZ;
+          darr[dI*6+3] = dX; darr[dI*6+4] = dY; darr[dI*6+5] = dZ;
+        }
+        if (tr.gdrop) { sc.scene.remove(tr.gdrop); tr.gdrop.geometry.dispose(); }
+        var dgeo = new THREE.BufferGeometry();
+        dgeo.setAttribute('position', new THREE.BufferAttribute(darr, 3));
+        tr.gdrop = new THREE.LineSegments(dgeo, new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.6 }));
+        sc.scene.add(tr.gdrop);
+      }
+    }
   }
+  // v3.3.1 消失航班：圆点标签 + 轨迹线 + 垂线全部移除（此前是隐藏复用）
   for (var k in _live.sprites) {
     if (!_live.sprites.hasOwnProperty(k)) continue;
-    if (!seen[k]) _live.sprites[k].visible = false;   // 离开筛选范围：隐藏（保留缓存复用）
+    if (!seen[k]) {
+      var s0 = _live.sprites[k];
+      sc.scene.remove(s0);
+      if (s0.material.map) s0.material.map.dispose();
+      s0.material.dispose();
+      delete _live.sprites[k];
+    }
+  }
+  for (var k2 in _live.trails) {
+    if (!_live.trails.hasOwnProperty(k2)) continue;
+    if (!seen[k2]) {
+      var t0 = _live.trails[k2];
+      if (t0.gline) { sc.scene.remove(t0.gline); t0.gline.geometry.dispose(); t0.gline.material.dispose(); }
+      if (t0.gdrop) { sc.scene.remove(t0.gdrop); t0.gdrop.geometry.dispose(); t0.gdrop.material.dispose(); }
+      delete _live.trails[k2];
+    }
   }
 }
 
@@ -10827,6 +10945,51 @@ function drawLiveSW() {
   }
   ctx.drawImage(sc.staticCv, 0, 0);
 
+  // v3.3.1 会话轨迹 + 每分钟垂线（仅关联计划航班；抽稀≤1500 点保兼容模式性能）
+  for (var csK in _live.trails) {
+    if (!_live.trails.hasOwnProperty(csK)) continue;
+    var trS = _live.trails[csK];
+    if (!trS.pts.length) continue;
+    var colorS = _liveColor(csK, true);
+    var stepS = Math.max(1, Math.ceil(trS.pts.length / 1500));
+    var tp3 = [];
+    for (var ti = 0; ti < trS.pts.length; ti += stepS) {
+      var tp = trS.pts[ti];
+      tp3.push({ x: (tp.lon - sc.lon0) * sc.mLon, y: Math.max(tp.alt * VERT_EXAG, 0), z: -(tp.lat - sc.lat0) * sc.mLat });
+    }
+    var tl = trS.pts[trS.pts.length - 1];
+    if ((trS.pts.length - 1) % stepS !== 0) tp3.push({ x: (tl.lon - sc.lon0) * sc.mLon, y: Math.max(tl.alt * VERT_EXAG, 0), z: -(tl.lat - sc.lat0) * sc.mLat });
+    var tSegs = clipStroke3(project, tp3, false, 120);
+    ctx.strokeStyle = colorS; ctx.lineWidth = 2;
+    for (var ts2 = 0; ts2 < tSegs.length; ts2++) {
+      ctx.beginPath();
+      for (var tk2 = 0; tk2 < tSegs[ts2].length; tk2++) {
+        if (tk2 === 0) ctx.moveTo(tSegs[ts2][tk2].x, tSegs[ts2][tk2].y);
+        else ctx.lineTo(tSegs[ts2][tk2].x, tSegs[ts2][tk2].y);
+      }
+      ctx.stroke();
+    }
+    var dropsS = _minutePts(trS.pts);
+    if (dropsS.length) {
+      ctx.save();
+      ctx.globalAlpha = 0.6; ctx.lineWidth = 1.5; ctx.strokeStyle = colorS;
+      for (var dS = 0; dS < dropsS.length; dS++) {
+        var dpS = dropsS[dS];
+        var vSegs = clipStroke3(project,
+          [{ x: (dpS.lon - sc.lon0) * sc.mLon, y: 0, z: -(dpS.lat - sc.lat0) * sc.mLat },
+           { x: (dpS.lon - sc.lon0) * sc.mLon, y: Math.max(dpS.alt * VERT_EXAG, 0), z: -(dpS.lat - sc.lat0) * sc.mLat }],
+          false, 120);
+        for (var vS = 0; vS < vSegs.length; vS++) {
+          ctx.beginPath();
+          ctx.moveTo(vSegs[vS][0].x, vSegs[vS][0].y);
+          ctx.lineTo(vSegs[vS][1].x, vSegs[vS][1].y);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+  }
+
   // 动态层：圆点 + 呼号
   for (var i = 0; i < _live.flights.length; i++) {
     var f = _live.flights[i];
@@ -10836,7 +10999,7 @@ function drawLiveSW() {
     if (p.z <= 45) continue;
     var r = Math.max(3.5, p.k * sc.S * 0.35);
     ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 6.284);
-    ctx.fillStyle = '#38e8ff'; ctx.fill();
+    ctx.fillStyle = _liveColor(f.cs, !!(f.adep || f.adest)); ctx.fill();
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#e8eef7'; ctx.stroke();
     ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
     ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(5,12,24,0.85)'; ctx.strokeText(f.cs, p.x + r + 4, p.y - 5);
