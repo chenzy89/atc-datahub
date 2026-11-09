@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.23</title>
+<title>ATC综合数据中心 v3.2.24</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.23</span>
+  <span class="badge">v3.2.24</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -8930,13 +8930,15 @@ window.toggle3DPick = function() {
   } else {
     var list = [];
     for (var k in _fplSel) { if (_fplSel.hasOwnProperty(k)) list.push(_fplSel[k]); }
-    if (!list.length) { alert('请先勾选至少一个航班'); return; }
+    // v3.2.24 未勾选任何航班：退出勾选模式，直接打开纯海岸线+空域的 3D 场景
     _fplPick = false;
+    _fplSel = {};
     if (th) th.style.display = 'none';
     if (btnC) btnC.style.display = 'none';
     btn.textContent = '🛩 3D轨迹';
     if (info) info.textContent = '';
     if (_fplRows && _fplRows.length) renderPlans(_fplRows);   // 移除勾选列
+    if (!list.length) { open3DViewMulti([]); return; }
     open3DAllFlights(list);
   }
 };
@@ -9092,15 +9094,21 @@ function open3DView(cs, pts, multi) {
 }
 // v3.2.14 多航班入口：list = [{cs, pts:[{t,lon,lat,alt,hd,sp}]}]（pts 已按时间排序）
 function open3DViewMulti(list) {
-  if (!list || !list.length) return;
-  var t0 = 1e18, t1 = -1e18, anyQh = false;
-  for (var i = 0; i < list.length; i++) {
-    if (!list[i].color) list[i].color = _palette[i % _palette.length];
-    if (list[i].pts[0].t < t0) t0 = list[i].pts[0].t;
-    if (list[i].pts[list[i].pts.length - 1].t > t1) t1 = list[i].pts[list[i].pts.length - 1].t;
+  // v3.2.24 允许空列表：打开纯海岸线+空域场景（无航班）
+  var isEmpty = !list || !list.length;
+  var t0 = 0, t1 = 0;
+  if (!isEmpty) {
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i].color) list[i].color = _palette[i % _palette.length];
+      if (list[i].pts[0].t < t0 || i === 0) t0 = list[i].pts[0].t;
+      if (list[i].pts[list[i].pts.length - 1].t > t1 || i === 0) t1 = list[i].pts[list[i].pts.length - 1].t;
+    }
   }
   _loadLib(function() {
-    _loadBoundary(function() { open3DViewInner(list[0].cs, list[0].pts, { flights: list, t0: t0, t1: t1 }); });
+    _loadBoundary(function() {
+      open3DViewInner(isEmpty ? '海岸线/空域' : list[0].cs, isEmpty ? [] : list[0].pts,
+                      { flights: list || [], t0: t0, t1: t1 });
+    });
   });
 }
 function open3DViewInner(cs, pts, multi) {
@@ -9109,7 +9117,7 @@ function open3DViewInner(cs, pts, multi) {
     _playhead = 0;
     _playing = false;
     _hudCsLast = '';
-    _$('trd3HudCs').textContent = _multi ? (_multi.flights.length + ' 架航班') : cs;
+    _$('trd3HudCs').textContent = _multi ? (_multi.flights.length ? _multi.flights.length + ' 架航班' : '海岸线 / 空域') : cs;
     _$('trd3TimeEnd').textContent = _fmtHMS(_duration());
     _$('trd3Slider').max = Math.floor(_duration());
 
@@ -9132,7 +9140,7 @@ function open3DViewInner(cs, pts, multi) {
       return;
     }
     if (_scene.mode === 'sw') {
-      _$('trd3HudCs').textContent = (_multi ? _multi.flights.length + ' 架航班' : cs) + '（兼容模式）';
+      _$('trd3HudCs').textContent = (_multi ? (_multi.flights.length ? _multi.flights.length + ' 架航班' : '海岸线 / 空域') : cs) + '（兼容模式）';
     }
     startLoop();
 }
@@ -9163,8 +9171,8 @@ function _headingDelta(a, b) {  // 最短角差（度）
 }
 
 function _duration() {
-  if (_multi) return (_multi.t1 - _multi.t0) / 1000;   // 多航班：全局时间轴
-  return (_pts[_pts.length-1].t - _pts[0].t) / 1000;
+  if (_multi) return _multi.flights.length ? (_multi.t1 - _multi.t0) / 1000 : 0;   // v3.2.24 空场景：时长 0
+  return _pts.length ? (_pts[_pts.length-1].t - _pts[0].t) / 1000 : 0;
 }
 
 // v3.2.14 多航班：单条航迹在指定 epoch 时刻的插值状态；不在该航迹时间跨度内返回 null
@@ -9204,7 +9212,7 @@ function _stateAt(sec) {
         best.active = (d === 0);
       }
     }
-    return best;
+    return best;   // v3.2.24 空场景（无航班）：返回 null，调用方需判空
   }
   var t0 = _pts[0].t, target = t0 + sec * 1000;
   if (sec <= 0) { var p0 = _pts[0]; return { lon: p0.lon, lat: p0.lat, alt: p0.alt, hd: p0.hd, sp: p0.sp, ts: p0.t }; }
@@ -9301,6 +9309,11 @@ function buildScene(cs) {
     for (i = 0; i < _pts.length; i++) { lon0 += _pts[i].lon; lat0 += _pts[i].lat; }
     nAll = _pts.length;
   }
+  if (!nAll) {   // v3.2.24 纯海岸线/空域模式：中心取终端区边界质心
+    var bs0 = (_boundary && _boundary.length) ? _boundary : [[22.2, 113.3]];
+    for (var bi0 = 0; bi0 < bs0.length; bi0++) { lon0 += bs0[bi0][1]; lat0 += bs0[bi0][0]; }
+    nAll = bs0.length;
+  }
   lon0 /= nAll; lat0 /= nAll;
   var M_PER_DEG_LAT = 110540, M_PER_DEG_LON = 111320 * Math.cos(lat0 * Math.PI / 180);
   function toXYZ(p) {
@@ -9328,6 +9341,15 @@ function buildScene(cs) {
         if (Math.abs(zs) > spanN) spanN = Math.abs(zs);
       }
     }
+  }
+  if (!spanE && !spanN) {   // v3.2.24 空场景：以终端区边界范围定地面尺寸（外扩 20%）
+    var bs1 = (_boundary && _boundary.length) ? _boundary : [[22.2, 113.3]];
+    for (var bi1 = 0; bi1 < bs1.length; bi1++) {
+      var bx1 = (bs1[bi1][1] - lon0) * M_PER_DEG_LON, bz1 = -(bs1[bi1][0] - lat0) * M_PER_DEG_LAT;
+      if (Math.abs(bx1) > spanE) spanE = Math.abs(bx1);
+      if (Math.abs(bz1) > spanN) spanN = Math.abs(bz1);
+    }
+    spanE = spanE * 1.2 || 60000; spanN = spanN * 1.2 || 60000;
   }
   var ground = Math.max(spanE, spanN) * 2.1 + 4000;   // 地面网格尺寸
   // v3.2.13 网格与陆地多边形对齐：西/北缘=轨迹外扩范围（-gh/+gh），东缘=大陆主体多边形最东经度
@@ -9659,6 +9681,11 @@ function buildSW(cs) {
     for (i = 0; i < _pts.length; i++) { lon0 += _pts[i].lon; lat0 += _pts[i].lat; }
     nAllS = _pts.length;
   }
+  if (!nAllS) {   // v3.2.24 纯海岸线/空域模式：中心取终端区边界质心
+    var bs2 = (_boundary && _boundary.length) ? _boundary : [[22.2, 113.3]];
+    for (var bi2 = 0; bi2 < bs2.length; bi2++) { lon0 += bs2[bi2][1]; lat0 += bs2[bi2][0]; }
+    nAllS = bs2.length;
+  }
   lon0 /= nAllS; lat0 /= nAllS;
   var M_PER_DEG_LAT = 110540, M_PER_DEG_LON = 111320 * Math.cos(lat0 * Math.PI / 180);
   function toXYZ(p) {
@@ -9681,6 +9708,15 @@ function buildSW(cs) {
         if (Math.abs(zs1) > spanN) spanN = Math.abs(zs1);
       }
     }
+  }
+  if (!spanE && !spanN) {   // v3.2.24 空场景：以终端区边界范围定地面尺寸（外扩 20%）
+    var bs3 = (_boundary && _boundary.length) ? _boundary : [[22.2, 113.3]];
+    for (var bi3 = 0; bi3 < bs3.length; bi3++) {
+      var bx3 = (bs3[bi3][1] - lon0) * M_PER_DEG_LON, bz3 = -(bs3[bi3][0] - lat0) * M_PER_DEG_LAT;
+      if (Math.abs(bx3) > spanE) spanE = Math.abs(bx3);
+      if (Math.abs(bz3) > spanN) spanN = Math.abs(bz3);
+    }
+    spanE = spanE * 1.2 || 60000; spanN = spanN * 1.2 || 60000;
   }
   var span = Math.max(spanE, spanN, 1500);
   var ground = span * 2.1 + 4000;
@@ -10256,6 +10292,10 @@ function stopLoop() { if (_raf) { cancelAnimationFrame(_raf); _raf = 0; } }
 
 function updateState(redrawFlown) {
   var st = _stateAt(_playhead);
+  if (!st) {   // v3.2.24 纯海岸线/空域场景（无航班）：只更新时间显示
+    _$('trd3TimeCur').textContent = _fmtHMS(_playhead);
+    return;
+  }
 
   // HUD
   var ts = new Date(st.ts);
