@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.3.5</title>
+<title>ATC综合数据中心 v3.3.6</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.3.5</span>
+  <span class="badge">v3.3.6</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -711,7 +711,7 @@ canvas#radarMap {
   </div>
   <!-- 右上 操作提示 + 关闭 -->
   <div style="position:absolute;top:14px;right:16px;text-align:right;">
-    <div style="color:#64748b;font-size:11px;margin-bottom:6px;background:rgba(10,22,40,0.6);padding:4px 8px;border-radius:6px;">左键拖动旋转 · 滚轮缩放 · 右键平移</div>
+    <div style="color:#64748b;font-size:11px;margin-bottom:6px;background:rgba(10,22,40,0.6);padding:4px 8px;border-radius:6px;">左键拖动旋转 · 滚轮缩放 · 右键平移 · ⌨ ←→旋转 ↑↓俯仰 PgUp/PgDn缩放 Ctrl+方向平移</div>
     <button onclick="close3DView()" style="background:rgba(30,58,95,0.85);border:1px solid rgba(80,120,180,0.5);color:#e2e8f0;padding:6px 16px;border-radius:8px;cursor:pointer;font-size:13px;">✕ 退出全屏</button>
   </div>
   <!-- 底部时间轴 -->
@@ -741,6 +741,7 @@ canvas#radarMap {
     <div style="font-size:16px;font-weight:bold;color:#7fd88f;">📡 实时 3D 视图 · <span id="live3dCount">0</span> 架航班
       <span style="font-size:11px;color:#94a3b8;font-weight:normal;margin-left:6px;">CAT062 实时目标（垂直 ×5）· 计划关联航班显示轨迹+每分钟垂线<span id="live3dModeBadge" style="color:#fbbf24;"></span></span></div>
     <div style="font-size:12px;color:#8aa2c8;">筛选 21.5–23.5°N · 112–115°E · 高度 30–6000 m　数据更新 <b id="live3dUpd" style="color:#facc15;">--:--:--</b> UTC</div>
+    <div style="font-size:11px;color:#64748b;">⌨ ←→旋转 · ↑↓俯仰 · PgUp/PgDn缩放 · Ctrl+方向平移地图</div>
   </div>
   <!-- 右上 操作提示 + 关闭 -->
   <div style="position:absolute;top:14px;right:16px;text-align:right;">
@@ -9640,7 +9641,7 @@ function buildScene(cs) {
 
   _scene = { mode: 'gl', renderer: renderer, scene: scene, camera: camera, controls: controls,
              plane: plane, flownLine: flownLine, xyz: xyz, arr: arr, multi: multiList,
-             lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON, S: S };
+             lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON, S: S, ground: ground };
 
   window.addEventListener('resize', _onResize);
 }
@@ -10415,6 +10416,93 @@ _$('trd3Fullscreen').addEventListener('contextmenu', function(e) { e.preventDefa
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape' && _$('trd3Fullscreen').style.display !== 'none') close3DView();
 });
+
+// ═══ v3.3.6 键盘控制 3D 视角 ═══
+// 左/右方向键=yaw 旋转，上/下方向键=pitch 俯仰，PgUp/PgDn=缩放，Ctrl+方向键=平移地图
+// 手感与鼠标拖拽一致：方向键等效同方向拖拽（地图跟随 Ctrl+方向键移动）
+(function() {
+  var KEY_STEP = 0.05;            // 每次按键 yaw/pitch 增量（rad），按住可连发
+  var ZOOM_IN = 0.89, ZOOM_OUT = 1.12;   // 与 SW 滚轮缩放系数一致
+  function sceneInfo() {
+    if (window._live3dActive && _live.scene) return _live.scene;          // 实时 3D 优先
+    var fs = document.getElementById('trd3Fullscreen');
+    if (fs && fs.style.display !== 'none' && _scene) return _scene;       // 轨迹回放 3D
+    return null;
+  }
+  // ── SW 兼容模式：直接复用鼠标拖拽的同一套 view 数学 ──
+  function nudgeSW(sc, dsx, dsy, zoomDir, panPx) {
+    var v = sc.view, ground = sc.ground;
+    if (dsx || dsy) {
+      if (panPx) {                     // Ctrl+方向：平移（同右键拖拽公式，synthetic 屏幕位移）
+        var sp = Math.max(Math.sin(v.pitch), 0.1);
+        var cyw = Math.cos(v.yaw), syw = Math.sin(v.yaw);
+        var k0 = sc.dims.h * 0.9 / v.dist;
+        var dxW = (cyw * dsx * panPx - (syw / sp) * dsy * panPx) / k0;
+        var dzW = (syw * dsx * panPx + cyw * dsy * panPx) / k0;
+        v.tx = Math.max(-ground, Math.min(ground, v.tx - dxW));
+        v.tz = Math.max(-ground, Math.min(ground, v.tz - dzW));
+      } else {                         // 方向键：旋转/俯仰（同左键拖拽）
+        v.yaw += dsx * KEY_STEP;
+        v.pitch = Math.max(-0.05, Math.min(1.45, v.pitch + dsy * KEY_STEP));
+      }
+    }
+    if (zoomDir) {
+      v.dist *= (zoomDir > 0 ? ZOOM_OUT : ZOOM_IN);
+      v.dist = Math.max(ground * 0.15, Math.min(ground * 4, v.dist));
+    }
+  }
+  // ── GL 模式：直接操作相机球坐标（OrbitControls.update 会以相机当前位置为准） ──
+  function nudgeGL(sc, dsx, dsy, zoomDir, panPx) {
+    var cam = sc.camera, ctl = sc.controls, ground = sc.ground || 200000;
+    var off = new THREE.Vector3().subVectors(cam.position, ctl.target);
+    var sph = new THREE.Spherical().setFromVector3(off);
+    if ((dsx || dsy) && !panPx) {      // 旋转/俯仰：与 OrbitControls 拖拽同号（theta -= dx、phi -= dy）
+      sph.theta -= dsx * KEY_STEP;
+      sph.phi = Math.max(0.05, Math.min(Math.PI * 0.495, sph.phi - dsy * KEY_STEP));
+    }
+    if (zoomDir) sph.radius = Math.max(ground * 0.15, Math.min(ground * 4, sph.radius * (zoomDir > 0 ? ZOOM_OUT : ZOOM_IN)));
+    sph.makeSafe();
+    cam.position.copy(ctl.target).add(new THREE.Vector3().setFromSpherical(sph));
+    if (panPx && (dsx || dsy)) {       // Ctrl+方向：相机+target 同步平移，地图朝按键方向移动
+      var off = new THREE.Vector3().subVectors(cam.position, ctl.target);   // 最终视距/角度下的偏移
+      var dir = new THREE.Vector3().subVectors(ctl.target, cam.position);
+      dir.y = 0;
+      if (dir.lengthSq() < 1) dir.set(0, 0, -1);
+      dir.normalize();
+      var right = new THREE.Vector3().crossVectors(dir, cam.up).normalize();   // 屏幕右方的地面方向
+      var step = sph.radius * 0.08;
+      var mv = right.multiplyScalar(-dsx * step).add(dir.clone().multiplyScalar(dsy * step));
+      ctl.target.add(mv);
+      ctl.target.x = Math.max(-ground, Math.min(ground, ctl.target.x));
+      ctl.target.z = Math.max(-ground, Math.min(ground, ctl.target.z));
+      cam.position.copy(ctl.target).add(off);   // 视距与角度不变，仅整体平移
+    }
+    ctl.update();
+  }
+  document.addEventListener('keydown', function(e) {
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    var sc = sceneInfo();
+    if (!sc) return;
+    var dsx = 0, dsy = 0, zoomDir = 0;
+    switch (e.key) {
+      case 'ArrowLeft':  dsx = -1; break;
+      case 'ArrowRight': dsx = 1;  break;
+      case 'ArrowUp':    dsy = -1; break;
+      case 'ArrowDown':  dsy = 1;  break;
+      case 'PageUp':   zoomDir = -1; break;   // 拉近
+      case 'PageDown': zoomDir = 1;  break;   // 拉远
+      default: return;
+    }
+    if (e.altKey || e.metaKey || e.shiftKey) return;
+    var pan = e.ctrlKey;
+    if (pan) zoomDir = 0;
+    var panPx = pan ? Math.round((sc.dims ? sc.dims.h : 800) * 0.05) : 0;
+    e.preventDefault();
+    if (sc.mode === 'gl') nudgeGL(sc, dsx, dsy, zoomDir, panPx);
+    else nudgeSW(sc, dsx, dsy, zoomDir, panPx);
+  });
+})();
 
 // ════════════════════════════════════════════════════════════
 // v3.3.0 实时 3D 雷达（雷达地图页「🌐 3D」按钮）
