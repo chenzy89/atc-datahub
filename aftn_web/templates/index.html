@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.3.8</title>
+<title>ATC综合数据中心 v3.3.9</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.3.8</span>
+  <span class="badge">v3.3.9</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -3225,7 +3225,19 @@ window.submitAiDraw = submitAiDraw;
     // v3.3.8 用文档绝对坐标：从其他长页面滚动后切过来时 rect.top 偏小（可为负），
     // 视口相对量算会把画布撑高复现滚动条；绝对坐标与滚动位置解耦，页面总高恒不超视口
     var _absTop = mapRect.top + (window.pageYOffset || document.documentElement.scrollTop || 0);
-    var availableH = window.innerHeight - _absTop - 70;
+    // v3.3.9 底部预留改为动态量算：此前写死 70px，不够容纳画布下方文档流中的
+    // 回放控制条 playbackBar(约51px+边距24px) → 页面总高超出视口出现滚动条。
+    // 现按实际元素量算（容器边框/外边距 + 控制条含边距的实际高度），控制条显隐/行数变化时自适应
+    var _reserve = 4;                                                        // 安全余量
+    var _cCS = getComputedStyle(container);
+    _reserve += parseFloat(_cCS.marginTop) + parseFloat(_cCS.marginBottom)
+             + parseFloat(_cCS.borderTopWidth) + parseFloat(_cCS.borderBottomWidth);   // .map-container 盒模型
+    var _pb = document.getElementById('playbackBar');
+    if (_pb && getComputedStyle(_pb).display !== 'none') {
+      var _pbCS = getComputedStyle(_pb);
+      _reserve += _pb.offsetHeight + parseFloat(_pbCS.marginTop) + parseFloat(_pbCS.marginBottom);
+    }
+    var availableH = window.innerHeight - _absTop - _reserve;
     var displayH = Math.max(200, availableH);
 
     // 初始化 GeoTransform
