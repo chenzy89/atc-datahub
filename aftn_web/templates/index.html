@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.3.1</title>
+<title>ATC综合数据中心 v3.3.2</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.3.1</span>
+  <span class="badge">v3.3.2</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -10416,7 +10416,11 @@ document.addEventListener('keydown', function(e) {
 // 每 2s 拉取 /api/radar_tracks，按 21.5-23.5N / 112-115E / 30-6000m 筛选，
 // 圆点 + 呼号标签实时更新；打开期间 2D 雷达暂停轮询重绘（fetchTracks 守卫）。
 // ════════════════════════════════════════════════════════════
-var _live = { scene: null, raf: 0, timer: 0, flights: [], sprites: {}, trails: {}, seq: 0 };
+var _live = { scene: null, raf: 0, timer: 0, flights: [], sprites: {}, planes: {}, trails: {}, seq: 0 };
+var _livePlaneTex = null;        // v3.3.2 plane.png 贴图（白色剪影，material.color 着色）
+var _livePlaneGeo = null;        // 共用 1×1 平面几何
+var _livePlaneImg = null;        // 兼容模式用 Image
+var _liveTintCache = {};         // 兼容模式按配色缓存的着色画布
 var _liveBox = { latMin: 21.5, latMax: 23.5, lonMin: 112, lonMax: 115, altMin: 30, altMax: 6000 };
 
 window.toggleLive3D = function() {
@@ -10467,7 +10471,7 @@ window.closeLive3D = function() {
       try { sc.canvas.remove(); } catch (e) {}
     }
   }
-  _live.scene = null; _live.flights = []; _live.sprites = {}; _live.trails = {}; _live.seq = 0;
+  _live.scene = null; _live.flights = []; _live.sprites = {}; _live.planes = {}; _live.trails = {}; _live.seq = 0;
   _$('live3dFullscreen').style.display = 'none';
 };
 
@@ -10720,33 +10724,56 @@ function buildLiveScene() {
   })();
 
   _live.scene = { mode: 'gl', renderer: renderer, scene: scene, camera: camera, controls: controls,
-                  lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON, ground: ground };
+                  lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON, ground: ground,
+                  planeSize: ground * 0.009 };   // v3.3.2 航空器符号世界尺寸（随机位景深自然缩放）
   window.addEventListener('resize', _onLiveResize);
 }
 
-// 圆点 + 呼号 Sprite（按呼号缓存贴图，位置每轮更新；配色变化时重建贴图）
-function _liveSprite(cs, sc, color) {
-  var spr = _live.sprites[cs];
-  if (spr && spr.userData.color === color) return spr;
-  if (spr) {                                       // 配色变化（如后获计划关联）：销毁旧贴图重建
-    sc.scene.remove(spr);
-    if (spr.material.map) spr.material.map.dispose();
-    spr.material.dispose();
+// ── v3.3.2 航空器符号：plane.png（机头朝上，透明底白色剪影，material.color 逐航班着色）──
+// 结构：Group 绕 Y 轴转航向 + 水平贴地 Mesh。
+// 因贴图平躺在 3D 场景中，相机的俯仰角自然产生俯视/斜视透视变形，远近产生透视缩放——
+// 与真实 3D 物体一致，无需手工换算偏转和缩放。
+function _livePlane(cs, sc, color) {
+  var p = _live.planes[cs];
+  if (p) {                                          // 配色变化（如后获计划关联）：仅改材质颜色
+    if ('#' + p.mesh.material.color.getHexString() !== color.toLowerCase()) p.mesh.material.color.set(color);
+    return p;
   }
-  var cv = document.createElement('canvas'); cv.width = 256; cv.height = 64;
+  if (!_livePlaneTex) {
+    _livePlaneTex = new THREE.TextureLoader().load('/static/plane.png');
+    _livePlaneTex.anisotropy = 4;
+  }
+  if (!_livePlaneGeo) _livePlaneGeo = new THREE.PlaneGeometry(1, 1);
+  var mat = new THREE.MeshBasicMaterial({
+    map: _livePlaneTex, color: new THREE.Color(color), transparent: true,
+    depthWrite: false, side: THREE.DoubleSide, alphaTest: 0.02
+  });
+  var mesh = new THREE.Mesh(_livePlaneGeo, mat);
+  mesh.rotation.x = -Math.PI / 2;                   // 平躺：贴图"上"（机头）→ 世界 -z（北）
+  mesh.scale.set(sc.planeSize, sc.planeSize, 1);
+  var grp = new THREE.Group();
+  grp.add(mesh);
+  sc.scene.add(grp);
+  p = _live.planes[cs] = { grp: grp, mesh: mesh };
+  return p;
+}
+
+// 呼号标牌：屏幕尺寸恒定（sizeAttenuation=false）保证任意远近可读；锚点=左中，position 即文字起点
+function _liveLabel(cs, sc) {
+  var spr = _live.sprites[cs];
+  if (spr) return spr;
+  var cv = document.createElement('canvas'); cv.width = 320; cv.height = 64;
   var g = cv.getContext('2d');
-  g.beginPath(); g.arc(26, 32, 13, 0, 6.284);
-  g.fillStyle = color || '#38e8ff'; g.fill();
-  g.lineWidth = 3; g.strokeStyle = '#ffffff'; g.stroke();
-  g.font = 'bold 30px sans-serif'; g.textAlign = 'left'; g.textBaseline = 'middle';
-  g.lineWidth = 4; g.strokeStyle = 'rgba(5,12,24,0.85)'; g.strokeText(cs, 50, 33);
-  g.fillStyle = '#ffffff'; g.fillText(cs, 50, 33);
+  g.font = 'bold 34px sans-serif'; g.textAlign = 'left'; g.textBaseline = 'middle';
+  g.lineWidth = 5; g.strokeStyle = 'rgba(5,12,24,0.9)'; g.strokeText(cs, 4, 33);
+  g.fillStyle = '#ffffff'; g.fillText(cs, 4, 33);
   var tex = new THREE.CanvasTexture(cv);
-  spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-  spr.center.set(26 / 256, 0.5);       // 锚点=圆点中心，文字向右展开
-  spr.renderOrder = 10;
-  spr.scale.set(sc.ground * 0.014, sc.ground * 0.0035, 1);
-  spr.userData.color = color || '#38e8ff';
+  spr = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, transparent: true, depthTest: false, sizeAttenuation: false
+  }));
+  spr.center.set(0, 0.5);
+  spr.renderOrder = 11;
+  spr.scale.set(0.164, 0.0328, 1);                  // 非衰减：NDC 尺寸≈34px 高 @1080p（5:1 画布）
   sc.scene.add(spr);
   _live.sprites[cs] = spr;
   return spr;
@@ -10760,10 +10787,18 @@ function applyLiveGL() {
     var f = _live.flights[i];
     var hasPlan = !!(f.adep || f.adest);
     var color = _liveColor(f.cs, hasPlan);
-    var spr = _liveSprite(f.cs, sc, color);
+    var px = (f.lon - sc.lon0) * sc.mLon;
+    var pz = -(f.lat - sc.lat0) * sc.mLat;
+    var py = Math.max(f.alt * VERT_EXAG, 60);
+    var hdR = (f.hd || 0) * Math.PI / 180;
+    var plane = _livePlane(f.cs, sc, color);
+    var lbl = _liveLabel(f.cs, sc);
     seen[f.cs] = 1;
-    spr.visible = true;
-    spr.position.set((f.lon - sc.lon0) * sc.mLon, Math.max(f.alt * VERT_EXAG, 60), -(f.lat - sc.lat0) * sc.mLat);
+    plane.grp.position.set(px, py, pz);
+    plane.grp.rotation.y = -hdR;                 // 机头指向航向（北=-z，东=+x）
+    // 标牌置于右翼外侧：世界偏移随航向旋转，字号屏幕恒定
+    var off = sc.planeSize * 0.62;
+    lbl.position.set(px + Math.cos(hdR) * off, py, pz + Math.sin(hdR) * off);
 
     // v3.3.1 会话轨迹 + 每分钟垂线（仅关联计划航班）
     var tr = _live.trails[f.cs];
@@ -10816,7 +10851,7 @@ function applyLiveGL() {
       }
     }
   }
-  // v3.3.1 消失航班：圆点标签 + 轨迹线 + 垂线全部移除（此前是隐藏复用）
+  // v3.3.1 消失航班：标牌 + 航空器符号 + 轨迹线 + 垂线全部移除（此前是隐藏复用）
   for (var k in _live.sprites) {
     if (!_live.sprites.hasOwnProperty(k)) continue;
     if (!seen[k]) {
@@ -10825,6 +10860,15 @@ function applyLiveGL() {
       if (s0.material.map) s0.material.map.dispose();
       s0.material.dispose();
       delete _live.sprites[k];
+    }
+  }
+  for (var kp in _live.planes) {
+    if (!_live.planes.hasOwnProperty(kp)) continue;
+    if (!seen[kp]) {
+      var p0 = _live.planes[kp];
+      sc.scene.remove(p0.grp);
+      p0.mesh.material.dispose();          // 几何为全局共用，不 dispose
+      delete _live.planes[kp];
     }
   }
   for (var k2 in _live.trails) {
@@ -10919,6 +10963,12 @@ function buildLiveSW() {
     canvas.removeEventListener('wheel', onWheel);
   };
 
+  if (!_livePlaneImg) {                    // v3.3.2 兼容模式：加载同一张剪影图（着色走离屏缓存）
+    _livePlaneImg = new Image();
+    _livePlaneImg.onload = function() { var sc0 = _live.scene; if (sc0) { sc0._lastKey = null; } };  // 加载完成后强制重绘
+    _livePlaneImg.src = '/static/plane.png';
+  }
+
   _live.scene = {
     mode: 'sw', canvas: canvas, ctx: ctx, W: W, H: H, dims: dims,
     staticCv: staticCv, sctx: sctx, _staticKey: null, _lastKey: null,
@@ -10926,8 +10976,22 @@ function buildLiveSW() {
     ground: ground, gh: ghS, eastX: eastX, S: S, view: view, cleanup: cleanup,
     lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON,
     project: project, boundary: _boundary, coast: coastAdj,
+    planeSize: ground * 0.009,
   };
   window.addEventListener('resize', _onLiveResize);
+}
+
+// 兼容模式着色：白色剪影 → source-in 填充航班色，按颜色缓存离屏画布
+function _liveTintImg(color) {
+  if (!_livePlaneImg || !_livePlaneImg.complete || !_livePlaneImg.naturalWidth) return null;
+  if (_liveTintCache[color]) return _liveTintCache[color];
+  var cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  var g = cv.getContext('2d');
+  g.drawImage(_livePlaneImg, 0, 0, 128, 128);
+  g.globalCompositeOperation = 'source-in';
+  g.fillStyle = color; g.fillRect(0, 0, 128, 128);
+  _liveTintCache[color] = cv;
+  return cv;
 }
 
 function drawLiveSW() {
@@ -10990,20 +11054,42 @@ function drawLiveSW() {
     }
   }
 
-  // 动态层：圆点 + 呼号
+  // 动态层：航空器（plane.png 按航向旋转 + 透视变形）+ 呼号
   for (var i = 0; i < _live.flights.length; i++) {
     var f = _live.flights[i];
     var px = (f.lon - sc.lon0) * sc.mLon, pz = -(f.lat - sc.lat0) * sc.mLat;
     var py = Math.max(f.alt * VERT_EXAG, 60);
     var p = project(px, py, pz);
     if (p.z <= 45) continue;
-    var r = Math.max(3.5, p.k * sc.S * 0.35);
-    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 6.284);
-    ctx.fillStyle = _liveColor(f.cs, !!(f.adep || f.adest)); ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = '#e8eef7'; ctx.stroke();
+    var color = _liveColor(f.cs, !!(f.adep || f.adest));
+    var hdR = (f.hd || 0) * Math.PI / 180;
+    var fwdX = Math.sin(hdR), fwdZ = -Math.cos(hdR);       // 航向：北=-z，东=+x
+    var rgtX = Math.cos(hdR), rgtZ = Math.sin(hdR);        // 右翼方向（垂于航向）
+    var half = (sc.planeSize || sc.ground * 0.009) / 2;
+    var pF = project(px + fwdX * half, py, pz + fwdZ * half);   // 机头方向的屏幕矢量
+    var pR = project(px + rgtX * half, py, pz + rgtZ * half);   // 右翼方向的屏幕矢量
+    var img = _liveTintImg(color);
+    var lx = p.x, ly = p.y;
+    if (img && pF.z > 45 && pR.z > 45) {
+      // 用"机头/右翼"两条世界矢量作 2D 仿射基：视角俯仰造成的透视压缩与远近缩放由 project 自动给出
+      var IMG = 64;
+      ctx.save();
+      ctx.setTransform((pR.x - p.x) / (IMG / 2), (pR.y - p.y) / (IMG / 2),
+                       -(pF.x - p.x) / (IMG / 2), -(pF.y - p.y) / (IMG / 2), p.x, p.y);
+      ctx.drawImage(img, -IMG / 2, -IMG / 2, IMG, IMG);
+      ctx.restore();
+      lx = p.x + (pR.x - p.x) * 2.4;                       // 标牌置于右翼外侧
+      ly = p.y + (pR.y - p.y) * 2.4;
+    } else {                                               // 贴图未就绪：圆点兜底
+      var r = Math.max(3.5, p.k * sc.S * 0.35);
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 6.284);
+      ctx.fillStyle = color; ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#e8eef7'; ctx.stroke();
+      lx = p.x + r + 4; ly = p.y - 5;
+    }
     ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(5,12,24,0.85)'; ctx.strokeText(f.cs, p.x + r + 4, p.y - 5);
-    ctx.fillStyle = '#ffffff'; ctx.fillText(f.cs, p.x + r + 4, p.y - 5);
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(5,12,24,0.85)'; ctx.strokeText(f.cs, lx, ly);
+    ctx.fillStyle = '#ffffff'; ctx.fillText(f.cs, lx, ly);
   }
 }
 
