@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.27</title>
+<title>ATC综合数据中心 v3.3.0</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.27</span>
+  <span class="badge">v3.3.0</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -730,6 +730,22 @@ canvas#radarMap {
         <option value="600">600×</option>
       </select>
     </div>
+  </div>
+</div>
+
+<!-- ══════════ 实时 3D 雷达全屏页（v3.3.0）══════════ -->
+<div id="live3dFullscreen" style="display:none;position:fixed;inset:0;z-index:9999;background:#0a1628;">
+  <div id="live3dCanvasBox" style="position:absolute;inset:0;"></div>
+  <!-- 左上 HUD -->
+  <div style="position:absolute;top:14px;left:16px;color:#e2e8f0;font-size:14px;pointer-events:none;background:rgba(10,22,40,0.72);padding:10px 14px;border-radius:8px;border:1px solid rgba(80,120,180,0.35);line-height:1.7;">
+    <div style="font-size:16px;font-weight:bold;color:#7fd88f;">📡 实时 3D 视图 · <span id="live3dCount">0</span> 架航班
+      <span style="font-size:11px;color:#94a3b8;font-weight:normal;margin-left:6px;">CAT062 实时目标（垂直 ×5）<span id="live3dModeBadge" style="color:#fbbf24;"></span></span></div>
+    <div style="font-size:12px;color:#8aa2c8;">筛选 21.5–23.5°N · 112–115°E · 高度 30–6000 m　数据更新 <b id="live3dUpd" style="color:#facc15;">--:--:--</b> UTC</div>
+  </div>
+  <!-- 右上 操作提示 + 关闭 -->
+  <div style="position:absolute;top:14px;right:16px;text-align:right;">
+    <div style="color:#64748b;font-size:11px;margin-bottom:6px;background:rgba(10,22,40,0.6);padding:4px 8px;border-radius:6px;">左键拖动旋转 · 滚轮缩放 · 右键平移 · Esc 退出</div>
+    <button onclick="closeLive3D()" style="background:rgba(30,58,95,0.85);border:1px solid rgba(80,120,180,0.5);color:#e2e8f0;padding:6px 16px;border-radius:8px;cursor:pointer;font-size:13px;">✕ 退出 3D</button>
   </div>
 </div>
 
@@ -1021,6 +1037,7 @@ canvas#radarMap {
       <button class="map-tool-btn" onclick="openWatchDialog()">筛选</button>
       <button class="map-tool-btn" onclick="openWatchSectorDialog()">扇区</button>
       <button class="map-tool-btn" onclick="openAiDraw()"> 作图</button>
+      <button class="map-tool-btn" id="live3dBtn" onclick="toggleLive3D()">🌐 3D</button>
     </div>
     <!-- ── 航班搜索窗（空格键开/关，匹配航迹+标牌琥珀高亮）── -->
     <div class="track-search" id="trackSearchPanel">
@@ -6016,6 +6033,7 @@ window.submitAiDraw = submitAiDraw;
   window._replayActive = false;
   function fetchTracks() {
     if (window._replayActive) return;
+    if (window._live3dActive) return;   // v3.3.0 实时 3D 打开期间：2D 视图暂停轮询与重绘（3D 自己拉取数据）
     fetch('/api/radar_tracks')
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -10390,6 +10408,493 @@ _$('trd3Fullscreen').addEventListener('contextmenu', function(e) { e.preventDefa
 // Esc 退出全屏
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape' && _$('trd3Fullscreen').style.display !== 'none') close3DView();
+});
+
+// ════════════════════════════════════════════════════════════
+// v3.3.0 实时 3D 雷达（雷达地图页「🌐 3D」按钮）
+// 复用本 IIFE 的 three.js 加载、终端区边界、海岸线数据与软件渲染静态层管线。
+// 每 2s 拉取 /api/radar_tracks，按 21.5-23.5N / 112-115E / 30-6000m 筛选，
+// 圆点 + 呼号标签实时更新；打开期间 2D 雷达暂停轮询重绘（fetchTracks 守卫）。
+// ════════════════════════════════════════════════════════════
+var _live = { scene: null, raf: 0, timer: 0, flights: [], sprites: {}, seq: 0 };
+var _liveBox = { latMin: 21.5, latMax: 23.5, lonMin: 112, lonMax: 115, altMin: 30, altMax: 6000 };
+
+window.toggleLive3D = function() {
+  var el = _$('live3dFullscreen');
+  if (el.style.display !== 'none') { closeLive3D(); return; }
+  _loadLib(function() {
+    _loadBoundary(function() { openLive3DInner(); });
+  });
+};
+
+function openLive3DInner() {
+  window._live3dActive = true;
+  var el = _$('live3dFullscreen');
+  el.style.display = 'block';          // 先显示再建场景（隐藏状态下画布 0×0，同 v3.2.2 教训）
+  _$('live3dModeBadge').textContent = '';
+  var ok = false, err = '';
+  if (_webglOK()) {
+    try { buildLiveScene(); ok = !!_live.scene; }
+    catch (e) { err = (e && e.message) || String(e); _live.scene = null; }
+  }
+  if (!ok) {
+    try { buildLiveSW(); ok = true; _$('live3dModeBadge').textContent = '（兼容模式）'; }
+    catch (e2) { err = (e2 && e2.message) || String(e2); _live.scene = null; }
+  }
+  if (!ok) {
+    el.style.display = 'none';
+    window._live3dActive = false;
+    _showStatus('实时 3D 渲染不可用（' + (err || 'WebGL 创建失败') + '）。', false);
+    return;
+  }
+  _live.seq = 0;
+  liveFetch();
+  _live.timer = setInterval(liveFetch, 2000);
+  startLiveLoop();
+}
+
+window.closeLive3D = function() {
+  window._live3dActive = false;
+  if (_live.timer) { clearInterval(_live.timer); _live.timer = 0; }
+  if (_live.raf) { cancelAnimationFrame(_live.raf); _live.raf = 0; }
+  var sc = _live.scene;
+  if (sc) {
+    if (sc.mode === 'gl') {
+      try { sc.renderer.dispose(); } catch (e) {}
+      try { sc.renderer.domElement.remove(); } catch (e) {}
+    } else {
+      if (sc.cleanup) sc.cleanup();
+      try { sc.canvas.remove(); } catch (e) {}
+    }
+  }
+  _live.scene = null; _live.flights = []; _live.sprites = {}; _live.seq = 0;
+  _$('live3dFullscreen').style.display = 'none';
+};
+
+function liveFetch() {
+  fetch('/api/radar_tracks')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!window._live3dActive) return;
+      var list = [], B = _liveBox;
+      for (var i = 0; i < (data || []).length; i++) {
+        var t = data[i];
+        var la = t.latitude, lo = t.longitude, al = t.flight_level;
+        if (la == null || lo == null || al == null) continue;
+        if (!(la > B.latMin && la < B.latMax && lo > B.lonMin && lo < B.lonMax && al > B.altMin && al < B.altMax)) continue;
+        list.push({ cs: t.callsign || '----', lat: la, lon: lo, alt: al, hd: t.heading || 0 });
+      }
+      _live.flights = list;
+      _live.seq++;
+      _$('live3dCount').textContent = list.length;
+      var d = new Date();
+      _$('live3dUpd').textContent = ('0'+d.getUTCHours()).slice(-2) + ':' + ('0'+d.getUTCMinutes()).slice(-2) + ':' + ('0'+d.getUTCSeconds()).slice(-2);
+      applyLiveGL();
+    })
+    .catch(function() { /* 静默 */ });
+}
+
+// ── WebGL 场景 ──
+function buildLiveScene() {
+  var box = _$('live3dCanvasBox');
+  box.innerHTML = '';
+  var W = box.clientWidth, H = box.clientHeight;
+  if (!W || !H) { W = window.innerWidth || 1280; H = window.innerHeight || 720; }
+
+  // 场景中心 = 筛选框中心（22.5N, 113.5E），地面覆盖筛选范围外扩
+  var lat0 = 22.5, lon0 = 113.5;
+  var M_PER_DEG_LAT = 110540, M_PER_DEG_LON = 111320 * Math.cos(lat0 * Math.PI / 180);
+  var spanE = (_liveBox.lonMax - lon0) * M_PER_DEG_LON, spanN = (_liveBox.latMax - lat0) * M_PER_DEG_LAT;
+  var span = Math.max(spanE, spanN, 1500);
+  var ground = span * 2.1 + 4000;
+  var ghG = ground / 2;
+  var _al = _alignCoast(_coast, lon0, lat0, M_PER_DEG_LON, M_PER_DEG_LAT, ghG);
+  var coastAdj = _al[0], eastX = _al[1];
+  var extW = eastX + ghG;
+  var cx0 = (eastX - ghG) / 2;
+  var maxDim = Math.max(ground, extW);
+  var maxAlt = _liveBox.altMax * VERT_EXAG;
+
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a1628);
+  scene.fog = new THREE.Fog(0x0a1628, maxDim * 1.6, maxDim * 3.6);
+
+  var camera = new THREE.PerspectiveCamera(55, W / H, 10, maxDim * 5);
+  var camH = Math.max(span * 1.55, 3500);
+  camera.position.set(0, camH, 2);
+  camera.lookAt(0, maxAlt * 0.35, 0);
+
+  var renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(W, H);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  box.appendChild(renderer.domElement);
+
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.target.set(0, maxAlt * 0.35, 0);
+  controls.maxPolarAngle = Math.PI * 0.495;
+  controls.screenSpacePanning = false;
+
+  scene.add(new THREE.AmbientLight(0x8899bb, 0.85));
+  var sun = new THREE.DirectionalLight(0xffffff, 0.9);
+  sun.position.set(ground, ground * 1.5, ground * 0.6);
+  scene.add(sun);
+
+  // 地面矩形外框 + 平面
+  var frameGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(cx0 - extW / 2, 0.5, -ghG), new THREE.Vector3(cx0 + extW / 2, 0.5, -ghG),
+    new THREE.Vector3(cx0 + extW / 2, 0.5, ghG), new THREE.Vector3(cx0 - extW / 2, 0.5, ghG)
+  ]);
+  scene.add(new THREE.LineLoop(frameGeo, new THREE.LineBasicMaterial({ color: 0x2a4a75 })));
+  var gnd = new THREE.Mesh(
+    new THREE.PlaneGeometry(extW, ground),
+    new THREE.MeshBasicMaterial({ color: 0x0d1f38, transparent: true, opacity: 0.86 })
+  );
+  gnd.rotation.x = -Math.PI / 2;
+  gnd.position.set(cx0, -2, 0);
+  gnd.renderOrder = 1;
+  gnd.material.depthWrite = false;
+  scene.add(gnd);
+
+  // 珠三角陆地贴图（与轨迹回放同一管线：402 多边形烘焙成单张 2048² 贴图）
+  if (coastAdj && coastAdj.length) {
+    (function() {
+      var TS = 2048;
+      var lcv = document.createElement('canvas');
+      lcv.width = lcv.height = TS;
+      var g2 = lcv.getContext('2d');
+      function w2p(wx, wz) { return [(wx + ghG) / extW * TS, (wz + ghG) / ground * TS]; }
+      function drawPolys(stroke) {
+        for (var cI = 0; cI < coastAdj.length; cI++) {
+          var poly = coastAdj[cI];
+          g2.beginPath();
+          for (var cJ = 0; cJ < poly.length; cJ++) {
+            var pp = w2p((poly[cJ][1] - lon0) * M_PER_DEG_LON, -(poly[cJ][0] - lat0) * M_PER_DEG_LAT);
+            if (cJ === 0) g2.moveTo(pp[0], pp[1]); else g2.lineTo(pp[0], pp[1]);
+          }
+          g2.closePath();
+          if (stroke) g2.stroke(); else g2.fill();
+        }
+      }
+      g2.fillStyle = 'rgba(214,218,224,0.82)';
+      drawPolys(false);
+      g2.strokeStyle = '#38bdf8'; g2.lineWidth = 2;
+      drawPolys(true);
+      var landTex = new THREE.CanvasTexture(lcv);
+      if (renderer.capabilities.getMaxAnisotropy) {
+        landTex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      }
+      var landMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(extW, ground),
+        new THREE.MeshBasicMaterial({ map: landTex, transparent: true, depthWrite: false }));
+      landMesh.rotation.x = -Math.PI / 2;
+      landMesh.position.set(cx0, 1.2, 0);
+      landMesh.renderOrder = 2;
+      scene.add(landMesh);
+    })();
+  }
+
+  // 终端区边界 + 4800m 空域体（与轨迹回放一致：逐面侧壁按朝向明暗着色）
+  if (_boundary && _boundary.length > 2) {
+    var i, bPts = [], topPts = [], nB = _boundary.length;
+    for (i = 0; i < nB; i++) {
+      var bx = (_boundary[i][1] - lon0) * M_PER_DEG_LON, bz = -(_boundary[i][0] - lat0) * M_PER_DEG_LAT;
+      bPts.push(new THREE.Vector3(bx, 2, bz));
+      topPts.push(new THREE.Vector3(bx, 4800 * VERT_EXAG, bz));
+    }
+    scene.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(bPts),
+      new THREE.LineBasicMaterial({ color: 0xff8c42 })));
+    scene.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(topPts),
+      new THREE.LineBasicMaterial({ color: 0xffb347 })));
+    var lightAz = 315 * Math.PI / 180;
+    var Lx = Math.sin(lightAz), Lz = -Math.cos(lightAz);
+    var cenX = 0, cenZ = 0;
+    for (i = 0; i < nB; i++) {
+      cenX += (_boundary[i][1] - lon0) * M_PER_DEG_LON;
+      cenZ += -(_boundary[i][0] - lat0) * M_PER_DEG_LAT;
+    }
+    cenX /= nB; cenZ /= nB;
+    var ty = 4800 * VERT_EXAG;
+    for (i = 0; i < nB; i++) {
+      var j2 = (i + 1) % nB;
+      var ax = (_boundary[i][1] - lon0) * M_PER_DEG_LON, az = -(_boundary[i][0] - lat0) * M_PER_DEG_LAT;
+      var cx2 = (_boundary[j2][1] - lon0) * M_PER_DEG_LON, cz2 = -(_boundary[j2][0] - lat0) * M_PER_DEG_LAT;
+      var nx = cz2 - az, nz = -(cx2 - ax);
+      var mx = (ax + cx2) / 2 - cenX, mz = (az + cz2) / 2 - cenZ;
+      if (nx * mx + nz * mz < 0) { nx = -nx; nz = -nz; }
+      var nl = Math.sqrt(nx * nx + nz * nz) || 1; nx /= nl; nz /= nl;
+      var f = 0.35 + 0.65 * Math.max(0, nx * Lx + nz * Lz);
+      var fgeo = new THREE.BufferGeometry();
+      fgeo.setAttribute('position', new THREE.Float32BufferAttribute(
+        [ax, 0, az, cx2, 0, cz2, cx2, ty, cz2, ax, 0, az, cx2, ty, cz2, ax, ty, az], 3));
+      var fmesh = new THREE.Mesh(fgeo, new THREE.MeshBasicMaterial({
+        color: new THREE.Color(f, 0.549 * f, 0.259 * f),
+        transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }));
+      fmesh.renderOrder = 3;
+      scene.add(fmesh);
+    }
+    (function() {
+      var c = document.createElement('canvas'); c.width = 256; c.height = 64;
+      var g = c.getContext('2d');
+      g.font = 'bold 42px sans-serif'; g.fillStyle = '#ffb347';
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('4800m', 128, 34);
+      var spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
+      var ls = Math.max(ground / 26, 300);
+      spr.scale.set(ls * 4, ls, 1);
+      spr.position.set(topPts[0].x, 4800 * VERT_EXAG + ls * 0.9, topPts[0].z);
+      scene.add(spr);
+    })();
+  }
+
+  // 指北针
+  (function addCompass() {
+    var coneLen = Math.max(ground / 55, 90), coneR = Math.max(ground / 380, 24);
+    var shaftLen = Math.max(ground / 38, 130), shaftR = coneR * 0.35;
+    var zN = -ground * 0.45;
+    var mat = new THREE.MeshBasicMaterial({ color: 0x4ade80 });
+    var cone = new THREE.Mesh(new THREE.ConeGeometry(coneR, coneLen, 12), mat);
+    cone.rotation.x = -Math.PI / 2;
+    cone.position.set(0, 2, zN);
+    var shaft = new THREE.Mesh(new THREE.CylinderGeometry(shaftR, shaftR, shaftLen, 10), mat);
+    shaft.rotation.x = -Math.PI / 2;
+    shaft.position.set(0, 2, zN + coneLen / 2 + shaftLen / 2);
+    var lblCv = document.createElement('canvas');
+    lblCv.width = lblCv.height = 128;
+    var lc = lblCv.getContext('2d');
+    lc.font = 'bold 96px sans-serif';
+    lc.textAlign = 'center'; lc.textBaseline = 'middle';
+    lc.fillStyle = '#4ade80';
+    lc.fillText('N', 64, 64);
+    var spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(lblCv), transparent: true, depthTest: false
+    }));
+    var ls = Math.max(ground / 45, 110);
+    spr.scale.set(ls, ls, 1);
+    spr.position.set(0, ls * 0.6, zN - coneLen / 2 - shaftLen);
+    scene.add(cone); scene.add(shaft); scene.add(spr);
+  })();
+
+  _live.scene = { mode: 'gl', renderer: renderer, scene: scene, camera: camera, controls: controls,
+                  lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON, ground: ground };
+  window.addEventListener('resize', _onLiveResize);
+}
+
+// 圆点 + 呼号 Sprite（按呼号缓存贴图，位置每轮更新）
+function _liveSprite(cs, sc) {
+  var spr = _live.sprites[cs];
+  if (spr) return spr;
+  var cv = document.createElement('canvas'); cv.width = 256; cv.height = 64;
+  var g = cv.getContext('2d');
+  g.beginPath(); g.arc(26, 32, 13, 0, 6.284);
+  g.fillStyle = '#38e8ff'; g.fill();
+  g.lineWidth = 3; g.strokeStyle = '#ffffff'; g.stroke();
+  g.font = 'bold 30px sans-serif'; g.textAlign = 'left'; g.textBaseline = 'middle';
+  g.lineWidth = 4; g.strokeStyle = 'rgba(5,12,24,0.85)'; g.strokeText(cs, 50, 33);
+  g.fillStyle = '#ffffff'; g.fillText(cs, 50, 33);
+  var tex = new THREE.CanvasTexture(cv);
+  spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  spr.center.set(26 / 256, 0.5);       // 锚点=圆点中心，文字向右展开
+  spr.renderOrder = 10;
+  spr.scale.set(sc.ground * 0.014, sc.ground * 0.0035, 1);
+  sc.scene.add(spr);
+  _live.sprites[cs] = spr;
+  return spr;
+}
+
+function applyLiveGL() {
+  var sc = _live.scene;
+  if (!sc || sc.mode !== 'gl') return;
+  var seen = {};
+  for (var i = 0; i < _live.flights.length; i++) {
+    var f = _live.flights[i];
+    var spr = _liveSprite(f.cs, sc);
+    seen[f.cs] = 1;
+    spr.visible = true;
+    spr.position.set((f.lon - sc.lon0) * sc.mLon, Math.max(f.alt * VERT_EXAG, 60), -(f.lat - sc.lat0) * sc.mLat);
+  }
+  for (var k in _live.sprites) {
+    if (!_live.sprites.hasOwnProperty(k)) continue;
+    if (!seen[k]) _live.sprites[k].visible = false;   // 离开筛选范围：隐藏（保留缓存复用）
+  }
+}
+
+// ── 软件渲染兜底（Canvas 2D，字段结构与 buildSW 一致，直接复用 renderSWStatic 静态层）──
+function buildLiveSW() {
+  var lat0 = 22.5, lon0 = 113.5;
+  var M_PER_DEG_LAT = 110540, M_PER_DEG_LON = 111320 * Math.cos(lat0 * Math.PI / 180);
+  var spanE = (_liveBox.lonMax - lon0) * M_PER_DEG_LON, spanN = (_liveBox.latMax - lat0) * M_PER_DEG_LAT;
+  var span = Math.max(spanE, spanN, 1500);
+  var ground = span * 2.1 + 4000;
+  var S = Math.max(ground / 260, 55);
+  var ghS = ground / 2;
+  var _al = _alignCoast(_coast, lon0, lat0, M_PER_DEG_LON, M_PER_DEG_LAT, ghS);
+  var coastAdj = _al[0], eastX = _al[1];
+
+  var box = _$('live3dCanvasBox');
+  box.innerHTML = '';
+  var W = box.clientWidth, H = box.clientHeight;
+  if (!W || !H) { W = window.innerWidth || 1280; H = window.innerHeight || 720; }
+  var canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  canvas.style.cssText = 'position:absolute;inset:0;cursor:grab;';
+  box.appendChild(canvas);
+  var ctx = canvas.getContext('2d');
+  var staticCv = document.createElement('canvas');
+  staticCv.width = W; staticCv.height = H;
+  var sctx = staticCv.getContext('2d');
+  var dims = { w: W, h: H };
+
+  var view = { yaw: 0, pitch: 1.45, dist: Math.max(span * 1.55, 3500), cy: 6000 * VERT_EXAG * 0.35, tx: 0, tz: 0 };
+
+  function project(x, y, z) {
+    var px = x - view.tx, pz = z - view.tz;
+    var dy = y - view.cy;
+    var cyw = Math.cos(view.yaw), syw = Math.sin(view.yaw);
+    var x1 = px * cyw + pz * syw;
+    var z1 = -px * syw + pz * cyw;
+    var cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
+    var y2 = dy * cp - z1 * sp;
+    var z2 = -dy * sp - z1 * cp;
+    var z3 = z2 + view.dist;
+    var k = dims.h * 0.9 / (z3 > 30 ? z3 : 30);
+    return { x: dims.w / 2 + x1 * k, y: dims.h / 2 - y2 * k, k: k, z: z3 };
+  }
+
+  var drag = null;
+  function onDown(e) {
+    drag = { x: e.clientX, y: e.clientY, pan: (e.button === 2 || e.button === 1) };
+    canvas.style.cursor = 'grabbing'; e.preventDefault();
+  }
+  function onMove(e) {
+    if (!drag) return;
+    var dsx = e.clientX - drag.x, dsy = e.clientY - drag.y;
+    if (drag.pan) {
+      var sp = Math.max(Math.sin(view.pitch), 0.1);
+      var cyw = Math.cos(view.yaw), syw = Math.sin(view.yaw);
+      var k0 = dims.h * 0.9 / view.dist;
+      var dxW = (cyw * dsx - (syw / sp) * dsy) / k0;
+      var dzW = (syw * dsx + cyw * dsy) / k0;
+      view.tx = Math.max(-ground, Math.min(ground, view.tx - dxW));
+      view.tz = Math.max(-ground, Math.min(ground, view.tz - dzW));
+    } else {
+      view.yaw += dsx * 0.005;
+      view.pitch = Math.max(-0.05, Math.min(1.45, view.pitch + dsy * 0.005));
+    }
+    drag = { x: e.clientX, y: e.clientY, pan: drag.pan };
+  }
+  function onUp() { drag = null; canvas.style.cursor = 'grab'; }
+  function onWheel(e) {
+    view.dist *= (e.deltaY > 0 ? 1.12 : 0.89);
+    view.dist = Math.max(ground * 0.15, Math.min(ground * 4, view.dist));
+    e.preventDefault();
+  }
+  canvas.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+  var cleanup = function() {
+    canvas.removeEventListener('mousedown', onDown);
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+    canvas.removeEventListener('wheel', onWheel);
+  };
+
+  _live.scene = {
+    mode: 'sw', canvas: canvas, ctx: ctx, W: W, H: H, dims: dims,
+    staticCv: staticCv, sctx: sctx, _staticKey: null, _lastKey: null,
+    xyz: [], idxs: [], idxTimes: [], multi: [],   // 无轨迹：renderSWStatic 的轨迹/起终点分支自动跳过
+    ground: ground, gh: ghS, eastX: eastX, S: S, view: view, cleanup: cleanup,
+    lon0: lon0, lat0: lat0, mLat: M_PER_DEG_LAT, mLon: M_PER_DEG_LON,
+    project: project, boundary: _boundary, coast: coastAdj,
+  };
+  window.addEventListener('resize', _onLiveResize);
+}
+
+function drawLiveSW() {
+  var sc = _live.scene;
+  if (!sc || sc.mode !== 'sw') return;
+  var ctx = sc.ctx, view = sc.view, project = sc.project;
+  // 视角/尺寸/数据序号任一变化才重绘（暂停交互+无新数据时零开销）
+  var vkey = [view.yaw, view.pitch, view.dist, view.tx, view.tz, sc.dims.w, sc.dims.h, _live.seq].join('|');
+  if (vkey === sc._lastKey) return;
+  sc._lastKey = vkey;
+  var skey = [view.yaw, view.pitch, view.dist, view.tx, view.tz, sc.dims.w, sc.dims.h].join('|');
+  if (skey !== sc._staticKey) {
+    sc._staticKey = skey;
+    renderSWStatic(sc);
+  }
+  ctx.drawImage(sc.staticCv, 0, 0);
+
+  // 动态层：圆点 + 呼号
+  for (var i = 0; i < _live.flights.length; i++) {
+    var f = _live.flights[i];
+    var px = (f.lon - sc.lon0) * sc.mLon, pz = -(f.lat - sc.lat0) * sc.mLat;
+    var py = Math.max(f.alt * VERT_EXAG, 60);
+    var p = project(px, py, pz);
+    if (p.z <= 45) continue;
+    var r = Math.max(3.5, p.k * sc.S * 0.35);
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 6.284);
+    ctx.fillStyle = '#38e8ff'; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = '#e8eef7'; ctx.stroke();
+    ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(5,12,24,0.85)'; ctx.strokeText(f.cs, p.x + r + 4, p.y - 5);
+    ctx.fillStyle = '#ffffff'; ctx.fillText(f.cs, p.x + r + 4, p.y - 5);
+  }
+}
+
+function startLiveLoop() {
+  var last = performance.now();
+  (function frame(now) {
+    _live.raf = requestAnimationFrame(frame);
+    var sc = _live.scene;
+    if (!sc) return;
+    var dt = (now - last) / 1000;
+    last = now;
+    if (sc.mode === 'gl') {
+      sc.controls.update();
+      // 自适应降载：持续慢帧时自动降渲染分辨率（与轨迹回放同策略）
+      sc._ftAcc = (sc._ftAcc || 0) + dt; sc._ftN = (sc._ftN || 0) + 1;
+      if (sc._ftN >= 120) {
+        if (sc._ftAcc / sc._ftN > 0.04 && (sc._prLevel || 0) < 2) {
+          sc._prLevel = (sc._prLevel || 0) + 1;
+          sc.renderer.setPixelRatio(sc._prLevel === 1 ? 1.0 : 0.75);
+        }
+        sc._ftAcc = 0; sc._ftN = 0;
+      }
+      sc.renderer.render(sc.scene, sc.camera);
+    } else {
+      drawLiveSW();
+    }
+  })(last);
+}
+
+function _onLiveResize() {
+  var sc = _live.scene;
+  if (!sc) return;
+  var box = _$('live3dCanvasBox');
+  if (sc.mode === 'gl') {
+    sc.camera.aspect = box.clientWidth / box.clientHeight;
+    sc.camera.updateProjectionMatrix();
+    sc.renderer.setSize(box.clientWidth, box.clientHeight);
+  } else {
+    sc.W = box.clientWidth || window.innerWidth; sc.H = box.clientHeight || window.innerHeight;
+    sc.canvas.width = sc.W; sc.canvas.height = sc.H;
+    if (sc.dims) { sc.dims.w = sc.W; sc.dims.h = sc.H; }
+    if (sc.staticCv) {
+      sc.staticCv.width = sc.W; sc.staticCv.height = sc.H;
+      sc._staticKey = null; sc._lastKey = null;
+    }
+  }
+}
+
+// 屏蔽实时 3D 全屏页右键菜单（右键拖动留给平移）
+_$('live3dFullscreen').addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+// Esc 退出实时 3D
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && _$('live3dFullscreen').style.display !== 'none') closeLive3D();
 });
 
 })();
