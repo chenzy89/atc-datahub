@@ -598,9 +598,10 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
                 "alt_max_m": float(raw.get("alt_max_m", 6000)),
                 "vert_exag": float(raw.get("vert_exag", 5)) or 5,
                 "dropline_interval_s": float(raw.get("dropline_interval_s", 60)) or 60,
+                "dropline_opacity": min(1.0, max(0.0, float(raw.get("dropline_opacity", 0.8)))),
             })
         except Exception:
-            return jsonify({"alt_min_m": 30, "alt_max_m": 6000, "vert_exag": 5, "dropline_interval_s": 60})
+            return jsonify({"alt_min_m": 30, "alt_max_m": 6000, "vert_exag": 5, "dropline_interval_s": 60, "dropline_opacity": 0.8})
 
     @app.route("/api/config/map_bg")
     def api_config_map_bg():
