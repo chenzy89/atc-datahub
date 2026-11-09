@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.14</title>
+<title>ATC综合数据中心 v3.2.15</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.14</span>
+  <span class="badge">v3.2.15</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -865,7 +865,7 @@ canvas#radarMap {
       <button class="btn btn-secondary" onclick="exportExcel()">导出</button>
       <button class="btn btn-secondary" onclick="batchFlightTrail()" style="font-size:12px;padding:4px 10px;">批量轨迹</button>
       <button class="btn btn-secondary" onclick="openAirportTrailPicker()" style="font-size:12px;padding:4px 10px;">机场进离场</button>
-      <button class="btn btn-secondary" onclick="open3DAllFlights()" style="font-size:12px;padding:4px 10px;">🛩 3D轨迹</button>
+      <button class="btn btn-secondary" id="btn-3dtraj" onclick="toggle3DPick()" style="font-size:12px;padding:4px 10px;">🛩 3D轨迹</button>
       <span id="fpl-info" class="text-muted" style="margin-left:6px;"></span>
     </div>
   </div>
@@ -875,6 +875,7 @@ canvas#radarMap {
   <div class="table-wrap">
     <table>
       <thead><tr>
+        <th id="th-fplpick" class="pick-col" style="display:none;text-align:center;"><input type="checkbox" id="fpl-selall" onclick="_fplSelAll(this)" title="全选/全不选本页"></th>
         <th onclick="sortFpl('callsign')" style="cursor:pointer;user-select:none;">航班号<span id="sort-arrow-callsign" style="margin-left:3px;color:var(--accent);"></span></th>
         <th>属地</th><th>规则</th><th>移交点</th><th>机型</th><th>DOF</th>
         <th>起飞地</th><th onclick="sortFpl('etd')" style="cursor:pointer;user-select:none;">ETD<span id="sort-arrow-etd" style="margin-left:3px;color:var(--accent);"></span></th>
@@ -1810,6 +1811,7 @@ function searchPlans(r) {
   document.getElementById('tbl-fpl').innerHTML = '<tr><td colspan="16" class="loading">查询中...</td></tr>';
   fetch('/api/flight_plans?' + p.toString()).then(function(r) { return r.json(); }).then(function(d) {
     fplTot = d.total;
+    if (r !== false) { _fplSel = {}; }   // 新查询清空勾选（排序/翻页保留）
     renderPlans(d.records);
     var pi = document.getElementById('fpl-info');
     if (pi) { pi.textContent = '共 ' + d.total + ' 条'; }
@@ -1845,7 +1847,14 @@ function renderPlans(rs) {
       var dofStr = r.dof ? r.dof.slice(0,10) : '';
       msgTagsHtml += '<span class="tag ' + mtc + '" style="cursor:pointer;margin-right:3px;" onclick="showFplMsg(\'' + esc(r.callsign||'') + '\',\'' + dofStr + '\')" title="查看该计划的两天内所有报文">' + mt + '</span>';
     }
-    h += '<tr>' +
+    var pickHtml = '';
+    if (_fplPick) {
+      var pk = _fplKey(r);
+      pickHtml = '<td class="pick-col" style="text-align:center;"><input type="checkbox"' +
+        (_fplSel[pk] ? ' checked' : '') +
+        ' onclick="_fplCheck(this,\'' + esc(r.callsign||'') + '\',\'' + esc((r.dof||'').slice(0,10)) + '\')"></td>';
+    }
+    h += '<tr>' + pickHtml +
       '<td class="callsign"><a href="javascript:void(0)" onclick="showFlightTrail(this)" data-callsign="' + esc(r.callsign||'') + '" data-dof="' + esc((r.dof||'').slice(0,10)) + '" data-adep="' + esc(r.adep||'') + '" data-adest="' + esc(r.adest||'') + '" data-atd="' + esc(r.atd||'') + '" data-ata="' + esc(r.ata||'') + '" data-entry="' + esc(r.entry_time||'') + '" data-exit="' + esc(r.exit_time||'') + '" style="color:var(--accent-green);text-decoration:none;cursor:pointer;" title="查看历史轨迹">' + (r.callsign||'-') + '</a></td>'+
       '<td>' + (r.region === '境内' ? '<span style="color:#34d399;font-weight:600;">境内</span>' : (r.region === '境外' ? '<span style="color:#fbbf24;font-weight:600;">境外</span>' : '-')) + '</td>' +
       '<td>' + (r.flight_rule||'-') + '</td>' +
@@ -8855,9 +8864,53 @@ window.load3DTrajectory = function() {
     .catch(function(e) { btn.disabled = false; _showStatus('请求失败: ' + e, false); });
 };
 
+// ── v3.2.15 勾选式批量 3D 轨迹 ──
+var _fplPick = false;   // 勾选模式开关
+var _fplSel = {};       // 'callsign|dof' -> {callsign, dof}
+function _fplKey(r) { return (r.callsign||'') + '|' + ((r.dof||'').slice(0,10)); }
+window._fplCheck = function(el, cs, dof) {
+  var k = cs + '|' + dof;
+  if (el.checked) { _fplSel[k] = { callsign: cs, dof: dof }; } else { delete _fplSel[k]; }
+};
+window._fplSelAll = function(el) {
+  if (!_fplRows) return;
+  for (var i = 0; i < _fplRows.length; i++) {
+    var k = _fplKey(_fplRows[i]);
+    if (el.checked) { _fplSel[k] = { callsign: _fplRows[i].callsign||'', dof: (_fplRows[i].dof||'').slice(0,10) }; }
+    else { delete _fplSel[k]; }
+  }
+  renderPlans(_fplRows);
+};
+window.toggle3DPick = function() {
+  var btn = document.getElementById('btn-3dtraj');
+  var th = document.getElementById('th-fplpick');
+  var info = document.getElementById('fpl-info');
+  if (!_fplPick) {
+    if (!_fplRows || !_fplRows.length) { alert('请先「查询」出航班计划'); return; }
+    _fplPick = true;
+    _fplSel = {};
+    if (th) th.style.display = '';
+    btn.textContent = '生成轨迹';
+    var sa = document.getElementById('fpl-selall');
+    if (sa) sa.checked = false;
+    if (info) info.textContent = '请勾选要生成 3D 轨迹的航班（可跨页累计）';
+    renderPlans(_fplRows);
+  } else {
+    var list = [];
+    for (var k in _fplSel) { if (_fplSel.hasOwnProperty(k)) list.push(_fplSel[k]); }
+    if (!list.length) { alert('请先勾选至少一个航班'); return; }
+    _fplPick = false;
+    if (th) th.style.display = 'none';
+    btn.textContent = '🛩 3D轨迹';
+    if (info) info.textContent = '';
+    if (_fplRows && _fplRows.length) renderPlans(_fplRows);   // 移除勾选列
+    open3DAllFlights(list);
+  }
+};
+
 // ── v3.2.14 批量 3D 轨迹：用当前查询结果直接生成多航班 3D 场景（跳过选择弹窗）──
-window.open3DAllFlights = function() {
-  var rows = _fplRows;
+window.open3DAllFlights = function(recs) {
+  var rows = (recs && recs.length) ? recs : _fplRows;
   if (!rows || !rows.length) { alert('请先「查询」出航班计划，再点 3D轨迹'); return; }
   var info = document.getElementById('fpl-info');
   var queue = rows.slice(0, 100);            // 性能保护：单次最多 100 架
