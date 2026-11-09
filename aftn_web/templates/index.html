@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.3.7</title>
+<title>ATC综合数据中心 v3.3.8</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.3.7</span>
+  <span class="badge">v3.3.8</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -3222,7 +3222,10 @@ window.submitAiDraw = submitAiDraw;
     // 计算可用高度：浏览器可视高度 - 画布顶部到视口顶部的距离 - 底部留白
     var mapPanel = document.getElementById('panel-map');
     var mapRect = mapPanel.getBoundingClientRect();
-    var availableH = window.innerHeight - mapRect.top - 70;
+    // v3.3.8 用文档绝对坐标：从其他长页面滚动后切过来时 rect.top 偏小（可为负），
+    // 视口相对量算会把画布撑高复现滚动条；绝对坐标与滚动位置解耦，页面总高恒不超视口
+    var _absTop = mapRect.top + (window.pageYOffset || document.documentElement.scrollTop || 0);
+    var availableH = window.innerHeight - _absTop - 70;
     var displayH = Math.max(200, availableH);
 
     // 初始化 GeoTransform
