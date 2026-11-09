@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.15</title>
+<title>ATC综合数据中心 v3.2.16</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.15</span>
+  <span class="badge">v3.2.16</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -8865,8 +8865,9 @@ window.load3DTrajectory = function() {
 };
 
 // ── v3.2.15 勾选式批量 3D 轨迹 ──
-var _fplPick = false;   // 勾选模式开关
-var _fplSel = {};       // 'callsign|dof' -> {callsign, dof}
+// 注意：本 script 块整体包在 IIFE 内，勾选状态必须挂 window 供飞行计划块（renderPlans/searchPlans）访问
+window._fplPick = false;   // 勾选模式开关
+window._fplSel = {};       // 'callsign|dof' -> {callsign, dof}
 function _fplKey(r) { return (r.callsign||'') + '|' + ((r.dof||'').slice(0,10)); }
 window._fplCheck = function(el, cs, dof) {
   var k = cs + '|' + dof;
