@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.3.2</title>
+<title>ATC综合数据中心 v3.3.3</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.3.2</span>
+  <span class="badge">v3.3.3</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -9407,7 +9407,8 @@ function buildScene(cs) {
         }
         var dg0 = new THREE.BufferGeometry();
         dg0.setAttribute('position', new THREE.BufferAttribute(darr0, 3));
-        scene.add(new THREE.LineSegments(dg0, new THREE.LineBasicMaterial({ color: ci0, transparent: true, opacity: 0.5 })));
+        dg0.computeLineDistances();   // v3.3.3 虚线需要
+        scene.add(new THREE.LineSegments(dg0, new THREE.LineDashedMaterial({ color: ci0, transparent: true, opacity: 0.12, dashSize: Math.max(ground * 0.006, 40), gapSize: Math.max(ground * 0.004, 26) })));
       }
       var fgg = new THREE.BufferGeometry();
       fgg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(marr), 3));
@@ -9442,7 +9443,8 @@ function buildScene(cs) {
       }
       var dgeo = new THREE.BufferGeometry();
       dgeo.setAttribute('position', new THREE.BufferAttribute(darr, 3));
-      scene.add(new THREE.LineSegments(dgeo, new THREE.LineBasicMaterial({ color: 0x6b86b8, transparent: true, opacity: 0.6 })));
+      dgeo.computeLineDistances();   // v3.3.3 虚线需要
+      scene.add(new THREE.LineSegments(dgeo, new THREE.LineDashedMaterial({ color: 0x6b86b8, transparent: true, opacity: 0.12, dashSize: Math.max(ground * 0.006, 40), gapSize: Math.max(ground * 0.004, 26) })));
     }
 
     // 已飞部分高亮线（青色）
@@ -10078,7 +10080,8 @@ function renderSWStatic(sc) {
       var dpts1 = _dropPts(mtr.f.pts, _dropSec);
       if (dpts1.length) {
         ctx.save();
-        ctx.globalAlpha = 0.55;
+        ctx.globalAlpha = 0.12;              // v3.3.3 淡化
+        ctx.setLineDash([5, 4]);             // v3.3.3 虚线
         ctx.lineWidth = 1.5;
         ctx.strokeStyle = mtr.f.color;
         for (var dv = 0; dv < dpts1.length; dv++) {
@@ -10116,7 +10119,8 @@ function renderSWStatic(sc) {
     var dpts2 = _dropPts(_pts, _dropSec);
     if (dpts2.length) {
       ctx.save();
-      ctx.globalAlpha = 0.7;
+      ctx.globalAlpha = 0.12;                // v3.3.3 淡化
+      ctx.setLineDash([5, 4]);               // v3.3.3 虚线
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = '#8aa2c8';
       for (var dv2 = 0; dv2 < dpts2.length; dv2++) {
@@ -10846,7 +10850,8 @@ function applyLiveGL() {
         if (tr.gdrop) { sc.scene.remove(tr.gdrop); tr.gdrop.geometry.dispose(); }
         var dgeo = new THREE.BufferGeometry();
         dgeo.setAttribute('position', new THREE.BufferAttribute(darr, 3));
-        tr.gdrop = new THREE.LineSegments(dgeo, new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.6 }));
+        dgeo.computeLineDistances();   // v3.3.3 虚线需要
+        tr.gdrop = new THREE.LineSegments(dgeo, new THREE.LineDashedMaterial({ color: color, transparent: true, opacity: 0.12, dashSize: Math.max(sc.ground * 0.006, 40), gapSize: Math.max(sc.ground * 0.004, 26) }));
         sc.scene.add(tr.gdrop);
       }
     }
@@ -11036,7 +11041,8 @@ function drawLiveSW() {
     var dropsS = _minutePts(trS.pts);
     if (dropsS.length) {
       ctx.save();
-      ctx.globalAlpha = 0.6; ctx.lineWidth = 1.5; ctx.strokeStyle = colorS;
+      ctx.globalAlpha = 0.12; ctx.setLineDash([5, 4]);   // v3.3.3 淡化+虚线
+      ctx.lineWidth = 1.5; ctx.strokeStyle = colorS;
       for (var dS = 0; dS < dropsS.length; dS++) {
         var dpS = dropsS[dS];
         var vSegs = clipStroke3(project,
