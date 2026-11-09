@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.3.6</title>
+<title>ATC综合数据中心 v3.3.7</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.3.6</span>
+  <span class="badge">v3.3.7</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -1568,6 +1568,8 @@ function switchTab(n) {
   document.getElementById('panel-'+n).classList.add('active');
   // 表格类页面（AFTN报文/飞行计划）切换全高填充布局，其余页面保持原页面滚动
   document.documentElement.classList.toggle('tbl-mode', n === 'msgs' || n === 'plans');
+  // v3.3.7 切到雷达地图页：等面板可见后重绘一次（修正隐藏期间被量错的画布高度，消除右侧滚动条）
+  if (n === 'map') { setTimeout(drawMap, 0); }
   // 切换到 ASR 页时强制刷新
   if (n === 'asr') { setTimeout(asrFetchLive, 100); }
 }
@@ -3160,6 +3162,10 @@ window.submitAiDraw = submitAiDraw;
   }
 
   function drawMap() {
+    // v3.3.7 守卫：地图页隐藏（display:none）时 rect.top=0 会把画布撑到超出视口（滚动条根源），
+    // 且此时绘制无意义——直接跳过，等 switchTab 切回地图页时再重绘
+    var _mapPanelEl = document.getElementById('panel-map');
+    if (_mapPanelEl && !_mapPanelEl.classList.contains('active')) return;
     var canvas = document.getElementById('radarMap');
     if (!canvas || !canvas.getContext) return;
 
