@@ -1957,7 +1957,7 @@ class Database:
         flight_rule: str | None = None,
         handover_pt: str | None = None,  # 移交点关键词
         region: str | None = None,  # 属地：境内 / 境外
-        sort_by: str | None = None,  # 排序字段：callsign / etd
+        sort_by: str | None = None,  # 排序字段：callsign / etd / atd / ata
         sort_order: str | None = None,  # asc / desc
         limit: int = 100,
         offset: int = 0,
@@ -1974,7 +1974,7 @@ class Database:
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
         # 排序
-        valid_sort = {"callsign", "etd"}
+        valid_sort = {"callsign", "etd", "atd", "ata"}
         if sort_by and sort_by in valid_sort:
             order = "ASC" if sort_order and sort_order.lower() == "asc" else "DESC"
             order_clause = f"ORDER BY {sort_by} {order}"

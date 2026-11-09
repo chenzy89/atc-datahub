@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.17</title>
+<title>ATC综合数据中心 v3.2.18</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.17</span>
+  <span class="badge">v3.2.18</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -866,6 +866,7 @@ canvas#radarMap {
       <button class="btn btn-secondary" onclick="batchFlightTrail()" style="font-size:12px;padding:4px 10px;">批量轨迹</button>
       <button class="btn btn-secondary" onclick="openAirportTrailPicker()" style="font-size:12px;padding:4px 10px;">机场进离场</button>
       <button class="btn btn-secondary" id="btn-3dtraj" onclick="toggle3DPick()" style="font-size:12px;padding:4px 10px;">🛩 3D轨迹</button>
+      <button class="btn btn-secondary" id="btn-3dcancel" onclick="cancel3DPick()" style="font-size:12px;padding:4px 10px;display:none;">取消</button>
       <span id="fpl-info" class="text-muted" style="margin-left:6px;"></span>
     </div>
   </div>
@@ -879,8 +880,8 @@ canvas#radarMap {
         <th onclick="sortFpl('callsign')" style="cursor:pointer;user-select:none;">航班号<span id="sort-arrow-callsign" style="margin-left:3px;color:var(--accent);"></span></th>
         <th>属地</th><th>规则</th><th>移交点</th><th>机型</th><th>DOF</th>
         <th>起飞地</th><th onclick="sortFpl('etd')" style="cursor:pointer;user-select:none;">ETD<span id="sort-arrow-etd" style="margin-left:3px;color:var(--accent);"></span></th>
-        <th>ATD</th>
-        <th>目的地</th><th>ETA</th><th>ATA</th><th>跑道</th><th>飞行程序</th><th>进终端</th><th>出终端</th><th>终端时长</th>
+        <th onclick="sortFpl('atd')" style="cursor:pointer;user-select:none;">ATD<span id="sort-arrow-atd" style="margin-left:3px;color:var(--accent);"></span></th>
+        <th>目的地</th><th>ETA</th><th onclick="sortFpl('ata')" style="cursor:pointer;user-select:none;">ATA<span id="sort-arrow-ata" style="margin-left:3px;color:var(--accent);"></span></th><th>跑道</th><th>飞行程序</th><th>进终端</th><th>出终端</th><th>终端时长</th>
         <th>航路</th><th>报文</th>
       </tr></thead>
       <tbody id="tbl-fpl"><tr><td colspan="16" class="loading">输入条件后按查询</td></tr></tbody>
@@ -1776,7 +1777,7 @@ function sortFpl(field) {
 }
 
 function updateFplSortArrows() {
-  ['callsign', 'etd'].forEach(function(f) {
+  ['callsign', 'etd', 'atd', 'ata'].forEach(function(f) {
     var el = document.getElementById('sort-arrow-' + f);
     if (!el) return;
     if (fplSortBy === f) {
@@ -8783,6 +8784,16 @@ var _libsLoading = false;
 var _boundary = [];              // 珠海终端区边界顶点 [[lat,lon],...]（来自 FDRG.json）
 var _coast = [];                 // 珠三角陆地多边形（大陆+海岛，[[lat,lon],...] 数组；来自 map/COASTLINE.txt，灰白填充）
 
+// v3.2.18 3D轨迹高度筛选（离线参数 config/trail3d.json，页面加载即预取）
+var _altRange = { min: 30, max: 6000 };
+(function() {
+  fetch('/api/config/trail3d').then(function(r) { return r.json(); }).then(function(d) {
+    if (d && isFinite(d.alt_min_m)) { _altRange.min = d.alt_min_m; }
+    if (d && isFinite(d.alt_max_m)) { _altRange.max = d.alt_max_m; }
+  }).catch(function() {});
+})();
+function _inAltRange(alt) { return alt >= _altRange.min && alt <= _altRange.max; }
+
 function _$(id) { return document.getElementById(id); }
 // 懒加载终端区边界（/api/config/terminal_airports 由 FDRG.json 提供 vertices）+ 海岸线
 function _loadBoundary(cb) {
@@ -8851,6 +8862,7 @@ window.load3DTrajectory = function() {
         if (isNaN(t)) continue;
         var qh = parseFloat(p.qh) || 0;
         var alt = qh > 0 ? qh : (parseFloat(p.fl) || 0);
+        if (!_inAltRange(alt)) { continue; }   // v3.2.18 高度筛选：仅保留范围内轨迹点
         if (qh > 0) hasQh = true;
         out.push({ t: t, lon: parseFloat(p.ln), lat: parseFloat(p.lt),
                    alt: alt, hd: parseFloat(p.hd) || 0, sp: parseFloat(p.sp) || 0 });
@@ -8884,6 +8896,7 @@ window._fplSelAll = function(el) {
 };
 window.toggle3DPick = function() {
   var btn = document.getElementById('btn-3dtraj');
+  var btnC = document.getElementById('btn-3dcancel');
   var th = document.getElementById('th-fplpick');
   var info = document.getElementById('fpl-info');
   if (!_fplPick) {
@@ -8891,6 +8904,7 @@ window.toggle3DPick = function() {
     _fplPick = true;
     _fplSel = {};
     if (th) th.style.display = '';
+    if (btnC) btnC.style.display = '';
     btn.textContent = '生成轨迹';
     var sa = document.getElementById('fpl-selall');
     if (sa) sa.checked = false;
@@ -8902,11 +8916,26 @@ window.toggle3DPick = function() {
     if (!list.length) { alert('请先勾选至少一个航班'); return; }
     _fplPick = false;
     if (th) th.style.display = 'none';
+    if (btnC) btnC.style.display = 'none';
     btn.textContent = '🛩 3D轨迹';
     if (info) info.textContent = '';
     if (_fplRows && _fplRows.length) renderPlans(_fplRows);   // 移除勾选列
     open3DAllFlights(list);
   }
+};
+// v3.2.18 取消勾选模式，恢复原状态
+window.cancel3DPick = function() {
+  _fplPick = false;
+  _fplSel = {};
+  var th = document.getElementById('th-fplpick');
+  var btn = document.getElementById('btn-3dtraj');
+  var btnC = document.getElementById('btn-3dcancel');
+  var info = document.getElementById('fpl-info');
+  if (th) th.style.display = 'none';
+  if (btnC) btnC.style.display = 'none';
+  if (btn) btn.textContent = '🛩 3D轨迹';
+  if (info) info.textContent = '';
+  if (_fplRows && _fplRows.length) renderPlans(_fplRows);
 };
 
 // ── v3.2.14 批量 3D 轨迹：用当前查询结果直接生成多航班 3D 场景（跳过选择弹窗）──
@@ -8945,6 +8974,7 @@ window.open3DAllFlights = function(recs) {
           if (isNaN(t)) continue;
           var qh = parseFloat(p.qh) || 0;
           var alt = qh > 0 ? qh : (parseFloat(p.fl) || 0);
+          if (!_inAltRange(alt)) { continue; }   // v3.2.18 高度筛选：仅保留范围内轨迹点
           if (qh > 0) hasQh = true;
           out.push({ t: t, lon: parseFloat(p.ln), lat: parseFloat(p.lt),
                      alt: alt, hd: parseFloat(p.hd) || 0, sp: parseFloat(p.sp) || 0 });

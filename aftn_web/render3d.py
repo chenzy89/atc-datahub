@@ -22,6 +22,17 @@ from PIL import Image, ImageDraw, ImageFont
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = BASE_DIR / "data" / "renders"
 
+
+def _load_alt_range():
+    """v3.2.18 3D轨迹高度筛选范围（离线参数 config/trail3d.json；与前端一致）"""
+    dflt = (30.0, 6000.0)
+    try:
+        import json
+        raw = json.loads((BASE_DIR / "config" / "trail3d.json").read_text(encoding="utf-8"))
+        return (float(raw.get("alt_min_m", dflt[0])), float(raw.get("alt_max_m", dflt[1])))
+    except Exception:
+        return dflt
+
 VERT_EXAG = 5
 TMA_TOP = 4800 * VERT_EXAG
 OUT_W, OUT_H = 1280, 720
@@ -209,11 +220,14 @@ def _render_video(job_id, pts, callsign, date_str):
 
     pts = [p for p in pts if p.get("lt") and p.get("ln") and p.get("ts")]
     pts.sort(key=lambda p: p["ts"])
+    alt_min, alt_max = _load_alt_range()
     rec = []
     has_qh = False
     for p in pts:
         qh = float(p.get("qh") or 0)
         alt = qh if qh > 0 else float(p.get("fl") or 0)
+        if alt < alt_min or alt > alt_max:
+            continue   # v3.2.18 高度筛选：仅保留范围内轨迹点
         if qh > 0:
             has_qh = True
         rec.append({

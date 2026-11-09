@@ -626,6 +626,20 @@ def create_app(config: AppConfig, db: Database, fdr_store: FDRStore | None = Non
         from .terminal_area import get_terminal_config_safe
         return jsonify(get_terminal_config_safe())
 
+    @app.route("/api/config/trail3d")
+    def api_config_trail3d():
+        """3D轨迹高度筛选参数（离线文件 config/trail3d.json，修改后刷新页面即生效，无需重启）"""
+        dflt = {"alt_min_m": 30, "alt_max_m": 6000}
+        try:
+            f = Path(__file__).resolve().parent.parent / "config" / "trail3d.json"
+            raw = json.loads(f.read_text(encoding="utf-8"))
+            return jsonify({
+                "alt_min_m": float(raw.get("alt_min_m", dflt["alt_min_m"])),
+                "alt_max_m": float(raw.get("alt_max_m", dflt["alt_max_m"])),
+            })
+        except Exception:
+            return jsonify(dflt)
+
     @app.route("/api/config/map_bg")
     def api_config_map_bg():
         """动态读取 config.json 中的雷达地图背景色（改配置后刷新即可，无需重启）"""
