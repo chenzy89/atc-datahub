@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.24</title>
+<title>ATC综合数据中心 v3.2.25</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.24</span>
+  <span class="badge">v3.2.25</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -9730,7 +9730,7 @@ function buildSW(cs) {
   var step = Math.max(1, Math.ceil(xyz.length / 6000));
   var idxs = [], idxTimes = [];
   for (i = 0; i < xyz.length; i += step) { idxs.push(i); idxTimes.push(_pts[i].t); }
-  if (idxs[idxs.length - 1] !== xyz.length - 1) { idxs.push(xyz.length - 1); idxTimes.push(_pts[_pts.length - 1].t); }
+  if (xyz.length && idxs[idxs.length - 1] !== xyz.length - 1) { idxs.push(xyz.length - 1); idxTimes.push(_pts[_pts.length - 1].t); }   // v3.2.25 空场景（纯海岸线/空域）时 xyz 为空，不得 push(-1)（曾致 TypeError→误弹老输入窗）
 
   // v3.2.14 多航班：逐条配色轨迹（抽稀≤1200 点，兼顾兼容模式每帧重画性能）
   var multiData = null;
