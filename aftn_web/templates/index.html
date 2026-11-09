@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.2.26</title>
+<title>ATC综合数据中心 v3.2.27</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -608,7 +608,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.2.26</span>
+  <span class="badge">v3.2.27</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -695,7 +695,6 @@ canvas#radarMap {
     <div class="ai-status" id="trd3Status"></div>
     <div class="map-layers-close" style="display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="close3DTrajectory()">取消</button>
-      <button id="trd3VideoBtn" onclick="render3DVideo()">🎬 导出视频</button>
       <button class="ai-btn-primary" id="trd3LoadBtn" onclick="load3DTrajectory()">生成 3D 轨迹</button>
     </div>
   </div>
@@ -9013,49 +9012,6 @@ window.open3DAllFlights = function(recs) {
   }
   worker(); worker(); worker(); worker();   // 4 路并发
 };
-
-// ── 服务端视频导出（v3.2.12）：服务器离线渲染 MP4，任何电脑流畅播放 ──
-window.render3DVideo = function() {
-  var cs = _$('trd3Callsign').value.trim().toUpperCase();
-  var date = _$('trd3Date').value;
-  if (!cs) { _showStatus('请输入航班号', false); return; }
-  if (!date) { _showStatus('请选择日期', false); return; }
-  var btn = _$('trd3VideoBtn');
-  btn.disabled = true;
-  _showStatus('已提交服务端渲染任务，正在查询航迹并排队...', true);
-  fetch('/api/render3d', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ callsign: cs, date: date })
-  }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
-    .then(function(res) {
-      if (!res.ok) { btn.disabled = false; _showStatus('提交失败: ' + (res.d.error || res.status), false); return; }
-      _pollRender3D(res.d.job_id, btn);
-    })
-    .catch(function(e) { btn.disabled = false; _showStatus('请求失败: ' + e, false); });
-};
-function _pollRender3D(jobId, btn) {
-  fetch('/api/render3d_status?job=' + encodeURIComponent(jobId))
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      if (d.error && !d.status) { btn.disabled = false; _showStatus('渲染失败: ' + d.error, false); return; }
-      if (d.status === 'error') { btn.disabled = false; _showStatus('渲染失败: ' + (d.error || '未知错误'), false); return; }
-      if (d.status === 'done' && d.file_url) {
-        btn.disabled = false;
-        _showStatus('视频已生成，开始下载（也可右键复制链接）...', true);
-        var a = document.createElement('a');
-        a.href = d.file_url;
-        a.target = '_blank';
-        document.body.appendChild(a); a.click(); a.remove();
-        return;
-      }
-      var pct = d.total ? Math.round(d.progress / d.total * 100) : 0;
-      var phase = d.status === 'encoding' ? '编码 MP4 中' : (d.status === 'pending' ? '排队中' : '渲染帧中');
-      _showStatus('服务端渲染：' + phase + ' ' + pct + '%（约 1~2 分钟，期间可正常使用系统）', true);
-      setTimeout(function() { _pollRender3D(jobId, btn); }, 2000);
-    })
-    .catch(function() { btn.disabled = false; _showStatus('状态查询失败', false); });
-}
 
 // ── three.js 懒加载 ──
 function _loadLib(cb) {
