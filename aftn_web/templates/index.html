@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.4.1</title>
+<title>ATC综合数据中心 v3.4.2</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -366,7 +366,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   border: 1px solid #1e3a5f;
   border-radius: 8px;
   overflow: hidden;
-  margin: 12px;
+  margin: 12px 12px 0 12px;   /* v3.4.2 底部归零：画布尽量贴近视口下缘 */
 }
 canvas#radarMap {
   display: block;
@@ -657,7 +657,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.4.1</span>
+  <span class="badge">v3.4.2</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -3290,7 +3290,7 @@ window.submitAiDraw = submitAiDraw;
     var _absTop = mapRect.top + (window.pageYOffset || document.documentElement.scrollTop || 0);
     // v3.4.0 画布充满浏览器视口：回放控制条已改悬浮式（position:fixed，不占文档流），
     // 底部预留只需容器盒模型（边框/外边距）+ 安全余量，画布占据视口内全部剩余高度
-    var _reserve = 4;                                                        // 安全余量
+    var _reserve = 2;                                                        // 安全余量(v3.4.2 由4收紧为2)
     var _cCS = getComputedStyle(container);
     _reserve += parseFloat(_cCS.marginTop) + parseFloat(_cCS.marginBottom)
              + parseFloat(_cCS.borderTopWidth) + parseFloat(_cCS.borderBottomWidth);   // .map-container 盒模型
