@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.4.5</title>
+<title>ATC综合数据中心 v3.5.0</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -515,6 +515,9 @@ canvas#radarMap {
   transition: background 0.2s ease, transform 0.2s ease;
 }
 .pb-fab:hover { background: rgba(38, 50, 66, 0.96); transform: translateY(-1px); }
+/* v3.5.0 3D 全屏(z-index:9999)打开时，控制条与入口按钮浮到 3D 层之上，可在 3D 页内操作回放 */
+.playback-bar.over-3d { z-index: 10050; }
+.pb-fab.over-3d { z-index: 10040; }
 .playback-row {
   display: flex;
   align-items: center;
@@ -657,7 +660,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.4.5</span>
+  <span class="badge">v3.5.0</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -787,7 +790,7 @@ canvas#radarMap {
   <div id="live3dCanvasBox" style="position:absolute;inset:0;"></div>
   <!-- 左上 HUD -->
   <div style="position:absolute;top:14px;left:16px;color:#e2e8f0;font-size:14px;pointer-events:none;background:rgba(10,22,40,0.72);padding:10px 14px;border-radius:8px;border:1px solid rgba(80,120,180,0.35);line-height:1.7;">
-    <div style="font-size:16px;font-weight:bold;color:#7fd88f;">📡 实时 3D 视图 · <span id="live3dCount">0</span> 架航班
+    <div style="font-size:16px;font-weight:bold;color:#7fd88f;">📡 实时 3D 视图 · <span id="live3dCount">0</span> 架航班<span id="live3dSrcBadge" style="color:#facc15;font-size:12px;margin-left:6px;"></span>
       <span style="font-size:11px;color:#94a3b8;font-weight:normal;margin-left:6px;">CAT062 实时目标（垂直 ×5）· 计划关联航班显示轨迹+每分钟垂线<span id="live3dModeBadge" style="color:#fbbf24;"></span></span></div>
     <div style="font-size:12px;color:#8aa2c8;">筛选 21.5–23.5°N · 112–115°E · 高度 30–6000 m　数据更新 <b id="live3dUpd" style="color:#facc15;">--:--:--</b> UTC</div>
     <div style="font-size:11px;color:#64748b;">⌨ ←→旋转 · ↑↓俯仰 · PgUp/PgDn缩放 · Ctrl+方向平移地图</div>
@@ -7117,6 +7120,8 @@ window.submitAiDraw = submitAiDraw;
       }
     }
     window._radarTracks = tracks;
+    window._replayClockMs = new Date(ts).getTime();          // v3.5.0 供 3D 轨迹按回放时间轴分桶
+    if (window._live3dActive && typeof window.liveApplyTracks === 'function') window.liveApplyTracks();   // v3.5.0 3D 同步回放帧
     updateTimeLabel(ts);
     updateProgress();
     var activeTab = document.querySelector('.tab-btn.active');
@@ -7162,6 +7167,8 @@ window.submitAiDraw = submitAiDraw;
     historyPoints = []; replayTracks = {};
     replayStartTime = null; replayCurrentTime = null; replayEndTime = null;
     window._replayActive = false;
+    window._replayClockMs = 0;                 // v3.5.0 3D 轨迹回到壁钟分桶
+    if (window._live3dActive && typeof window.liveApplyTracks === 'function') window.liveApplyTracks();
     // 回到实时 → 回波图切回实时最新
     if (typeof window.cloudBackToLive === 'function') window.cloudBackToLive();
     updateUI();
@@ -10588,7 +10595,7 @@ document.addEventListener('keydown', function(e) {
 // 每 2s 拉取 /api/radar_tracks，按 21.5-23.5N / 112-115E / 30-6000m 筛选，
 // 圆点 + 呼号标签实时更新；打开期间 2D 雷达暂停轮询重绘（fetchTracks 守卫）。
 // ════════════════════════════════════════════════════════════
-var _live = { scene: null, raf: 0, timer: 0, flights: [], sprites: {}, planes: {}, trails: {}, seq: 0 };
+var _live = { scene: null, raf: 0, timer: 0, flights: [], sprites: {}, planes: {}, trails: {}, seq: 0, dataMode: '' };
 var _livePlaneTex = null;        // v3.3.2 plane.png 贴图（白色剪影，material.color 着色）
 var _liveFinTex = null;          // v3.4.3 垂直尾翼贴图（Canvas 绘制后掠尾翼剪影）
 var _livePlaneGeo = null;        // 共用 1×1 平面几何
@@ -10608,6 +10615,10 @@ function openLive3DInner() {
   window._live3dActive = true;
   var el = _$('live3dFullscreen');
   el.style.display = 'block';          // 先显示再建场景（隐藏状态下画布 0×0，同 v3.2.2 教训）
+  // v3.5.0 控制条/入口按钮浮到 3D 层之上，3D 页内也能操作回放
+  var _pbBar = document.getElementById('playbackBar'), _pbFab = document.getElementById('pbToggle');
+  if (_pbBar) _pbBar.classList.add('over-3d');
+  if (_pbFab) _pbFab.classList.add('over-3d');
   _$('live3dModeBadge').textContent = '';
   var ok = false, err = '';
   if (_webglOK()) {
@@ -10644,15 +10655,31 @@ window.closeLive3D = function() {
       try { sc.canvas.remove(); } catch (e) {}
     }
   }
-  _live.scene = null; _live.flights = []; _live.sprites = {}; _live.planes = {}; _live.trails = {}; _live.seq = 0;
+  _live.scene = null; _live.flights = []; _live.sprites = {}; _live.planes = {}; _live.trails = {}; _live.seq = 0; _live.dataMode = '';
   _$('live3dFullscreen').style.display = 'none';
+  // v3.5.0 恢复控制条默认层级
+  var _pbBar2 = document.getElementById('playbackBar'), _pbFab2 = document.getElementById('pbToggle');
+  if (_pbBar2) _pbBar2.classList.remove('over-3d');
+  if (_pbFab2) _pbFab2.classList.remove('over-3d');
 };
 
 function liveFetch() {
+  // v3.5.0 回放模式：直接吃 2D 回放引擎的每帧数据（updateReplayFrame → window._radarTracks），无需请求
+  if (window._replayActive) { liveApply(window._radarTracks || []); return; }
   fetch('/api/radar_tracks')
     .then(function(r) { return r.json(); })
-    .then(function(data) {
+    .then(liveApply)
+    .catch(function() { /* 静默 */ });
+}
+
+// v3.5.0 统一入口：实时与回放共用同一套筛选/会话轨迹/渲染管线
+function liveApply(data) {
       if (!window._live3dActive) return;
+      var mode = window._replayActive ? 'replay' : 'live';
+      if (_live.dataMode !== mode) {          // 数据源切换：清空会话轨迹（壁钟与回放时钟时间戳不可混排）
+        _live.dataMode = mode;
+        _live.trails = {};
+      }
       var list = [], B = _liveBox;
       for (var i = 0; i < (data || []).length; i++) {
         var t = data[i];
@@ -10666,18 +10693,24 @@ function liveFetch() {
       _live.flights = list;
       _live.seq++;
       _$('live3dCount').textContent = list.length;
-      var d = new Date();
+      var src = _$('live3dSrcBadge');
+      if (src) src.textContent = mode === 'replay' ? ' · 回放数据' : '';
+      var d = (mode === 'replay' && window._replayClockMs) ? new Date(window._replayClockMs) : new Date();
       _$('live3dUpd').textContent = ('0'+d.getUTCHours()).slice(-2) + ':' + ('0'+d.getUTCMinutes()).slice(-2) + ':' + ('0'+d.getUTCSeconds()).slice(-2);
       applyLiveGL();
-    })
-    .catch(function() { /* 静默 */ });
 }
+
+// 供回放引擎每帧调用（10Hz 高刷，替代 2s 轮询）
+window.liveApplyTracks = function() {
+  if (window._live3dActive) liveApply(window._radarTracks || []);
+};
 
 // ── v3.3.1 会话轨迹（仅关联计划航班）──
 // 逐 2s 累积航迹点；航班从 /api/radar_tracks 响应消失（服务端 FDR 已过 TTL）即立即清除
 var LIVE_TRAIL_MAX = 7200;           // 每航班轨迹点上限（2s/点 ≈ 4 小时），超出后滚动丢弃最旧点
 function _liveTrailData(list) {
-  var now = Date.now();
+  // v3.5.0 回放模式用回放时钟分桶，使每分钟垂线对应回放时间轴（实时模式仍用壁钟）
+  var now = (window._replayActive && window._replayClockMs) ? window._replayClockMs : Date.now();
   var seen = {};
   for (var i = 0; i < list.length; i++) {
     var f = list[i];
