@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.4.0</title>
+<title>ATC综合数据中心 v3.4.1</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -566,11 +566,27 @@ canvas#radarMap {
   font-size: 13px;
   cursor: pointer;
   display: inline-flex;
+  align-items: center;  justify-content: center;
+  transition: .15s;
+}
+.pb-btn:hover { background: #30363d; border-color: #58a6ff; }
+/* 文字型紧凑按钮（控制条左侧「隐藏」入口）：小字号自适应宽度，保证控制条一行显示 */
+.pb-btn-text {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid #30363d;
+  border-radius: 5px;
+  background: #21262d;
+  color: #8b949e;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   transition: .15s;
 }
-.pb-btn:hover { background: #30363d; border-color: #58a6ff; }
+.pb-btn-text:hover { background: #30363d; border-color: #58a6ff; color: #e6edf3; }
 .pb-btn.active { background: #1c3a5f; border-color: #58a6ff; color: #58a6ff; }
 .pb-btn:disabled { opacity: .4; cursor: not-allowed; }
 .pb-speed {
@@ -641,7 +657,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.4.0</span>
+  <span class="badge">v3.4.1</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -1181,6 +1197,7 @@ canvas#radarMap {
   </div>
   <div class="playback-bar" id="playbackBar">
     <div class="playback-row">
+      <button class="pb-btn-text" id="pbHideBar" title="隐藏控制条（左下角'回放'按钮可重新打开）" onclick="togglePlaybackBar(false)">⏷ 隐藏</button>
       <span class="label">回放时间 (UTC)</span>
       <input type="date" class="pb-date-sel" id="pbDate">
       <select class="pb-time-sel" id="pbHour"></select>
@@ -1220,9 +1237,6 @@ canvas#radarMap {
       <input type="range" class="pb-range" id="pbProgress" min="0" max="10000" step="1" value="0" title="拖动选择回放时间">
       <span id="pbProgressPct" style="font-size:11px;color:#8b949e;white-space:nowrap;min-width:34px;text-align:right;">0%</span>
       <span class="pb-status live" id="pbStatus">● 实时</span>
-
-      <span class="pb-sep"></span>
-      <button class="pb-btn" id="pbHideBar" title="隐藏控制条（左下角'回放'按钮可重新打开）" onclick="togglePlaybackBar(false)">⏷ 隐藏</button>
     </div>
   </div>
   <button class="pb-fab" id="pbToggle" onclick="togglePlaybackBar()" title="显示轨迹回放控制条">⟲ 回放</button>
