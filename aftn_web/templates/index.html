@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.3.9</title>
+<title>ATC综合数据中心 v3.4.0</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -474,14 +474,47 @@ canvas#radarMap {
   font-family: Consolas, monospace;
 }
 
-/* ── 回放控制栏 ── */
+/* ── 回放控制栏（v3.4.0 悬浮式：默认藏在视口下方，入场自下而上滑入，出场滑出）── */
 .playback-bar {
-  margin: 0 12px 12px 12px;
-  background: #161b22;
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  margin: 0;
+  background: rgba(22, 27, 34, 0.96);
   border: 1px solid #30363d;
   border-radius: 8px;
   padding: 8px 12px;
+  z-index: 900;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  transform: translateY(calc(100% + 24px));   /* 出场位：完全滑到视口下缘之外 */
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.35s cubic-bezier(0.22, 0.9, 0.35, 1), opacity 0.28s ease;
 }
+.playback-bar.show {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+/* 左下角悬浮「回放」入口按钮（控制条显示时隐藏）*/
+.pb-fab {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 890;
+  background: rgba(22, 27, 34, 0.92);
+  color: #58c4ff;
+  border: 1px solid #2f5b8f;
+  border-radius: 20px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+.pb-fab:hover { background: rgba(38, 50, 66, 0.96); transform: translateY(-1px); }
 .playback-row {
   display: flex;
   align-items: center;
@@ -608,7 +641,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.3.9</span>
+  <span class="badge">v3.4.0</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -1187,8 +1220,12 @@ canvas#radarMap {
       <input type="range" class="pb-range" id="pbProgress" min="0" max="10000" step="1" value="0" title="拖动选择回放时间">
       <span id="pbProgressPct" style="font-size:11px;color:#8b949e;white-space:nowrap;min-width:34px;text-align:right;">0%</span>
       <span class="pb-status live" id="pbStatus">● 实时</span>
+
+      <span class="pb-sep"></span>
+      <button class="pb-btn" id="pbHideBar" title="隐藏控制条（左下角'回放'按钮可重新打开）" onclick="togglePlaybackBar(false)">⏷ 隐藏</button>
     </div>
   </div>
+  <button class="pb-fab" id="pbToggle" onclick="togglePlaybackBar()" title="显示轨迹回放控制条">⟲ 回放</button>
 </div>
 
 <!-- ════════════════════════════════════════════════════════
@@ -1572,6 +1609,8 @@ function switchTab(n) {
   if (n === 'map') { setTimeout(drawMap, 0); }
   // 切换到 ASR 页时强制刷新
   if (n === 'asr') { setTimeout(asrFetchLive, 100); }
+  // v3.4.0 离开地图页时收起悬浮回放控制条（下次进入默认隐藏态）
+  if (n !== 'map' && typeof togglePlaybackBar === 'function') { togglePlaybackBar(false); }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -3161,6 +3200,16 @@ window.submitAiDraw = submitAiDraw;
     return all;
   }
 
+  // v3.4.0 回放控制条改悬浮式：左下角「回放」按钮 ↔ 控制条滑入/滑出
+  window.togglePlaybackBar = function(force) {
+    var bar = document.getElementById('playbackBar');
+    var fab = document.getElementById('pbToggle');
+    if (!bar) return;
+    var show = (typeof force === 'boolean') ? force : !bar.classList.contains('show');
+    bar.classList.toggle('show', show);
+    if (fab) fab.style.display = show ? 'none' : '';
+  };
+
   function drawMap() {
     // v3.3.7 守卫：地图页隐藏（display:none）时 rect.top=0 会把画布撑到超出视口（滚动条根源），
     // 且此时绘制无意义——直接跳过，等 switchTab 切回地图页时再重绘
@@ -3225,18 +3274,12 @@ window.submitAiDraw = submitAiDraw;
     // v3.3.8 用文档绝对坐标：从其他长页面滚动后切过来时 rect.top 偏小（可为负），
     // 视口相对量算会把画布撑高复现滚动条；绝对坐标与滚动位置解耦，页面总高恒不超视口
     var _absTop = mapRect.top + (window.pageYOffset || document.documentElement.scrollTop || 0);
-    // v3.3.9 底部预留改为动态量算：此前写死 70px，不够容纳画布下方文档流中的
-    // 回放控制条 playbackBar(约51px+边距24px) → 页面总高超出视口出现滚动条。
-    // 现按实际元素量算（容器边框/外边距 + 控制条含边距的实际高度），控制条显隐/行数变化时自适应
+    // v3.4.0 画布充满浏览器视口：回放控制条已改悬浮式（position:fixed，不占文档流），
+    // 底部预留只需容器盒模型（边框/外边距）+ 安全余量，画布占据视口内全部剩余高度
     var _reserve = 4;                                                        // 安全余量
     var _cCS = getComputedStyle(container);
     _reserve += parseFloat(_cCS.marginTop) + parseFloat(_cCS.marginBottom)
              + parseFloat(_cCS.borderTopWidth) + parseFloat(_cCS.borderBottomWidth);   // .map-container 盒模型
-    var _pb = document.getElementById('playbackBar');
-    if (_pb && getComputedStyle(_pb).display !== 'none') {
-      var _pbCS = getComputedStyle(_pb);
-      _reserve += _pb.offsetHeight + parseFloat(_pbCS.marginTop) + parseFloat(_pbCS.marginBottom);
-    }
     var availableH = window.innerHeight - _absTop - _reserve;
     var displayH = Math.max(200, availableH);
 
