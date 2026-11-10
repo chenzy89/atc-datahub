@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.4.2</title>
+<title>ATC综合数据中心 v3.4.3</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -657,7 +657,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.4.2</span>
+  <span class="badge">v3.4.3</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -10590,6 +10590,7 @@ document.addEventListener('keydown', function(e) {
 // ════════════════════════════════════════════════════════════
 var _live = { scene: null, raf: 0, timer: 0, flights: [], sprites: {}, planes: {}, trails: {}, seq: 0 };
 var _livePlaneTex = null;        // v3.3.2 plane.png 贴图（白色剪影，material.color 着色）
+var _liveFinTex = null;          // v3.4.3 垂直尾翼贴图（Canvas 绘制后掠尾翼剪影）
 var _livePlaneGeo = null;        // 共用 1×1 平面几何
 var _livePlaneImg = null;        // 兼容模式用 Image
 var _liveTintCache = {};         // 兼容模式按配色缓存的着色画布
@@ -10908,7 +10909,10 @@ function buildLiveScene() {
 function _livePlane(cs, sc, color) {
   var p = _live.planes[cs];
   if (p) {                                          // 配色变化（如后获计划关联）：仅改材质颜色
-    if ('#' + p.mesh.material.color.getHexString() !== color.toLowerCase()) p.mesh.material.color.set(color);
+    if ('#' + p.mesh.material.color.getHexString() !== color.toLowerCase()) {
+      p.mesh.material.color.set(color);
+      if (p.fin) p.fin.material.color.set(color);
+    }
     return p;
   }
   if (!_livePlaneTex) {
@@ -10923,10 +10927,33 @@ function _livePlane(cs, sc, color) {
   var mesh = new THREE.Mesh(_livePlaneGeo, mat);
   mesh.rotation.x = -Math.PI / 2;                   // 平躺：贴图"上"（机头）→ 世界 -z（北）
   mesh.scale.set(sc.planeSize, sc.planeSize, 1);
+  // v3.4.3 垂直尾翼：机身轴竖直平面内的后掠尾翼剪影（白色贴图，随航班着色），立体感
+  if (!_liveFinTex) {
+    var fcv = document.createElement('canvas'); fcv.width = 128; fcv.height = 128;
+    var fg = fcv.getContext('2d');
+    fg.fillStyle = '#ffffff';
+    fg.beginPath();
+    fg.moveTo(118, 124);                            // 翼根前端（图右=机头方向）
+    fg.lineTo(46, 22);                              // 前缘后掠至翼尖
+    fg.lineTo(26, 22);                              // 翼尖顶边
+    fg.lineTo(6, 124);                              // 后缘（图左=机尾）
+    fg.closePath(); fg.fill();
+    _liveFinTex = new THREE.CanvasTexture(fcv);
+    _liveFinTex.anisotropy = 4;
+  }
+  var fmat = new THREE.MeshBasicMaterial({
+    map: _liveFinTex, color: new THREE.Color(color), transparent: true,
+    depthWrite: false, side: THREE.DoubleSide, alphaTest: 0.02
+  });
+  var fin = new THREE.Mesh(_livePlaneGeo, fmat);
+  fin.rotation.y = Math.PI / 2;                     // 竖立：贴图面位于机身轴竖直平面内（u右→-z机头，v上→世界上方）
+  fin.scale.set(sc.planeSize * 0.55, sc.planeSize * 0.5, 1);
+  fin.position.set(0, sc.planeSize * 0.25, sc.planeSize * 0.24);   // 尾部：基线贴机身平面，向上伸展
   var grp = new THREE.Group();
   grp.add(mesh);
+  grp.add(fin);
   sc.scene.add(grp);
-  p = _live.planes[cs] = { grp: grp, mesh: mesh };
+  p = _live.planes[cs] = { grp: grp, mesh: mesh, fin: fin };
   return p;
 }
 
@@ -11041,6 +11068,7 @@ function applyLiveGL() {
       var p0 = _live.planes[kp];
       sc.scene.remove(p0.grp);
       p0.mesh.material.dispose();          // 几何为全局共用，不 dispose
+      if (p0.fin) p0.fin.material.dispose();           // v3.4.3 尾翼材质
       delete _live.planes[kp];
     }
   }
@@ -11240,6 +11268,16 @@ function drawLiveSW() {
     var fwdX = Math.sin(hdR), fwdZ = -Math.cos(hdR);       // 航向：北=-z，东=+x
     var rgtX = Math.cos(hdR), rgtZ = Math.sin(hdR);        // 右翼方向（垂于航向）
     var half = (sc.planeSize || sc.ground * 0.009) / 2;
+    // v3.4.3 垂直尾翼：机身轴竖直平面内后掠三角形（后端/翼尖/前端），随视角透视
+    var pA = project(px - fwdX * half * 0.5, py, pz - fwdZ * half * 0.5);                    // 翼根后端(机尾)
+    var pB = project(px - fwdX * half * 0.36, py + half * 0.46, pz - fwdZ * half * 0.36);    // 翼尖(顶部)
+    var pC = project(px - fwdX * half * 0.05, py, pz - fwdZ * half * 0.05);                  // 翼根前端
+    if (pA.z > 45 && pB.z > 45 && pC.z > 45) {
+      ctx.beginPath();
+      ctx.moveTo(pA.x, pA.y); ctx.lineTo(pB.x, pB.y); ctx.lineTo(pC.x, pC.y);
+      ctx.closePath();
+      ctx.fillStyle = color; ctx.fill();
+    }
     var pF = project(px + fwdX * half, py, pz + fwdZ * half);   // 机头方向的屏幕矢量
     var pR = project(px + rgtX * half, py, pz + rgtZ * half);   // 右翼方向的屏幕矢量
     var img = _liveTintImg(color);
