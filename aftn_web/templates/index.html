@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.4.4</title>
+<title>ATC综合数据中心 v3.4.5</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -657,7 +657,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.4.4</span>
+  <span class="badge">v3.4.5</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -10933,10 +10933,10 @@ function _livePlane(cs, sc, color) {
     var fg = fcv.getContext('2d');
     fg.fillStyle = '#ffffff';
     fg.beginPath();
-    fg.moveTo(118, 124);                            // 翼根前端（图右=机头方向）
-    fg.lineTo(46, 22);                              // 前缘后掠至翼尖
-    fg.lineTo(26, 22);                              // 翼尖顶边
-    fg.lineTo(6, 124);                              // 后缘（图左=机尾）
+    fg.moveTo(118, 126);                            // 翼根前端（图右=机头方向）
+    fg.lineTo(44, 6);                               // 前缘后掠至翼尖
+    fg.lineTo(14, 6);                               // 翼尖顶边
+    fg.lineTo(14, 126);                             // 后缘竖直：垂直于机身纵轴（图左=机尾，x 恒定）
     fg.closePath(); fg.fill();
     _liveFinTex = new THREE.CanvasTexture(fcv);
     _liveFinTex.anisotropy = 4;
@@ -10947,8 +10947,8 @@ function _livePlane(cs, sc, color) {
   });
   var fin = new THREE.Mesh(_livePlaneGeo, fmat);
   fin.rotation.y = Math.PI / 2;                     // 竖立：贴图面位于机身轴竖直平面内（u右→-z机头，v上→世界上方）
-  fin.scale.set(sc.planeSize * 0.275, sc.planeSize * 0.25, 1);     // v3.4.4 尺寸减半
-  fin.position.set(0, sc.planeSize * 0.125, sc.planeSize * 0.3625); // v3.4.4 后移：后缘与机尾对齐(z=0.5-0.275/2)
+  fin.scale.set(sc.planeSize * 0.275, sc.planeSize * 0.14, 1);     // v3.4.5 更矮：高度0.14翼展(可见约0.13)
+  fin.position.set(0, sc.planeSize * 0.07, sc.planeSize * 0.3625); // 后缘与机尾对齐(z=0.5-0.275/2)
   var grp = new THREE.Group();
   grp.add(mesh);
   grp.add(fin);
@@ -11268,9 +11268,9 @@ function drawLiveSW() {
     var fwdX = Math.sin(hdR), fwdZ = -Math.cos(hdR);       // 航向：北=-z，东=+x
     var rgtX = Math.cos(hdR), rgtZ = Math.sin(hdR);        // 右翼方向（垂于航向）
     var half = (sc.planeSize || sc.ground * 0.009) / 2;
-    // v3.4.4 垂直尾翼：缩小一半并与机尾对齐——后端=机尾(1.0), 前端0.45, 翼尖0.25倍翼展高
+    // v3.4.5 垂直尾翼：后缘竖直(垂直机身纵轴)+更矮——后端=机尾(1.0), 翼尖正上方于机尾, 前端0.45, 高0.26半翼展
     var pA = project(px - fwdX * half * 1.0, py, pz - fwdZ * half * 1.0);                    // 翼根后端(机尾)
-    var pB = project(px - fwdX * half * 0.58, py + half * 0.5, pz - fwdZ * half * 0.58);     // 翼尖(顶部,后掠)
+    var pB = project(px - fwdX * half * 1.0, py + half * 0.26, pz - fwdZ * half * 1.0);      // 翼尖：与翼根后端同轴位(后缘垂直)
     var pC = project(px - fwdX * half * 0.45, py, pz - fwdZ * half * 0.45);                  // 翼根前端
     if (pA.z > 45 && pB.z > 45 && pC.z > 45) {
       ctx.beginPath();
