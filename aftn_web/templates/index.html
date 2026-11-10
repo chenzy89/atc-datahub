@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATC综合数据中心 v3.4.3</title>
+<title>ATC综合数据中心 v3.4.4</title>
 <style>
 /* ══════════════════════════════════════════════
    Dark Professional Theme
@@ -657,7 +657,7 @@ canvas#radarMap {
 
 <div class="header">
   <h1>🛩 ATC综合数据中心</h1>
-  <span class="badge">v3.4.3</span>
+  <span class="badge">v3.4.4</span>
   <button class="ai-gear-btn" onclick="openAiConfig()" title="AI 工具配置（API Keys）">⚙️</button>
 </div>
 
@@ -10947,8 +10947,8 @@ function _livePlane(cs, sc, color) {
   });
   var fin = new THREE.Mesh(_livePlaneGeo, fmat);
   fin.rotation.y = Math.PI / 2;                     // 竖立：贴图面位于机身轴竖直平面内（u右→-z机头，v上→世界上方）
-  fin.scale.set(sc.planeSize * 0.55, sc.planeSize * 0.5, 1);
-  fin.position.set(0, sc.planeSize * 0.25, sc.planeSize * 0.24);   // 尾部：基线贴机身平面，向上伸展
+  fin.scale.set(sc.planeSize * 0.275, sc.planeSize * 0.25, 1);     // v3.4.4 尺寸减半
+  fin.position.set(0, sc.planeSize * 0.125, sc.planeSize * 0.3625); // v3.4.4 后移：后缘与机尾对齐(z=0.5-0.275/2)
   var grp = new THREE.Group();
   grp.add(mesh);
   grp.add(fin);
@@ -11268,10 +11268,10 @@ function drawLiveSW() {
     var fwdX = Math.sin(hdR), fwdZ = -Math.cos(hdR);       // 航向：北=-z，东=+x
     var rgtX = Math.cos(hdR), rgtZ = Math.sin(hdR);        // 右翼方向（垂于航向）
     var half = (sc.planeSize || sc.ground * 0.009) / 2;
-    // v3.4.3 垂直尾翼：机身轴竖直平面内后掠三角形（后端/翼尖/前端），随视角透视
-    var pA = project(px - fwdX * half * 0.5, py, pz - fwdZ * half * 0.5);                    // 翼根后端(机尾)
-    var pB = project(px - fwdX * half * 0.36, py + half * 0.46, pz - fwdZ * half * 0.36);    // 翼尖(顶部)
-    var pC = project(px - fwdX * half * 0.05, py, pz - fwdZ * half * 0.05);                  // 翼根前端
+    // v3.4.4 垂直尾翼：缩小一半并与机尾对齐——后端=机尾(1.0), 前端0.45, 翼尖0.25倍翼展高
+    var pA = project(px - fwdX * half * 1.0, py, pz - fwdZ * half * 1.0);                    // 翼根后端(机尾)
+    var pB = project(px - fwdX * half * 0.58, py + half * 0.5, pz - fwdZ * half * 0.58);     // 翼尖(顶部,后掠)
+    var pC = project(px - fwdX * half * 0.45, py, pz - fwdZ * half * 0.45);                  // 翼根前端
     if (pA.z > 45 && pB.z > 45 && pC.z > 45) {
       ctx.beginPath();
       ctx.moveTo(pA.x, pA.y); ctx.lineTo(pB.x, pB.y); ctx.lineTo(pC.x, pC.y);
